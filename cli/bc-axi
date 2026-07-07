@@ -22,6 +22,16 @@ const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
 
+// A lieutenant's identity is its tmux session (recorded as ref.session at init/
+// spawn). drain/ack self-scope to it so one lieutenant never drains another's
+// queue. Empty outside tmux (raw tooling/tests) — the server then falls back to
+// its explicit-lieutenant or all-queues behavior.
+function currentTmuxSession() {
+  if (!process.env.TMUX) return '';
+  try { return execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8' }).trim(); }
+  catch (e) { return ''; }
+}
+
 // ---------- args ----------
 const argv = process.argv.slice(2);
 let cmd = argv.shift();
@@ -585,7 +595,9 @@ async function cmdDrain() {
   // until then every drain re-offers the same items (dedupe by seq).
   // Default output is agent-ergonomic (card context + next-action hint per
   // item); --json prints the raw QueueItems, one JSON line each.
-  const q = opts.lieutenant ? '?lieutenant=' + encodeURIComponent(opts.lieutenant) : '';
+  const sess = currentTmuxSession();
+  const q = opts.lieutenant ? '?lieutenant=' + encodeURIComponent(opts.lieutenant)
+    : (sess ? '?session=' + encodeURIComponent(sess) : '');
   const r = await request('GET', '/api/feed' + q);
   if (opts.json) { for (const it of r.items) console.log(JSON.stringify(it)); return; }
   if (!r.items.length) { console.log('queue empty — nothing pending.'); return; }

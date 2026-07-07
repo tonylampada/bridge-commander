@@ -1548,7 +1548,17 @@ const server = http.createServer(async (req, res) => {
 
     // ----- feed.drain: pending QueueItems past the committed ack cursor -----
     if (route === 'GET /api/feed') {
-      const lt = url.searchParams.get('lieutenant') || '';
+      let lt = url.searchParams.get('lieutenant') || '';
+      const sess = url.searchParams.get('session') || '';
+      // Session-scoped drain: a lieutenant identifies itself by its tmux session
+      // so it drains ONLY its own queue — the fix for cross-lieutenant drain. A
+      // registered lieutenant always resolves here; an unresolved session (a
+      // non-lieutenant caller, or a stale ref) falls back to unscoped behavior
+      // rather than erroring, so tooling and peeks keep working.
+      if (!lt && sess) {
+        const owner = board.lieutenants.find((l) => l.ref && l.ref.session === sess);
+        if (owner) lt = owner.id;
+      }
       if (lt && !findLieutenant(lt)) return sendJson(res, 404, { error: 'unknown lieutenant: ' + lt });
       // A drain clears the nudged flag: the next append (or a turn-end with
       // still-unacked items) wakes again.
