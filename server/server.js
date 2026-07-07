@@ -57,7 +57,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
-const { execFile, execFileSync } = require('child_process');
+const { execFile } = require('child_process');
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -898,7 +898,8 @@ function restoreCard(id, body) {
 // record {name, path, mode}. A card's `repo` attribute must name a registered
 // project for card.start to provision its worker a worktree.
 function findProject(name) { return board.projects.find((p) => p.name === name); }
-function addProject(body) {
+const addingProjects = new Set(); // names with a clone in flight (async clone opens racing duplicate adds)
+async function addProject(body) {
   const source = String((body && body.source) || '').trim();
   if (!source) return { error: 'source required (git URL or local path)' };
   const mode = String((body && body.mode) || 'no-mistakes');
@@ -906,15 +907,21 @@ function addProject(body) {
   const name = String((body && body.name) || path.basename(source.replace(/\/+$/, '')).replace(/\.git$/, '')).trim();
   if (!/^[\w][\w.-]*$/.test(name)) return { error: 'bad project name: ' + name + ' (use [A-Za-z0-9_.-], or pass --name)' };
   if (findProject(name)) return { error: 'project exists: ' + name, code: 409 };
+  if (addingProjects.has(name)) return { error: 'project add already in progress: ' + name, code: 409 };
   const dest = path.join(WORKSPACE, 'projects', name);
   if (fs.existsSync(dest)) return { error: 'destination already exists: ' + dest, code: 409 };
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   const src = fs.existsSync(source) ? path.resolve(source) : source;
+  addingProjects.add(name);
   try {
-    execFileSync('git', ['clone', src, dest],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000 });
+    await new Promise((resolve, reject) => {
+      execFile('git', ['clone', src, dest], { encoding: 'utf8', timeout: 300000 },
+        (err, stdout, stderr) => (err ? reject(Object.assign(err, { stderr })) : resolve()));
+    });
   } catch (e) {
     return { error: 'clone failed: ' + String((e && e.stderr) || (e && e.message) || e).trim(), code: 502 };
+  } finally {
+    addingProjects.delete(name);
   }
   const project = { name, path: dest, mode, source: src, added: now() };
   board.projects.push(project);
@@ -950,7 +957,27 @@ function enterWorking(card, text) {
 // whose hook a per-spawn install would clobber), bind {session, worktree,
 // branch} into the card + the worker registry, move the card → Working.
 // body.resume reincarnates a recorded (dead) worker in the same worktree instead.
+//
+// Provisioning + spawn are long async waits (a worktree add on a multi-GB
+// repo, a real agent launch): the per-card in-flight guard keeps a second
+// start of the SAME card from racing the first (different cards interleave
+// freely — that's the point of going async), and the card is re-checked
+// against the board after the spawn so a mid-start archive never leaves an
+// orphan session behind. The response still reports the REAL spawn outcome —
+// the await keeps startCard's success/failure contract synchronous-looking.
+const startingCards = new Set(); // card ids with a start/resume in flight
 async function startCard(card, body) {
+  if (startingCards.has(card.id)) {
+    return { error: 'card start already in progress: ' + card.id, code: 409 };
+  }
+  startingCards.add(card.id);
+  try {
+    return await doStartCard(card, body);
+  } finally {
+    startingCards.delete(card.id);
+  }
+}
+async function doStartCard(card, body) {
   if (card.type === 'plan') return { error: 'plan cards never start (no worker is spawned for a plan)' };
 
   const existing = findWorker(card.id);
@@ -961,6 +988,10 @@ async function startCard(card, body) {
       ref = await harnessFor(existing.ref).resume(existing.ref, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
     } catch (e) {
       return { error: 'worker resume failed: ' + String((e && e.message) || e), code: 502 };
+    }
+    if (!findCard(card.id)) { // archived while the resume was in flight
+      Promise.resolve().then(() => harnessFor(ref).kill(ref)).catch(() => {});
+      return { error: 'card left the board during resume: ' + card.id, code: 409 };
     }
     existing.ref = ref;
     existing.done = false;
@@ -995,15 +1026,16 @@ async function startCard(card, body) {
       return { error: 'previous worker session ' + existing.ref.session + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it', code: 409 };
     }
     const prevProject = findProject(existing.project) || project;
-    const rel = releaseWorktree(existing.worktree, prevProject.path);
+    const rel = await releaseWorktree(existing.worktree, prevProject.path);
     if (!rel.released) {
       return { error: 'previous worker worktree not releasable (' + rel.reason + '): ' + existing.worktree.path, code: 409 };
     }
-    board.workers.splice(board.workers.indexOf(existing), 1);
+    const idx = board.workers.indexOf(existing);
+    if (idx !== -1) board.workers.splice(idx, 1);
   }
 
   let wt;
-  try { wt = createWorktree(project.path, card.id, WORKSPACE); }
+  try { wt = await createWorktree(project.path, card.id, WORKSPACE); }
   catch (e) { return { error: 'worktree provisioning failed: ' + String((e && e.message) || e), code: 502 }; }
 
   const session = workerSession(card.id);
@@ -1019,8 +1051,13 @@ async function startCard(card, body) {
   try {
     ref = await impl.spawn(wt.path, prompt, spawnOpts);
   } catch (e) {
-    releaseWorktree(wt, project.path); // best-effort: no spawnless lease left behind
+    await releaseWorktree(wt, project.path).catch(() => {}); // best-effort: no spawnless lease left behind
     return { error: 'worker spawn failed: ' + String((e && e.message) || e), code: 502 };
+  }
+  if (!findCard(card.id)) { // archived while provisioning/spawn were in flight
+    Promise.resolve().then(() => impl.kill(ref)).catch(() => {});
+    await releaseWorktree(wt, project.path).catch(() => {});
+    return { error: 'card left the board during start: ' + card.id, code: 409 };
   }
 
   card.attributes.session = session;
@@ -1228,7 +1265,7 @@ async function prWatchTick() {
           : (card.attributes && card.attributes.worktree ? { path: card.attributes.worktree, tool: 'git' } : null);
         let note = merged.url;
         if (wtRec && project) {
-          const rel = releaseWorktree(wtRec, project.path);
+          const rel = await releaseWorktree(wtRec, project.path);
           if (!rel.released) {
             note += ' (worktree NOT released: ' + rel.reason + ')';
             console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
@@ -1498,7 +1535,7 @@ const server = http.createServer(async (req, res) => {
     // ----- projects (F6) -----
     if (route === 'GET /api/projects') return sendJson(res, 200, { projects: board.projects });
     if (route === 'POST /api/projects') {
-      const r = addProject(JSON.parse(await readBody(req) || '{}'));
+      const r = await addProject(JSON.parse(await readBody(req) || '{}'));
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, project: r.project });

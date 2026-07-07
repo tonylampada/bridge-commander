@@ -13,8 +13,13 @@
 //    retype would duplicate it) until the composer reads empty.
 //
 // Zero dependencies; child_process + tmux only.
+//
+// Everything here is async: these primitives run inside the bridge-command
+// server, whose event loop must never block on a subprocess (a sync tmux
+// call per session per supervision tick froze the whole server — UI, SSE,
+// every request — for the duration).
 
-const { execFileSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 
 const BUSY_RE = /esc (to )?interrupt|Working\.\.\./i;
 const PROMPT_GLYPHS = new Set(['>', '❯' /* ❯ */, '$', '%', '#']);
@@ -23,15 +28,33 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// tmux(...args) -> stdout string; throws on tmux error.
-function tmux(...args) {
-  return execFileSync('tmux', args, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+// tmuxRun(args, input?) -> Promise<stdout>; rejects on tmux error. input, when
+// given, is piped to stdin (load-buffer); otherwise stdin is closed immediately.
+function tmuxRun(args, input) {
+  return new Promise((resolve, reject) => {
+    const child = execFile('tmux', args, { encoding: 'utf8' }, (err, stdout, stderr) => {
+      if (err) {
+        err.stderr = stderr;
+        reject(err);
+      } else {
+        resolve(stdout);
+      }
+    });
+    child.stdin.on('error', () => {}); // EPIPE when tmux exits before reading
+    if (input === undefined) child.stdin.end();
+    else child.stdin.end(input);
+  });
 }
 
-// tryTmux(...args) -> stdout string or null on error.
-function tryTmux(...args) {
+// tmux(...args) -> Promise<stdout string>; rejects on tmux error.
+function tmux(...args) {
+  return tmuxRun(args);
+}
+
+// tryTmux(...args) -> Promise<stdout string or null on error>.
+async function tryTmux(...args) {
   try {
-    return tmux(...args);
+    return await tmuxRun(args);
   } catch {
     return null;
   }
@@ -91,11 +114,11 @@ function stripGhost(line) {
 //             ghost text). Safe to inject; also the positive ack that a submit landed.
 //   pending — real unsubmitted text on the cursor line.
 //   unknown — the pane could not be read.
-function composerState(target) {
-  const cy = tryTmux('display-message', '-p', '-t', target, '#{cursor_y}');
+async function composerState(target) {
+  const cy = await tryTmux('display-message', '-p', '-t', target, '#{cursor_y}');
   if (cy === null || !/^\d+$/.test(cy.trim())) return 'unknown';
   const row = cy.trim();
-  const raw = tryTmux('capture-pane', '-e', '-p', '-t', target, '-S', row, '-E', row);
+  const raw = await tryTmux('capture-pane', '-e', '-p', '-t', target, '-S', row, '-E', row);
   if (raw === null) return 'unknown';
   let s = stripGhost(raw.replace(/\n$/, ''));
   // Strip composer box borders (claude/codex draw "│ … │"; some TUIs use ┃ or |).
@@ -108,16 +131,16 @@ function composerState(target) {
 
 // paneIsBusy(target) — do the last few non-blank lines of the pane show a
 // busy footer (agent mid-turn)?
-function paneIsBusy(target) {
-  const tail = tryTmux('capture-pane', '-p', '-t', target, '-S', '-40');
+async function paneIsBusy(target) {
+  const tail = await tryTmux('capture-pane', '-p', '-t', target, '-S', '-40');
   if (tail === null) return false;
   const lines = tail.split('\n').filter((l) => l.trim() !== '').slice(-6);
   return BUSY_RE.test(lines.join('\n'));
 }
 
 // capture(target, lines) — bounded plain-text pane capture (default 60 lines).
-function capture(target, lines = 60) {
-  const out = tryTmux('capture-pane', '-p', '-t', target, '-S', `-${lines}`);
+async function capture(target, lines = 60) {
+  const out = await tryTmux('capture-pane', '-p', '-t', target, '-S', `-${lines}`);
   return out === null ? '' : out;
 }
 
@@ -125,21 +148,18 @@ function capture(target, lines = 60) {
 // Single-line text goes via `send-keys -l`. Multi-line text goes via a tmux
 // buffer paste in bracketed-paste mode (-p) so embedded newlines land as part
 // of the paste instead of acting as Enter presses that submit mid-text.
-function sendLiteral(target, text) {
+async function sendLiteral(target, text) {
   if (text.includes('\n')) {
-    execFileSync('tmux', ['load-buffer', '-b', 'bc-harness', '-'], {
-      input: text,
-      stdio: ['pipe', 'ignore', 'pipe'],
-    });
-    tmux('paste-buffer', '-p', '-d', '-b', 'bc-harness', '-t', target);
+    await tmuxRun(['load-buffer', '-b', 'bc-harness', '-'], text);
+    await tmux('paste-buffer', '-p', '-d', '-b', 'bc-harness', '-t', target);
   } else {
-    tmux('send-keys', '-t', target, '-l', text);
+    await tmux('send-keys', '-t', target, '-l', text);
   }
 }
 
 // sendKey(target, key) — one named tmux key ('Enter', 'Escape', 'C-c', ...).
 function sendKey(target, key) {
-  tmux('send-keys', '-t', target, key);
+  return tmux('send-keys', '-t', target, key);
 }
 
 // submit(target, text, opts) — type text once, then Enter with verification.
@@ -154,19 +174,19 @@ async function submit(target, text, opts = {}) {
   const enterSleep = opts.enterSleep ?? 400;
   const settle = opts.settle ?? (text.startsWith('/') ? 1200 : 300);
   try {
-    sendLiteral(target, text);
+    await sendLiteral(target, text);
   } catch {
     return 'send-failed';
   }
   await sleep(settle);
   for (let i = 0; i < retries; i++) {
     try {
-      sendKey(target, 'Enter');
+      await sendKey(target, 'Enter');
     } catch {
       // fall through to state check
     }
     await sleep(enterSleep);
-    const state = composerState(target);
+    const state = await composerState(target);
     if (state !== 'pending') return state; // 'empty' (landed) or 'unknown' (inconclusive)
   }
   return 'pending';
