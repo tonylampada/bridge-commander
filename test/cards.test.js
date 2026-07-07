@@ -104,22 +104,33 @@ test('card patch: title, body, type, attribute merge and delete, labels', async 
   }
 });
 
-test('card owner is immutable: PATCH with owner is a 400, nothing applied; CLI refuses --owner', async () => {
+test('card owner change: applies when no worker bound, timeline event; unknown lieutenant refused', async () => {
   const s = await startServerWithLieutenant();
   try {
     await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace' });
     await s.api('POST', '/api/cards', withOwner({ title: 'Held' }));
-    const r = await s.api('PATCH', '/api/cards/held', { owner: 'grace', title: 'Renamed' });
-    assert.strictEqual(r.status, 400);
-    assert.match(r.body.error, /owner is immutable — archive and recreate/);
-    const card = (await s.api('GET', '/api/cards/held')).body;
-    assert.strictEqual(card.owner, LT);
-    assert.strictEqual(card.title, 'Held', 'a refused patch applies nothing');
 
-    const cli = await runCli(['card', 'patch', 'held', '--owner', 'grace',
+    // no worker bound -> owner change applies, other fields patch alongside
+    let r = await s.api('PATCH', '/api/cards/held', { owner: 'grace', title: 'Renamed' });
+    assert.strictEqual(r.status, 200);
+    let card = (await s.api('GET', '/api/cards/held')).body;
+    assert.strictEqual(card.owner, 'grace');
+    assert.strictEqual(card.title, 'Renamed');
+    assert.ok(card.events.some((e) => e.text === 'owner: ' + LT + ' → grace'),
+      'owner change lands on the timeline');
+
+    // unknown lieutenant -> refused, nothing applied
+    r = await s.api('PATCH', '/api/cards/held', { owner: 'nobody', title: 'Ghosted' });
+    assert.strictEqual(r.status, 400);
+    assert.match(r.body.error, /unknown lieutenant/);
+    card = (await s.api('GET', '/api/cards/held')).body;
+    assert.strictEqual(card.owner, 'grace');
+    assert.strictEqual(card.title, 'Renamed', 'a refused patch applies nothing');
+
+    // CLI path round-trips back to the original owner
+    const cli = await runCli(['card', 'patch', 'held', '--owner', LT,
       '--workspace', s.dir, '--port', String(s.port)]);
-    assert.strictEqual(cli.code, 1);
-    assert.match(cli.stderr, /owner is immutable/);
+    assert.strictEqual(cli.code, 0);
     assert.strictEqual((await s.api('GET', '/api/cards/held')).body.owner, LT);
   } finally {
     await s.stop();
