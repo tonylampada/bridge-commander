@@ -167,6 +167,7 @@ async function spawn(cwd, prompt, opts = {}) {
     await launchAndSettle(session, launchCmd);
   } catch (err) {
     t.tryTmux('kill-session', '-t', paneTarget(session));
+    try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
     throw err;
   }
 
