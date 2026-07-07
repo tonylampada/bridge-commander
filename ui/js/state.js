@@ -1,0 +1,175 @@
+// central UI state + derived selectors. The board doc from SSE is the truth;
+// everything here is view state or cheap derivation over it.
+export const USER = 'user';
+
+export const S = {
+  doc: null,               // full board doc from the server
+  connected: false,
+  chatMode: { mode: 'main' },   // {mode:'main'} | {mode:'card', id}
+  openCardId: null,        // detail panel
+  view: 'chat',            // mobile tab: 'chat' | 'board'
+  filters: { text: '', age: '', sel: [] },  // sel: [{kind:'label'|'owner', value}]
+  notifOpen: false,
+  notifShowAll: false,
+  notifExpanded: new Set(), // seq of level-1 item whose preceding gap is expanded
+};
+
+let renderFn = () => {};
+export function onRender(fn) { renderFn = fn; }
+export function render() { renderFn(); }
+
+// ---------- selectors ----------
+export function cards() { return (S.doc && S.doc.cards) || []; }
+export function card(id) { return cards().find((c) => c.id === id); }
+export function columns() { return (S.doc && S.doc.columns) || []; }
+
+export function reads() {
+  const r = (S.doc && S.doc.reads && S.doc.reads[USER]) || {};
+  return {
+    notifSeq: r.notifSeq || 0,
+    notifSeqs: r.notifSeqs || [],
+    threads: r.threads || {},
+  };
+}
+export function threadReadTs(target) { return reads().threads[target] || ''; }
+export function threadUnread(target, msgs) {
+  const ts = threadReadTs(target);
+  return (msgs || []).filter((m) => m.author !== USER && (!ts || m.ts > ts)).length;
+}
+export function cardUnread(c) { return threadUnread('card:' + c.id, c.thread); }
+// newest unread-relevant ts on a card: agent thread messages + level-1 events —
+// the same inputs the server derives card unread from. Used as the read-marker
+// dedupe key so each new unread-relevant item allows exactly one POST.
+export function cardActivityTs(c) {
+  let ts = '';
+  for (const m of (c && c.thread) || []) if (m.author !== USER && m.ts > ts) ts = m.ts;
+  for (const e of (c && c.events) || []) if (e.level === 1 && e.ts > ts) ts = e.ts;
+  return ts;
+}
+
+// A card's last-real-activity timestamp, for display and column sort. The server
+// derives `activity` (max of the card's real event/thread timestamps) so incidental
+// writes — a status-lease refresh/decay, a feeder attribute sync — no longer read as
+// "now". Fall back to the mutable `updated` for any older cached doc without it.
+export function cardRecency(c) { return (c && (c.activity || c.updated)) || ''; }
+
+// ---------- status (card.status is the single source; no other status feed) ----------
+export function cardStatus(c) {
+  return (c && c.status) || { worker: { id: null, state: 'absent' }, owed: false, unread: false };
+}
+// owed on a target: cards carry the server-derived status.owed; the main chat uses
+// the same latest-message rule, derived here from the doc.
+export function targetOwed(target) {
+  if (target === 'chat') {
+    const ch = (S.doc && S.doc.chat) || [];
+    const last = ch[ch.length - 1];
+    return !!(last && last.author === USER);
+  }
+  const c = card(target.slice(5));
+  return !!c && !!cardStatus(c).owed;
+}
+// "may be stuck": owed with no agent reply for longer than the stale threshold.
+// Purely client-derived from thread timestamps; the periodic re-render refreshes it.
+const OWED_STALE_MS = 180000;
+function owedSinceTs(msgs) {
+  let since = null;
+  for (const m of msgs || []) {
+    if (m.author === USER) { if (since == null) since = m.ts; }
+    else since = null;
+  }
+  return since;
+}
+export function targetOwedStale(target) {
+  if (!targetOwed(target)) return false;
+  const msgs = target === 'chat' ? ((S.doc && S.doc.chat) || []) : ((card(target.slice(5)) || {}).thread || []);
+  const since = owedSinceTs(msgs);
+  return !!since && Date.now() - new Date(since).getTime() >= OWED_STALE_MS;
+}
+export function owedTargets() {
+  const out = [];
+  if (targetOwed('chat')) out.push('chat');
+  for (const c of cards()) if (cardStatus(c).owed) out.push('card:' + c.id);
+  return out;
+}
+
+// ---------- kinds ----------
+// The board doc carries the EFFECTIVE kinds map (server-merged: built-ins under
+// registered entries): {<kind>: {emoji, level}}. Any event whose kind is in the
+// map renders that emoji; absent/unknown kinds render with no emoji.
+export function kinds() { return (S.doc && S.doc.kinds) || {}; }
+export function kindEmoji(kind) {
+  const k = kind && kinds()[kind];
+  return k && k.emoji ? String(k.emoji) : '';
+}
+
+// the unified event stream: board-level events + every card's events, by seq
+export function allEvents() {
+  const out = [];
+  for (const e of (S.doc && S.doc.events) || []) out.push(e);
+  for (const c of cards()) for (const e of c.events || []) out.push(Object.assign({ card: c.id, cardTitle: c.title }, e));
+  out.sort((a, b) => a.seq - b.seq);
+  return out;
+}
+// the bell: level-1 events UNION agent card-thread replies, newest first, with
+// read flags. Mirrors the server's /api/notifications derivation: reply items
+// carry ts/text/actor/card/cardTitle/read + kind "reply" (no seq — their read
+// state is the thread read marker, so opening the card clears them). Main-chat
+// agent messages ride their own level-1 event, so chat is excluded (no double
+// count); level-2 never notifies.
+export function notifItems() {
+  const r = reads();
+  const items = allEvents().filter((e) => e.level === 1)
+    .map((e) => Object.assign({}, e, { read: e.seq <= r.notifSeq || r.notifSeqs.includes(e.seq) }));
+  for (const c of cards()) {
+    const readTs = threadReadTs('card:' + c.id);
+    for (const m of c.thread || []) {
+      if (m.author === USER) continue;
+      items.push({ ts: m.ts, level: 1, kind: 'reply', text: m.text, actor: m.author,
+        card: c.id, cardTitle: c.title, read: !!readTs && m.ts <= readTs });
+    }
+  }
+  return items.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : (b.seq || 0) - (a.seq || 0)));
+}
+export function notifUnreadCount() { return notifItems().filter((e) => !e.read).length; }
+
+// ---------- filters ----------
+export function filterSelected(kind, value) { return S.filters.sel.some((f) => f.kind === kind && f.value === value); }
+export function toggleFilter(kind, value) {
+  if (!value) return;
+  const i = S.filters.sel.findIndex((f) => f.kind === kind && f.value === value);
+  if (i >= 0) S.filters.sel.splice(i, 1); else S.filters.sel.push({ kind, value });
+  render();
+}
+export function clearFilters() {
+  S.filters = { text: '', age: '', sel: [] };
+  render();
+}
+export function filtersActive() {
+  return !!(S.filters.text || S.filters.age || S.filters.sel.length);
+}
+function ageCutoff() {
+  const v = S.filters.age;
+  if (!v) return 0;
+  if (v === 'today') { const d = new Date(); d.setHours(0, 0, 0, 0); return d.getTime(); }
+  return Date.now() - parseInt(v, 10) * 1000;
+}
+function haystack(c) {
+  const col = columns().find((k) => k.id === c.column);
+  const at = c.attributes || {};
+  return [c.title, c.id, c.body, (c.labels || []).join(' '),
+    Object.entries(at).map(([k, v]) => k + ' ' + v).join(' '),
+    col ? col.title : c.column,
+  ].filter(Boolean).join(' ').toLowerCase();
+}
+export function cardVisible(c) {
+  if (!filtersActive()) return true;
+  const q = S.filters.text.trim().toLowerCase();
+  if (q && !haystack(c).includes(q)) return false;
+  const cutoff = ageCutoff();
+  if (cutoff) { const t = cardRecency(c); if (!t || new Date(t).getTime() < cutoff) return false; }
+  for (const f of S.filters.sel) {
+    if (f.kind === 'owner') { if (((c.attributes || {}).owner || '') !== f.value) return false; }
+    else if (!(c.labels || []).includes(f.value)) return false;
+  }
+  return true;
+}

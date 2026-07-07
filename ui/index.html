@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>bridge</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%E2%9A%93</text></svg>">
+<link rel="stylesheet" href="/ui/app.css">
+</head>
+<body>
+
+<header id="topbar">
+  <h1 id="b-title">bridge</h1>
+  <div id="b-subtitle"></div>
+  <span id="filter-wrap">
+    <span id="filter-chips"></span>
+    <input id="filter" placeholder="filter ( / )" autocomplete="off">
+    <select id="filter-age" title="only cards updated recently">
+      <option value="">any time</option>
+      <option value="3600">last hour</option>
+      <option value="today">today</option>
+      <option value="259200">last 3 days</option>
+      <option value="604800">last week</option>
+    </select>
+    <button id="filter-clear" title="clear filter">✕</button>
+  </span>
+  <span id="status-dot" title="connecting…"></span>
+  <button id="bell" title="notifications">🔔<span id="bell-n" class="badge-n" hidden></span></button>
+  <button id="gear" title="settings">⚙️</button>
+</header>
+
+<!-- notifications dropdown -->
+<div id="notif-panel" hidden>
+  <div class="np-head">
+    <span class="np-title">Notifications</span>
+    <label class="np-all"><input type="checkbox" id="np-show-all"> show all events</label>
+    <button id="np-mark-all">mark all read</button>
+  </div>
+  <div id="np-list"></div>
+</div>
+
+<!-- settings panel -->
+<div id="settings-panel" hidden>
+  <div class="sp-title">voice</div>
+  <div class="sp-row">
+    <button id="voice-btn" title="speak new agent messages">🔊 off</button>
+    <span id="voice-tools" class="dim">
+      <select id="voice-select" title="TTS voice"></select>
+      <button id="voice-test" title="test the selected voice">▶</button>
+    </span>
+  </div>
+  <div class="sp-title">labels</div>
+  <div id="lm-list"></div>
+  <form id="lm-new">
+    <input id="lm-color" type="color" value="#4cc2ff" title="label color">
+    <input id="lm-name" placeholder="new label…" autocomplete="off">
+    <button type="submit">add</button>
+  </form>
+</div>
+
+<!-- label picker popover -->
+<div id="label-picker" hidden>
+  <input id="lp-input" placeholder="add label…" autocomplete="off">
+  <div id="lp-list"></div>
+</div>
+
+<main id="layout">
+  <!-- chat: left, full height, always open on desktop -->
+  <section id="chat">
+    <div id="chat-head">
+      <button id="chat-back" hidden>←</button>
+      <div id="chat-title">💬 chat</div>
+      <button id="chat-card-open" title="open card" hidden>open card</button>
+    </div>
+    <div id="chat-feed"></div>
+    <form id="chat-form" class="composer">
+      <textarea id="chat-input" rows="1" placeholder="message the agent…" autocomplete="off"></textarea>
+      <button type="submit" title="send">➤</button>
+    </form>
+    <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
+  </section>
+
+  <!-- board: right -->
+  <section id="board-wrap">
+    <div id="board"><div class="empty">waiting for board…</div></div>
+  </section>
+</main>
+
+<!-- mobile bottom tabs -->
+<nav id="tabs">
+  <button id="tab-chat" class="on">💬 Chat<span id="tab-chat-n" class="badge-n" hidden></span></button>
+  <button id="tab-board">▦ Board<span id="tab-board-n" class="badge-n" hidden></span></button>
+</nav>
+
+<!-- card detail -->
+<aside id="detail" hidden>
+  <div class="pane-resize" id="detail-resize" title="drag to resize · double-click to reset"></div>
+  <div class="dt-head">
+    <div class="dt-emoji" id="dt-emoji"></div>
+    <div class="dt-titles">
+      <div class="dt-title" id="dt-title" title="click to rename"></div>
+      <input class="dt-title-input" id="dt-title-input" type="text" maxlength="200"
+             aria-label="card title" autocomplete="off" spellcheck="false" hidden />
+      <div class="dt-sub" id="dt-sub"></div>
+    </div>
+    <button id="dt-talk" title="talk in this card's thread">💬 talk</button>
+    <button id="dt-menu-btn" title="move / archive">⋯</button>
+    <button id="dt-close" title="close">✕</button>
+  </div>
+  <div class="dt-attrs" id="dt-attrs"></div>
+  <div class="dt-labels" id="dt-labels"></div>
+  <div class="dt-scroll">
+    <div class="dt-body md" id="dt-body"></div>
+    <button id="dt-body-edit" type="button" title="edit description">✎ edit</button>
+    <div id="dt-body-editor" hidden>
+      <textarea id="dt-body-input" rows="8" spellcheck="false" placeholder="body (markdown)"></textarea>
+      <div class="dt-body-actions">
+        <button type="button" id="dt-body-cancel">cancel</button>
+        <button type="button" id="dt-body-save">save</button>
+      </div>
+    </div>
+    <div class="dt-artifacts" id="dt-artifacts"></div>
+    <div class="dt-events-head">timeline</div>
+    <div class="dt-events" id="dt-events"></div>
+  </div>
+</aside>
+
+<!-- move / actions menu (detail ⋯ and tile long-press) -->
+<div id="move-menu" hidden></div>
+
+<!-- new card modal -->
+<div id="nc-overlay" hidden>
+  <form id="nc-modal">
+    <div class="nc-title">New card</div>
+    <input id="nc-name" placeholder="title" autocomplete="off" required>
+    <select id="nc-type" title="card type">
+      <option value="plan">🧠 plan</option>
+      <option value="implementation">🔥 implementation</option>
+      <option value="investigation">🕵️‍♂️ investigation</option>
+    </select>
+    <textarea id="nc-body" placeholder="body (markdown, optional)" rows="5"></textarea>
+    <div class="nc-actions">
+      <button type="button" id="nc-cancel">cancel</button>
+      <button type="submit" id="nc-create">create</button>
+    </div>
+  </form>
+</div>
+
+<!-- artifact viewer -->
+<div id="av-overlay" hidden>
+  <div id="av-modal">
+    <div class="av-head"><span class="av-name" id="av-name"></span><button id="av-close" title="close">✕</button></div>
+    <pre id="av-body"></pre>
+  </div>
+</div>
+
+<script type="module" src="/ui/js/main.js"></script>
+</body>
+</html>
