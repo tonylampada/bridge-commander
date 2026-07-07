@@ -132,20 +132,20 @@ async function step(name, fn) {
       // durable on disk before anything else (write-ahead)
       const onDisk = fs.readFileSync(path.join(ws, '.bridge-command', 'queue', 'ada.jsonl'), 'utf8');
       assert.ok(onDisk.includes('how goes the port?'));
-      // drained via CLI
-      let cli = await runCli(['drain', '--lieutenant', 'ada'], wsArgs);
+      // drained via CLI (--json = raw QueueItems)
+      let cli = await runCli(['drain', '--lieutenant', 'ada', '--json'], wsArgs);
       assert.strictEqual(cli.code, 0, cli.stderr);
       const items = cli.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
       assert.strictEqual(items.length, 1);
       assert.strictEqual(items[0].kind, 'message');
       assert.strictEqual(items[0].seq, seq);
       // re-offered until acked
-      cli = await runCli(['drain', '--lieutenant', 'ada'], wsArgs);
+      cli = await runCli(['drain', '--lieutenant', 'ada', '--json'], wsArgs);
       assert.strictEqual(cli.stdout.trim().split('\n').filter(Boolean).length, 1);
       // ack removes
       cli = await runCli(['ack', String(seq)], wsArgs);
       assert.strictEqual(cli.code, 0, cli.stderr);
-      cli = await runCli(['drain', '--lieutenant', 'ada'], wsArgs);
+      cli = await runCli(['drain', '--lieutenant', 'ada', '--json'], wsArgs);
       assert.strictEqual(cli.stdout.trim(), '');
     });
 

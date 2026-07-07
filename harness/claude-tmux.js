@@ -140,7 +140,10 @@ async function launchAndSettle(session, launchCmd) {
 }
 
 // spawn(cwd, prompt, opts?) -> HarnessRef
-// opts: { session?, stateDir?, callbackUrl?, extraArgs?: string[] }
+// opts: { session?, stateDir?, callbackUrl?, extraArgs?: string[], installHooks?: boolean }
+// installHooks: false skips the per-spawn Stop-hook install — for sessions born
+// into a cwd that already carries a workspace-level hook (installing another
+// would clobber it: installHooks keeps ONE bc entry per settings file).
 async function spawn(cwd, prompt, opts = {}) {
   const cwdAbs = path.resolve(cwd);
   if (!fs.existsSync(cwdAbs)) throw new Error(`spawn cwd does not exist: ${cwdAbs}`);
@@ -152,7 +155,9 @@ async function spawn(cwd, prompt, opts = {}) {
   const stateDir = stateDirOf(opts);
   const resumeId = crypto.randomUUID();
 
-  installHooks(cwdAbs, session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+  if (opts.installHooks !== false) {
+    installHooks(cwdAbs, session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+  }
 
   const promptFile = path.join(stateDir, `${session}.prompt`);
   fs.writeFileSync(promptFile, prompt);
@@ -217,7 +222,9 @@ async function resume(ref, opts = {}) {
   }
   if (hasSession(ref.session)) t.tryTmux('kill-session', '-t', paneTarget(ref.session));
 
-  installHooks(ref.cwd, ref.session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+  if (opts.installHooks !== false) {
+    installHooks(ref.cwd, ref.session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+  }
   t.tmux('new-session', '-d', '-s', ref.session, '-c', ref.cwd);
   try {
     const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
@@ -299,4 +306,7 @@ function onTurnEnd(ref, hook, opts = {}) {
   };
 }
 
-module.exports = { spawn, send, alive, resume, onTurnEnd };
+// installHooks is exported beyond the five port verbs so `bc-axi init` can
+// install the workspace-level Stop hook (session-agnostic; the server dedupes
+// turn-end POSTs by session_id).
+module.exports = { spawn, send, alive, resume, onTurnEnd, installHooks };

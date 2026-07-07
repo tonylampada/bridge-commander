@@ -12,7 +12,9 @@
 // Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
 //             columns: fixed frame (backlog | working | review | peer),
-//             lieutenants: [{id, name, color, charter, chat: [{author,text,ts}], created}],
+//             lieutenants: [{id, name, color, charter, chat: [{author,text,ts}], created,
+//                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
+//                            lastTurnEnd?, turns?}],
 //             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
 //                        created, updated, threadStart, pendingOrder,
 //                        status: {worker: null|{id, state, expires}},  // lease; only status.set writes it
@@ -45,6 +47,10 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+// The harness port — the ONLY seam the server speaks to agent sessions through
+// (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
+// drags in no tmux/claude machinery until a ref is actually dispatched.
+const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -157,6 +163,8 @@ function normalizeBoard(doc) {
   for (const lt of b.lieutenants) {
     if (!Array.isArray(lt.chat)) lt.chat = [];
     if (typeof lt.charter !== 'string') lt.charter = '';
+    // ref: a persisted HarnessRef or null (odd shapes collapse to null).
+    if (lt.ref !== undefined && !isHarnessRef(lt.ref)) lt.ref = null;
   }
   for (const c of b.cards) {
     if (!Array.isArray(c.events)) c.events = [];
@@ -271,10 +279,54 @@ function createLieutenant(body) {
     charter: String(body.charter || '').slice(0, 8000),
     chat: [], created: now(),
   };
+  if (isHarnessRef(body.ref)) lt.ref = body.ref; // the live-session address, persisted with the board
   board.lieutenants.push(lt);
   const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' joined the bridge', actor: body.actor || 'user', level: 2 }, {});
   board.events.push(ev);
   return { lieutenant: lt };
+}
+
+// lieutenant.create with spawn: birth a REAL session via the harness port in the
+// workspace root, then register the lieutenant with the returned ref. Launch
+// prompt = doctrine + charter + situating line. installHooks:false because the
+// workspace-level Stop hook (installed by `bc-axi init`) already covers every
+// claude in this cwd; the server dedupes its turn-end POSTs by session_id.
+function doctrineText() {
+  try { return fs.readFileSync(path.join(__dirname, '..', 'skill', 'DOCTRINE.md'), 'utf8').trim(); }
+  catch (e) { return ''; }
+}
+function lieutenantPrompt(name, id, charter) {
+  const cli = path.join(__dirname, '..', 'cli', 'bc-axi');
+  return [
+    doctrineText(),
+    '## Your charter\n\n' + (String(charter || '').trim() || "(none yet — await the captain's orders)"),
+    'You are lieutenant "' + name + '" (id: ' + id + ') in workspace ' + WORKSPACE + '.\n'
+      + 'The board server runs at http://127.0.0.1:' + PORT + '/. The board CLI is `bc-axi`'
+      + ' (at ' + cli + ' if not on your PATH).\n'
+      + 'Your first act, now and at the start of every turn: run `bc-axi drain`. Ack what you handle.',
+  ].filter(Boolean).join('\n\n');
+}
+async function spawnLieutenant(body) {
+  const name = String(body.name || '').trim();
+  if (!name) return { error: 'name required' };
+  const id = body.id ? String(body.id) : slug(name);
+  if (!/^[\w][\w.-]*$/.test(id)) return { error: 'bad lieutenant id (use [A-Za-z0-9_.-])' };
+  if (findLieutenant(id)) return { error: 'lieutenant exists: ' + id, code: 409 };
+  const harnessName = String(body.harness || readConfig().harness || 'claude');
+  let impl;
+  try { impl = getHarness(harnessName); } catch (e) { return { error: String(e.message || e) }; }
+  const session = 'bc-lt-' + id.replace(/[^A-Za-z0-9_-]/g, '-');
+  let ref;
+  try {
+    ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id, body.charter), {
+      session,
+      callbackUrl: 'http://127.0.0.1:' + PORT + '/api/turn-end',
+      installHooks: false,
+    });
+  } catch (e) {
+    return { error: 'spawn failed: ' + String((e && e.message) || e), code: 502 };
+  }
+  return createLieutenant(Object.assign({}, body, { id, ref }));
 }
 
 // ---------- delivery queues (per-lieutenant durable jsonl, GLOBAL seq) ----------
@@ -282,8 +334,8 @@ function createLieutenant(body) {
 // drag-order, or (future) worker event. At-least-once: drain serves everything
 // past the lieutenant's committed ack cursor and never advances it; only
 // POST /api/feed/ack does. Unacked items re-offer forever (dedupe by seq).
-// The send-keys wake half of delivery is a later phase; the durable queue is
-// the write-ahead ground truth.
+// The durable queue is the write-ahead ground truth; the wake half (one
+// coalesced harness.send per append burst) rides behind it, below.
 function queueFile(lt) { return path.join(QUEUE_DIR, lt + '.jsonl'); }
 function ackFile(lt) { return path.join(QUEUE_DIR, lt + '.ack'); }
 function readQueue(lt) {
@@ -309,6 +361,7 @@ function readAck(lt) {
 function queuePush(lt, rec) {
   const item = Object.assign({ seq: ++qseq, ts: now(), lieutenant: lt }, rec);
   fs.appendFileSync(queueFile(lt), JSON.stringify(item) + '\n');
+  scheduleWake(lt); // the queue write landed first (write-ahead); now the wake half
   return item;
 }
 function pendingItems(lt) {
@@ -334,6 +387,32 @@ function commitAck(seq) {
     return { ok: true, lieutenant: lt, ack: Math.max(cur, seq) };
   }
   return { error: 'unknown seq: ' + seq, code: 400 };
+}
+
+// ---------- wakes (the send half of delivery; the queue is truth) ----------
+// Every queue append for a lieutenant with a live ref sends ONE compact wake
+// line via harness.send. Coalesced: while items are pending-and-nudged, further
+// appends do not stack identical wakes; a drain (or ack) clears the flag, so a
+// new append after a drain nudges again. Wake failures are non-fatal — the
+// durable queue is the ground truth and the turn-end backstop re-nudges — but
+// they clear the flag so a later append can retry, and they are logged.
+// The flag is in-memory by design: after a server restart the next append or
+// turn-end simply re-nudges (at-least-once delivery tolerates a spare wake).
+const nudged = new Set(); // lieutenant ids nudged since their last drain
+function wakeLine(n) { return '[bridge-command] ' + n + ' pending item(s) — run: bc-axi drain'; }
+function scheduleWake(ltId) {
+  const lt = findLieutenant(ltId);
+  if (!lt || !isHarnessRef(lt.ref)) return;
+  const n = pendingItems(ltId).length;
+  if (!n || nudged.has(ltId)) return;
+  nudged.add(ltId);
+  Promise.resolve()
+    .then(() => harnessFor(lt.ref).send(lt.ref, wakeLine(n)))
+    .catch((e) => {
+      nudged.delete(ltId);
+      console.error(now() + ' wake failed for ' + ltId + ' (' + lt.ref.harness + ':' + lt.ref.session + '): '
+        + String((e && e.message) || e));
+    });
 }
 
 // ---------- card status (the ONE work signal; derived on read) ----------
@@ -741,10 +820,65 @@ const server = http.createServer(async (req, res) => {
     // ----- lieutenants -----
     if (route === 'GET /api/lieutenants') return sendJson(res, 200, { lieutenants: board.lieutenants });
     if (route === 'POST /api/lieutenants') {
-      const r = createLieutenant(JSON.parse(await readBody(req) || '{}'));
+      const body = JSON.parse(await readBody(req) || '{}');
+      if (body.ref !== undefined && body.ref !== null && !isHarnessRef(body.ref)) {
+        return sendJson(res, 400, { error: 'bad ref (want {harness, session, cwd, resumeId?})' });
+      }
+      // spawn:true births a real session (harness.spawn in the workspace root)
+      // and registers the lieutenant with the returned ref; without it this is
+      // registration only (the founding lieutenant brings its own ref).
+      const r = body.spawn ? await spawnLieutenant(body) : createLieutenant(body);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, lieutenant: r.lieutenant });
+    }
+    const ltRoute = /^\/api\/lieutenants\/([^/]+)$/.exec(p);
+    if (ltRoute && req.method === 'PATCH') { // update name/color/charter/ref (init idempotency)
+      const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
+      if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
+      const body = JSON.parse(await readBody(req) || '{}');
+      if (body.ref !== undefined) {
+        if (body.ref !== null && !isHarnessRef(body.ref)) {
+          return sendJson(res, 400, { error: 'bad ref (want {harness, session, cwd, resumeId?} or null)' });
+        }
+        lt.ref = body.ref;
+      }
+      if (body.name !== undefined && String(body.name).trim()) lt.name = String(body.name).trim().slice(0, 60);
+      if (body.color !== undefined && validColor(body.color)) lt.color = body.color;
+      if (body.charter !== undefined) lt.charter = String(body.charter).slice(0, 8000);
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, lieutenant: lt });
+    }
+
+    // ----- turn boundaries (the BC_TURNEND_URL target; posted by the Stop-hook relay) -----
+    // The workspace-level hook fires for ANY claude in the workspace cwd, so
+    // resolution dedupes by session_id: (1) a ref whose resumeId matches;
+    // (2) a ref whose session name matches the hook's session arg; (3) adoption —
+    // exactly one ref-bearing lieutenant still missing its resumeId (the founding
+    // teleport learns its claude id from its first turn end). Anything else is
+    // some other agent in the workspace: acknowledged, ignored.
+    if (route === 'POST /api/turn-end') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const sid = body.session_id ? String(body.session_id) : '';
+      const sname = body.session ? String(body.session) : '';
+      let lt = sid ? board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.resumeId === sid) : null;
+      if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === sname);
+      if (!lt && sid) {
+        const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
+        if (cands.length === 1) lt = cands[0];
+      }
+      if (!lt) return sendJson(res, 200, { ok: true, lieutenant: null });
+      if (sid && lt.ref.resumeId !== sid) lt.ref.resumeId = sid; // hook payload is ground truth
+      lt.lastTurnEnd = now();
+      lt.turns = (lt.turns || 0) + 1;
+      saveBoard();
+      // Drain-at-turn-start backstop: the lieutenant just ended a turn with
+      // items still unacked. Re-nudge unless a wake is already outstanding
+      // since its last drain (a drained-but-unacked queue re-nudges here; an
+      // ignored outstanding wake does not loop the session forever).
+      const pending = pendingItems(lt.id).length;
+      if (pending) scheduleWake(lt.id);
+      return sendJson(res, 200, { ok: true, lieutenant: lt.id, pending });
     }
 
     // ----- cards -----
@@ -973,6 +1107,9 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/feed') {
       const lt = url.searchParams.get('lieutenant') || '';
       if (lt && !findLieutenant(lt)) return sendJson(res, 404, { error: 'unknown lieutenant: ' + lt });
+      // A drain clears the nudged flag: the next append (or a turn-end with
+      // still-unacked items) wakes again.
+      if (lt) nudged.delete(lt); else nudged.clear();
       return sendJson(res, 200, { items: drainItems(lt), head: qseq });
     }
 
@@ -983,6 +1120,7 @@ const server = http.createServer(async (req, res) => {
       if (!Number.isInteger(seq) || seq < 0) return sendJson(res, 400, { error: 'seq required (integer)' });
       const r = commitAck(seq);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+      nudged.delete(r.lieutenant); // handled: a fresh append nudges anew
       return sendJson(res, 200, r);
     }
 

@@ -59,6 +59,43 @@ test('lieutenants persist with the board and survive a restart', async () => {
   }
 });
 
+test('harness ref: persisted with the lieutenant, survives restart, PATCH updates it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
+  const ref = { harness: 'fake', session: 'bc-r1', cwd: '/tmp' };
+  const s1 = await startServer({ dir });
+  try {
+    let r = await s1.api('POST', '/api/lieutenants', { name: 'Ref Bearer', id: 'refb', ref });
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(r.body.lieutenant.ref, ref);
+    // a malformed ref is rejected outright
+    r = await s1.api('POST', '/api/lieutenants', { name: 'Bad', id: 'bad', ref: { harness: 'fake' } });
+    assert.strictEqual(r.status, 400);
+  } finally {
+    await s1.stop();
+  }
+  const s2 = await startServer({ dir });
+  try {
+    let lt = (await s2.api('GET', '/api/lieutenants')).body.lieutenants[0];
+    assert.deepStrictEqual(lt.ref, ref, 'ref survives a restart (board is truth)');
+    // PATCH: refresh the ref (init idempotency), reject junk, clear with null
+    const ref2 = { harness: 'fake', session: 'bc-r2', cwd: '/tmp', resumeId: 'uuid-r2' };
+    let r = await s2.api('PATCH', '/api/lieutenants/refb', { ref: ref2 });
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(r.body.lieutenant.ref, ref2);
+    r = await s2.api('PATCH', '/api/lieutenants/refb', { ref: { nope: 1 } });
+    assert.strictEqual(r.status, 400);
+    r = await s2.api('PATCH', '/api/lieutenants/refb', { ref: null, charter: 'updated charter' });
+    assert.strictEqual(r.status, 200);
+    lt = (await s2.api('GET', '/api/lieutenants')).body.lieutenants[0];
+    assert.strictEqual(lt.ref, null);
+    assert.strictEqual(lt.charter, 'updated charter');
+    assert.strictEqual((await s2.api('PATCH', '/api/lieutenants/nobody', {})).status, 404);
+  } finally {
+    await s2.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('cli: lieutenant create (charter via stdin file) and list', async () => {
   const s = await startServer();
   const args = ['--workspace', s.dir, '--port', String(s.port)];

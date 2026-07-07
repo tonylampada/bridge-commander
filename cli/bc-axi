@@ -12,8 +12,9 @@
 
 const http = require('http');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, execFileSync } = require('child_process');
 
 const SELF_DIR = path.dirname(fs.realpathSync(process.argv[1]));
 const SERVER_JS = path.join(SELF_DIR, '..', 'server', 'server.js');
@@ -30,7 +31,7 @@ const opts = {
   title: null, column: null, id: null, type: null, owner: null, lieutenant: null,
   name: null, color: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
-  worker: null, ttl: null,
+  worker: null, ttl: null, spawn: false, harness: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -59,6 +60,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--attr') opts.attrs.push(argv[++i]);
   else if (a === '--label') opts.labels.push(argv[++i]);
   else if (a === '--json') opts.json = true;
+  else if (a === '--spawn') opts.spawn = true;
+  else if (a === '--harness') opts.harness = argv[++i];
   else positional.push(a);
 }
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
@@ -76,8 +79,8 @@ function findWorkspace(start) {
 }
 const WORKSPACE = opts.workspace
   ? path.resolve(opts.workspace)
-  : (cmd === 'open' ? (findWorkspace(process.cwd()) || process.cwd()) : findWorkspace(process.cwd()));
-if (!WORKSPACE) die('no workspace found: no .bridge-command/ from cwd upward (run `bc-axi open` to start one here, or pass --workspace)');
+  : (cmd === 'open' || cmd === 'init' ? (findWorkspace(process.cwd()) || process.cwd()) : findWorkspace(process.cwd()));
+if (!WORKSPACE) die('no workspace found: no .bridge-command/ from cwd upward (run `bc-axi init` to start one here, or pass --workspace)');
 const STATE_DIR = path.join(WORKSPACE, '.bridge-command');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
@@ -137,23 +140,130 @@ function hhmm(iso) { try { return new Date(iso).toISOString().slice(5, 16).repla
 const TARGET_RE = /^(lieutenant:.+|card:.+)$/;
 
 // ---------- server ----------
-async function cmdOpen() {
+// ensureServer — boot the workspace server detached when down (idempotent).
+async function ensureServer() {
   let st = await serverUp();
-  if (!st) {
-    const args = [SERVER_JS, WORKSPACE, '--port', String(PORT)];
-    if (opts.host) args.push('--host', opts.host); // else server resolves: config.json "host" > 127.0.0.1
-    const child = spawn(process.execPath, args, {
-      detached: true, stdio: 'ignore',
-    });
-    child.unref();
-    for (let i = 0; i < 20 && !st; i++) { await sleep(150); st = await serverUp(); }
-    if (!st) die('failed to start server on port ' + PORT);
-    console.log('http://localhost:' + PORT + '/');
-    console.log('started workspace=' + st.workspace + ' cards=' + st.cards);
-  } else {
-    console.log('http://localhost:' + PORT + '/');
-    console.log('already running workspace=' + st.workspace + ' cards=' + st.cards);
+  if (st) return { st, started: false };
+  const args = [SERVER_JS, WORKSPACE, '--port', String(PORT)];
+  if (opts.host) args.push('--host', opts.host); // else server resolves: config.json "host" > 127.0.0.1
+  const child = spawn(process.execPath, args, {
+    detached: true, stdio: 'ignore',
+  });
+  child.unref();
+  for (let i = 0; i < 20 && !st; i++) { await sleep(150); st = await serverUp(); }
+  if (!st) die('failed to start server on port ' + PORT);
+  return { st, started: true };
+}
+
+async function cmdOpen() {
+  const { st, started } = await ensureServer();
+  console.log('http://localhost:' + PORT + '/');
+  console.log((started ? 'started' : 'already running') + ' workspace=' + st.workspace + ' cards=' + st.cards);
+}
+
+// ---------- init: workspace.init — the teleport ----------
+// Mechanical half of the founding flow (the skill drives the agent half):
+// verify tmux, bootstrap .bridge-command/, boot the server, register the CALLER
+// as the founding lieutenant (its tmux session is the ref), install the
+// workspace-level turn-end Stop hook, scaffold AGENTS.md + captain.md +
+// learnings/, print the board URL. Idempotent — safe to re-run.
+function excludeFromGit(dir, entry) {
+  try {
+    const rel = execFileSync('git', ['-C', dir, 'rev-parse', '--git-path', 'info/exclude'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const excl = path.isAbsolute(rel) ? rel : path.join(dir, rel);
+    fs.mkdirSync(path.dirname(excl), { recursive: true });
+    const cur = fs.existsSync(excl) ? fs.readFileSync(excl, 'utf8') : '';
+    if (!cur.split('\n').includes(entry)) fs.appendFileSync(excl, entry + '\n');
+  } catch (e) { /* not a git repo — nothing to exclude */ }
+}
+function slugId(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'lt';
+}
+async function cmdInit() {
+  if (!opts.name) {
+    die('usage: bc-axi init --name <founding-lieutenant-name> [--id id] [--charter-file f|-] [--port N]\n' +
+      '  Run from inside the tmux session that will BE the founding lieutenant.');
   }
+  // 1. teleport precondition: the caller's tmux session becomes the lieutenant's address
+  if (!process.env.TMUX) {
+    die('not inside tmux — a lieutenant lives in a tmux session.\n' +
+      'Start one and re-run init from within it:\n' +
+      '  tmux new -s ' + slugId(path.basename(WORKSPACE)));
+  }
+  let tmuxSession = '';
+  try {
+    tmuxSession = execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8' }).trim();
+  } catch (e) { die('could not read the current tmux session: ' + e.message); }
+  if (!tmuxSession) die('could not resolve the current tmux session name');
+
+  // 2. state dir + server (detached, idempotent)
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  excludeFromGit(WORKSPACE, '.bridge-command/');
+  const { started } = await ensureServer();
+  console.log('server ' + (started ? 'started' : 'already running') + ' on port ' + PORT);
+
+  // 3. founding lieutenant: the CALLER's session is its ref. resumeId is learned
+  // from the first turn-end POST (adoption); CLAUDE_SESSION_ID seeds it when the
+  // harness exports it.
+  const id = opts.id || slugId(opts.name);
+  const ref = { harness: 'claude', session: tmuxSession, cwd: WORKSPACE };
+  if (process.env.CLAUDE_SESSION_ID) ref.resumeId = process.env.CLAUDE_SESSION_ID;
+  const body = { name: opts.name, id, ref, actor: 'user' };
+  if (opts.color) body.color = opts.color;
+  if (opts.charterFile) body.charter = readInput(opts.charterFile);
+  try {
+    await request('POST', '/api/lieutenants', body);
+    console.log('founding lieutenant "' + opts.name + '" (' + id + ') registered — tmux session ' + tmuxSession);
+  } catch (e) {
+    if (!/HTTP 409/.test(e.message)) throw e;
+    await request('PATCH', '/api/lieutenants/' + encodeURIComponent(id), { ref });
+    console.log('founding lieutenant ' + id + ' already registered — session ref refreshed (' + tmuxSession + ')');
+  }
+
+  // 4. workspace-level turn-end Stop hook -> POST /api/turn-end. Session-agnostic
+  // pseudo-name "ws": it fires for every claude in this cwd and the server
+  // dedupes by session_id. NOTE: claude captures hooks at startup, so the
+  // founding session's own turn-ends start flowing on its next restart.
+  const { installHooks } = require(path.join(SELF_DIR, '..', 'harness', 'claude-tmux.js'));
+  installHooks(WORKSPACE, 'ws', path.join(STATE_DIR, 'harness'), 'http://127.0.0.1:' + PORT + '/api/turn-end');
+  console.log('turn-end hook installed (.claude/settings.local.json -> /api/turn-end)');
+
+  // 5. shared memory scaffold (never overwrite what exists)
+  const agentsMd = path.join(WORKSPACE, 'AGENTS.md');
+  if (!fs.existsSync(agentsMd)) {
+    fs.writeFileSync(agentsMd,
+      '# ' + path.basename(WORKSPACE) + ' — Bridge Command workspace\n\n' +
+      'Every agent here works for the captain through the Bridge Command board.\n\n' +
+      '1. FIRST: load the **bridge-command** skill and follow its doctrine.\n' +
+      '2. Read `captain.md` — the captain\'s preferences and working style.\n' +
+      '3. Read `learnings/` — per-project engineering learnings, proactively maintained by lieutenants.\n\n' +
+      'Board state lives in `.bridge-command/` (server-owned — never hand-edit).\n' +
+      'Drive the board with `bc-axi` (run it bare for usage).\n');
+    console.log('scaffolded AGENTS.md');
+  }
+  const captainMd = path.join(WORKSPACE, 'captain.md');
+  if (!fs.existsSync(captainMd)) {
+    const seed = path.join(os.homedir(), '.bridge-command', 'captain.md');
+    if (fs.existsSync(seed)) {
+      fs.copyFileSync(seed, captainMd);
+      console.log('scaffolded captain.md (seeded from ~/.bridge-command/captain.md)');
+    } else {
+      fs.writeFileSync(captainMd,
+        '# Captain preferences\n\n' +
+        '(Curated preferences and working style. A global seed can live at ~/.bridge-command/captain.md.)\n');
+      console.log('scaffolded captain.md');
+    }
+  }
+  const learnings = path.join(WORKSPACE, 'learnings');
+  if (!fs.existsSync(learnings)) {
+    fs.mkdirSync(learnings, { recursive: true });
+    fs.writeFileSync(path.join(learnings, 'README.md'),
+      'Per-project engineering learnings — one file per project, maintained by lieutenants.\n');
+    console.log('scaffolded learnings/');
+  }
+
+  console.log('\nboard: http://localhost:' + PORT + '/');
 }
 
 async function cmdStop() {
@@ -167,14 +277,21 @@ async function cmdStop() {
 
 // ---------- lieutenants ----------
 async function cmdLtCreate() {
-  if (!opts.name) die('usage: bc-axi lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-]');
+  if (!opts.name) die('usage: bc-axi lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-] [--spawn [--harness h]]');
   const body = { name: opts.name };
   if (opts.id) body.id = opts.id;
   if (opts.color) body.color = opts.color;
   if (opts.charterFile) body.charter = readInput(opts.charterFile);
   if (opts.actor) body.actor = opts.actor;
-  const r = await request('POST', '/api/lieutenants', body);
-  console.log('lieutenant ' + r.lieutenant.id + ' created (' + r.lieutenant.color + ')');
+  if (opts.spawn) {
+    body.spawn = true;
+    if (opts.harness) body.harness = opts.harness;
+    console.log('spawning a live session for the new lieutenant (can take up to a minute)...');
+  }
+  const r = await request('POST', '/api/lieutenants', body, opts.spawn ? 120000 : undefined);
+  const ref = r.lieutenant.ref;
+  console.log('lieutenant ' + r.lieutenant.id + ' created (' + r.lieutenant.color + ')'
+    + (ref ? ' — live session ' + ref.harness + ':' + ref.session : ''));
 }
 
 async function cmdLtList() {
@@ -375,9 +492,50 @@ async function cmdDrain() {
   // lieutenant's committed ack cursor and drain never advances it. After
   // HANDLING the items, run `bc-axi ack <seq>` with the highest seq handled;
   // until then every drain re-offers the same items (dedupe by seq).
+  // Default output is agent-ergonomic (card context + next-action hint per
+  // item); --json prints the raw QueueItems, one JSON line each.
   const q = opts.lieutenant ? '?lieutenant=' + encodeURIComponent(opts.lieutenant) : '';
   const r = await request('GET', '/api/feed' + q);
-  for (const it of r.items) console.log(JSON.stringify(it));
+  if (opts.json) { for (const it of r.items) console.log(JSON.stringify(it)); return; }
+  if (!r.items.length) { console.log('queue empty — nothing pending.'); return; }
+  let cards = [];
+  try { cards = (await request('GET', '/api/board')).cards || []; } catch (e) { /* context is best-effort */ }
+  const cardBit = (id) => {
+    const c = cards.find((x) => x.id === id);
+    return 'card ' + id + (c ? ' "' + c.title + '" [' + c.column + ']' : ' (not on the board — archived?)');
+  };
+  const indent = (t) => '    ' + String(t).replace(/\n/g, '\n    ');
+  console.log(r.items.length + ' pending item(s):\n');
+  let max = 0;
+  for (const it of r.items) {
+    if (it.seq > max) max = it.seq;
+    let head = it.kind + (it.card ? ' — ' + cardBit(it.card) : '');
+    let hint = '';
+    const cm = /^card:(.+)$/.exec(it.target || '');
+    if (it.kind === 'message' && cm) {
+      head = 'captain message on ' + cardBit(cm[1]);
+      hint = 'reply on the thread: bc-axi say ' + it.target + ' --text-file <f|->';
+    } else if (it.kind === 'message') {
+      head = 'captain message (your main chat)';
+      hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
+    } else if (it.kind === 'start-order') {
+      head = 'START ORDER — ' + cardBit(it.card);
+      hint = 'the captain ordered this card started: read it (bc-axi card show ' + it.card + ') and begin work per your doctrine';
+    } else if (it.kind === 'rework-order') {
+      head = 'REWORK ORDER — ' + cardBit(it.card);
+      hint = 'the captain sent this back: rework it, rewrite the body to current state, then hand off: bc-axi card move ' + it.card + ' review';
+    } else if (it.kind === 'card-created') {
+      head = 'new card for you — ' + cardBit(it.card);
+      hint = 'read it: bc-axi card show ' + it.card;
+    } else if (it.kind === 'card-moved') {
+      head = 'captain moved ' + cardBit(it.card) + ': ' + it.from + ' -> ' + it.to;
+    }
+    console.log('#' + it.seq + '  ' + head);
+    if (it.text) console.log(indent(it.text));
+    if (hint) console.log('    -> ' + hint);
+    console.log('');
+  }
+  console.log('handle EVERY item above, then commit: bc-axi ack ' + max + '   (only ack after handling; unacked items re-offer)');
 }
 
 async function cmdAck() {
@@ -443,6 +601,7 @@ async function cmdConfig() {
 }
 
 const commands = {
+  init: cmdInit,
   open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
   board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
   'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList,
@@ -455,14 +614,21 @@ const commands = {
 if (!commands[cmd]) {
   die('bc-axi — agent CLI for the bridge-command board.\n' +
     'Workspace: nearest .bridge-command/ from cwd upward, or --workspace DIR. Port: workspace config.json (default 4780), or --port N.\n' +
-    '\nserver:\n' +
+    '\nserver & workspace:\n' +
+    '  init --name N [--id id] [--charter-file f|-]\n' +
+    '                                         workspace.init (the teleport): run INSIDE tmux; bootstraps\n' +
+    '                                         .bridge-command/, boots the server, registers the caller\'s tmux\n' +
+    '                                         session as the founding lieutenant, installs the turn-end hook,\n' +
+    '                                         scaffolds AGENTS.md + captain.md + learnings/. Idempotent\n' +
     '  open [--host H]                        start the workspace server if needed (idempotent), print URL.\n' +
     '                                         Bootstraps .bridge-command/ in cwd on first run.\n' +
     '  status                                 up/down, cards, lieutenants, pending queue items\n' +
     '  stop                                   stop the workspace server\n' +
     '\nlieutenant:\n' +
-    '  lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-]\n' +
-    '                                         register a lieutenant (color auto-assigned when omitted)\n' +
+    '  lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-] [--spawn [--harness h]]\n' +
+    '                                         register a lieutenant (color auto-assigned when omitted);\n' +
+    '                                         --spawn births a REAL agent session in the workspace root\n' +
+    '                                         (doctrine + charter as launch prompt, ref persisted)\n' +
     '  lieutenant list [--json]               id, name, color, charter first line\n' +
     '\nread:\n' +
     '  board [--json]                         lane + columns + card one-liners (or full JSON)\n' +
@@ -493,9 +659,10 @@ if (!commands[cmd]) {
     '                                         post a chat message; a card thread\'s interlocutor is\n' +
     '                                         the owning lieutenant (lieutenant-main says also notify)\n' +
     '\ndelivery (at-least-once):\n' +
-    '  drain [--lieutenant <id>]              print pending QueueItems as JSON lines (captain\n' +
-    '    messages, start/rework orders, card-created/moved). Drain never removes: handle the\n' +
-    '    items, then ack the highest seq handled; unacked items re-offer (dedupe by seq)\n' +
+    '  drain [--lieutenant <id>] [--json]     print pending QueueItems with card context and a\n' +
+    '    next-action hint per item (--json: raw JSON lines). Captain messages, start/rework\n' +
+    '    orders, card-created/moved. Drain never removes: handle the items, then ack the\n' +
+    '    highest seq handled; unacked items re-offer (dedupe by seq)\n' +
     '  ack <seq>                              commit that seq\'s lieutenant ack cursor\n' +
     '\nstatus (worker lease; owed/unread are server-derived):\n' +
     '  status <card-id> [--json]              the card\'s derived status: worker/owed/unread\n' +

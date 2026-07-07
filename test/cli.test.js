@@ -68,17 +68,28 @@ test('cli card create / board / say / drain / ack round-trip against a test serv
 
     // captain feedback, then CLI drain offers it and ack commits the cursor
     await s.api('POST', '/api/feedback', { target: 'card:cli-card', text: 'question from the board' });
-    r = await runCli(['drain', '--lieutenant', LT, ...args]);
+    r = await runCli(['drain', '--lieutenant', LT, '--json', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     const items = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
     assert.strictEqual(items.length, 1);
     assert.strictEqual(items[0].kind, 'message');
     assert.strictEqual(items[0].text, 'question from the board');
 
+    // default drain output is agent-ergonomic: card context, next-action hint, ack instruction
+    r = await runCli(['drain', '--lieutenant', LT, ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /1 pending item\(s\):/);
+    assert.match(r.stdout, /captain message on card cli-card "CLI card"/);
+    assert.match(r.stdout, /question from the board/);
+    assert.match(r.stdout, /bc-axi say card:cli-card/);
+    assert.match(r.stdout, new RegExp('bc-axi ack ' + items[0].seq));
+
     r = await runCli(['ack', String(items[0].seq), ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /acked 1 \(lieutenant=ada committed=1\)/);
     r = await runCli(['drain', ...args]);
+    assert.match(r.stdout, /queue empty/);
+    r = await runCli(['drain', '--json', ...args]);
     assert.strictEqual(r.stdout.trim(), '');
 
     // lieutenant reply via say (interlocutor default: the owning lieutenant)

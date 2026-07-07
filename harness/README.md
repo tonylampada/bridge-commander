@@ -31,7 +31,10 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
 - `claude-tmux.js` — the claude implementation over tmux (v0's real harness)
 - `tmux.js` — shared tmux primitives (composer state, ghost-text stripping, verified submit)
 - `turnend-hook.js` — the Stop-hook relay claude runs at every turn boundary
-- `fake.js` — in-memory implementation for unit-testing server code
+- `fake.js` — in-memory implementation for unit-testing server code; set
+  `BC_FAKE_STATE=<dir>` for file-backed mode (cross-process: spawn writes a
+  `<session>.json` marker, sends append to `<session>.sends.jsonl`, and a
+  marker on disk counts as a live session)
 - `smoke.js` — real end-to-end smoke (spawns actual claude sessions)
 - `test/` — unit tests (`node --test harness/test/*.test.js`)
 
@@ -43,6 +46,11 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
   The prompt rides in a file expanded by the pane's shell — no quoting hazards.
   A fresh cwd shows claude's folder-trust dialog even in bypass mode; spawn detects
   and auto-accepts it, and only returns once the main UI is up.
+  `opts.installHooks: false` skips the per-spawn Stop-hook install (spawn and
+  resume both honor it) — for sessions born into a cwd that already carries a
+  workspace-level hook, which a per-spawn install would clobber (one bc entry
+  per settings file). `installHooks` is also exported beyond the five verbs so
+  `bc-axi init` can install that workspace-level hook itself.
 - **send** — text is typed ONCE (single-line via `send-keys -l`; multi-line via a
   bracketed paste so embedded newlines don't submit mid-text), then Enter is sent
   and verified: the composer's cursor line is captured with ANSI styling, dim

@@ -278,13 +278,21 @@ document.getElementById('lt-modal').onsubmit = async (e) => {
   e.preventDefault();
   const name = document.getElementById('lt-name').value.trim();
   if (!name) return;
+  // The lane button births a REAL lieutenant: the server spawns its agent
+  // session (doctrine + charter as launch prompt) and persists the ref. Slow
+  // (up to a minute) — keep the modal up, button disabled, until it lands.
+  const btn = document.getElementById('lt-create');
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = 'spawning…';
   try {
     const r = await api.createLieutenant({
       name,
       color: document.getElementById('lt-color').value,
       charter: document.getElementById('lt-charter').value,
+      spawn: true,
     });
     closeNewLieutenant();
     openLieutenantChat(r.lieutenant.id);
   } catch (err) { alert(err.message); }
+  finally { btn.disabled = false; btn.textContent = label; }
 };

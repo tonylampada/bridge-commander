@@ -16,10 +16,38 @@
 //
 // Test helpers (not part of the port contract): kill(ref), transcript(ref),
 // reset().
+//
+// File-backed mode (cross-process observability): when BC_FAKE_STATE names a
+// directory, spawn/send also persist there —
+//   <session>.json         spawn record { cwd, resumeId, prompt }
+//   <session>.sends.jsonl  one JSON line per send { ts, session, text }
+// and a session unknown to THIS process counts as alive (and accepts sends)
+// iff its <session>.json marker exists. That lets a test process watch what a
+// server process sent, and pre-register "live" fake sessions by dropping a
+// marker file. Without BC_FAKE_STATE the fake stays purely in-memory.
 
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
 
 const sessions = new Map(); // session name -> { alive, cwd, resumeId, transcript, hooks, turns }
+
+function fakeStateDir() {
+  const dir = process.env.BC_FAKE_STATE;
+  if (!dir) return null;
+  fs.mkdirSync(dir, { recursive: true });
+  return dir;
+}
+function markerFile(session) {
+  const dir = fakeStateDir();
+  return dir ? path.join(dir, session + '.json') : null;
+}
+function logSend(session, text) {
+  const dir = fakeStateDir();
+  if (!dir) return;
+  fs.appendFileSync(path.join(dir, session + '.sends.jsonl'),
+    JSON.stringify({ ts: new Date().toISOString(), session, text }) + '\n');
+}
 
 function get(ref) {
   const s = sessions.get(ref.session);
@@ -65,20 +93,31 @@ async function spawn(cwd, prompt, opts = {}) {
     hooks: [],
     turns: 0,
   });
+  const marker = markerFile(session);
+  if (marker) fs.writeFileSync(marker, JSON.stringify({ cwd, resumeId, prompt }, null, 2) + '\n');
   emitTurnEnd(session);
   return { harness: 'fake', session, cwd, resumeId };
 }
 
 async function send(ref, text) {
-  const s = get(ref);
+  const s = sessions.get(ref.session);
+  if (!s) {
+    // Cross-process fake session: alive iff its marker file exists.
+    const marker = markerFile(ref.session);
+    if (marker && fs.existsSync(marker)) return logSend(ref.session, text);
+    throw new Error(`fake: unknown session ${ref.session}`);
+  }
   if (!s.alive) throw new Error(`session ${ref.session} is not alive`);
   s.transcript.push(text);
+  logSend(ref.session, text);
   emitTurnEnd(ref.session);
 }
 
 async function alive(ref) {
   const s = sessions.get(ref.session);
-  return !!s && s.alive;
+  if (s) return s.alive;
+  const marker = markerFile(ref.session);
+  return !!(marker && fs.existsSync(marker));
 }
 
 async function resume(ref) {
