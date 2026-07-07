@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, ago, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename, setHtmlIfChanged } from './util.js';
 import { md } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -233,17 +233,20 @@ export function renderDetail() {
   if (!c) { closeDetail(); return; }
   el.hidden = false;
 
-  document.getElementById('dt-emoji').textContent = cardEmoji(c);
-  if (!editingTitle) titleEl.textContent = c.title || c.id; // don't clobber an in-progress rename
+  const emojiEl = document.getElementById('dt-emoji');
+  const emoji = cardEmoji(c);
+  if (emojiEl.textContent !== emoji) emojiEl.textContent = emoji;
+  if (!editingTitle && titleEl.textContent !== (c.title || c.id)) titleEl.textContent = c.title || c.id; // don't clobber an in-progress rename
   // sub line: id + timestamps, plus a worker-id chip when a worker is attached.
   // Same whitelist as the tile stripe (board.js) — only known states render, so
   // no server value ever reaches the class name; the id itself is esc()'d.
   const WORKER_STATES = { working: 1, 'needs-you': 1, idle: 1 };
   const w = cardStatus(c).worker;
   const worker = w && w.id && WORKER_STATES[w.state] ? w : null;
-  document.getElementById('dt-sub').innerHTML =
-    esc(c.id + ' · ' + c.type + ' · created ' + ago(c.created) + ' ago · updated ' + ago(cardRecency(c)) + ' ago') +
-    (worker ? '<span class="dt-worker dt-worker-' + worker.state + '" title="worker: ' + esc(worker.state) + '">' + esc(worker.id) + '</span>' : '');
+  setHtmlIfChanged(document.getElementById('dt-sub'),
+    esc(c.id + ' · ' + c.type + ' · created ') + agoSpanHtml(c.created) +
+    esc(' ago · updated ') + agoSpanHtml(cardRecency(c)) + esc(' ago') +
+    (worker ? '<span class="dt-worker dt-worker-' + worker.state + '" title="worker: ' + esc(worker.state) + '">' + esc(worker.id) + '</span>' : ''));
 
   // attributes header. The owner (the owning lieutenant) leads, in the
   // lieutenant's color and clickable as a filter. prs and artifacts are
@@ -251,15 +254,17 @@ export function renderDetail() {
   // the generic key:value chips.
   const at = c.attributes || {};
   const attrsEl = document.getElementById('dt-attrs');
-  attrsEl.innerHTML =
-    '<span class="attr attr-owner" title="filter by lieutenant"><span class="k">lieutenant</span>' +
+  // data-card keys the markup to THIS card: the chip handlers below close over
+  // c, so a same-looking attrs row on another card must not skip the rebuild
+  const attrsChanged = setHtmlIfChanged(attrsEl,
+    '<span class="attr attr-owner" data-card="' + esc(c.id) + '" title="filter by lieutenant"><span class="k">lieutenant</span>' +
     '<span class="v" style="color:' + esc(lieutenantColor(c.owner)) + '">' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span></span>' +
     (c.pendingOrder ? '<span class="attr"><span class="k">pending</span><span class="v">⏳ ' + esc(c.pendingOrder.kind) + '</span></span>' : '') +
     Object.entries(at)
       .filter(([k]) => k !== 'emoji' && k !== 'prs' && k !== 'artifacts')
       .map(([k, v]) => attrHtml(k, v)).join('') +
-    cardPrs(c).map((pr) => prChipHtml(pr, true)).join('');
-  const ownerChip = attrsEl.querySelector('.attr-owner');
+    cardPrs(c).map((pr) => prChipHtml(pr, true)).join(''));
+  const ownerChip = attrsChanged && attrsEl.querySelector('.attr-owner');
   if (ownerChip) {
     ownerChip.style.cursor = 'pointer';
     ownerChip.onclick = () => toggleFilter('owner', c.owner);
@@ -279,37 +284,43 @@ export function renderDetail() {
     ownerChip.appendChild(edit);
   }
 
-  // labels (user-owned)
+  // labels (user-owned) — DOM-built, so guarded by a signature (card + each
+  // chip's rendered markup, covering name/color/filter state) instead of an
+  // innerHTML cache; the handlers close over c, hence c.id in the signature
   const labWrap = document.getElementById('dt-labels');
-  labWrap.textContent = '';
-  for (const name of c.labels || []) {
-    const chip = document.createElement('span');
-    chip.className = 'dlabel';
-    chip.innerHTML = labelChipHtml(name, filterSelected('label', name));
-    chip.querySelector('.label').onclick = () => toggleFilter('label', name);
-    const x = document.createElement('button');
-    x.type = 'button'; x.textContent = '✕'; x.title = 'remove label';
-    x.onclick = () => saveCardLabels(c.id, (c.labels || []).filter((v) => v !== name));
-    chip.appendChild(x);
-    labWrap.appendChild(chip);
+  const labSig = c.id + '|' + (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('');
+  if (labWrap.__bcSig !== labSig) {
+    labWrap.__bcSig = labSig;
+    labWrap.textContent = '';
+    for (const name of c.labels || []) {
+      const chip = document.createElement('span');
+      chip.className = 'dlabel';
+      chip.innerHTML = labelChipHtml(name, filterSelected('label', name));
+      chip.querySelector('.label').onclick = () => toggleFilter('label', name);
+      const x = document.createElement('button');
+      x.type = 'button'; x.textContent = '✕'; x.title = 'remove label';
+      x.onclick = () => saveCardLabels(c.id, (c.labels || []).filter((v) => v !== name));
+      chip.appendChild(x);
+      labWrap.appendChild(chip);
+    }
+    const add = document.createElement('button');
+    add.type = 'button';
+    add.id = 'dt-label-add';
+    add.setAttribute('data-label-add', '');
+    add.textContent = '+ label';
+    add.onclick = () => openLabelPicker(c.id, add);
+    labWrap.appendChild(add);
   }
-  const add = document.createElement('button');
-  add.type = 'button';
-  add.id = 'dt-label-add';
-  add.setAttribute('data-label-add', '');
-  add.textContent = '+ label';
-  add.onclick = () => openLabelPicker(c.id, add);
-  labWrap.appendChild(add);
 
   // body (don't clobber an in-progress description edit)
-  if (!editingBody) bodyEl.innerHTML = md(c.body || '');
+  if (!editingBody) setHtmlIfChanged(bodyEl, md(c.body || ''));
 
   // artifacts: attributes.artifacts [{uri, label}] — shown by FILENAME, not the
   // raw uri. http(s) uris open normally; anything else (file:// / local paths)
   // opens in the artifact viewer popup, served by GET /api/artifact.
   const artEl = document.getElementById('dt-artifacts');
   const arts = cardArtifacts(c);
-  artEl.innerHTML = !arts.length ? '' :
+  const artsChanged = setHtmlIfChanged(artEl, !arts.length ? '' :
     '<div class="dt-arts-head">artifacts</div>' + arts.map((a) => {
       const name = uriBasename(a.uri) || a.uri;
       const label = '<span class="a-label">' + esc(a.label || name) + '</span>';
@@ -317,8 +328,8 @@ export function renderDetail() {
         ? '<a class="a-uri" href="' + esc(a.uri) + '" target="_blank" rel="noopener" title="' + esc(a.uri) + '">' + esc(name) + '</a>'
         : '<code class="a-uri" data-view="' + esc(a.uri) + '" title="' + esc(a.uri) + ' — click to view">' + esc(name) + '</code>';
       return '<div class="art">' + label + uri + '</div>';
-    }).join('');
-  artEl.querySelectorAll('.a-uri[data-view]').forEach((n) => {
+    }).join(''));
+  if (artsChanged) artEl.querySelectorAll('.a-uri[data-view]').forEach((n) => {
     n.onclick = () => openArtifact(n.dataset.view);
   });
 
@@ -326,11 +337,11 @@ export function renderDetail() {
   const evEl = document.getElementById('dt-events');
   const events = (c.events || []).slice().reverse();
   // kind emoji from the effective kinds map, for any level; unknown kind = no emoji
-  evEl.innerHTML = events.map((e) =>
+  setHtmlIfChanged(evEl, events.map((e) =>
     '<div class="ev lvl' + e.level + '"><span class="dot"></span><div class="bd">' +
     '<div class="tx">' + (kindEmoji(e.kind) ? esc(kindEmoji(e.kind)) + ' ' : '') + esc(e.text) + '</div>' +
-    '<div class="sub">' + esc(e.actor || '') + ' · ' + hhmm(e.ts) + ' · ' + ago(e.ts) + ' ago</div>' +
-    '</div></div>').join('') || '<div class="ev"><div class="bd"><div class="sub">no events yet</div></div></div>';
+    '<div class="sub">' + esc(e.actor || '') + ' · ' + hhmm(e.ts) + ' · ' + agoSpanHtml(e.ts) + ' ago</div>' +
+    '</div></div>').join('') || '<div class="ev"><div class="bd"><div class="sub">no events yet</div></div></div>');
 
   maybeMarkCardRead(c);
 }

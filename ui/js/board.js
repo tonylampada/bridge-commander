@@ -2,7 +2,7 @@
 // move menu, new-card / new-lieutenant modals.
 import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwed, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
 import { api } from './api.js';
-import { esc, ago, cardEmoji, cardPrs, prChipHtml } from './util.js';
+import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
@@ -43,8 +43,9 @@ function ltCardHtml(l) {
 }
 
 function renderLane() {
-  laneEl.innerHTML = lieutenants().map(ltCardHtml).join('') +
+  const html = lieutenants().map(ltCardHtml).join('') +
     '<button class="lt-add" title="new lieutenant">＋ lieutenant</button>';
+  if (!setHtmlIfChanged(laneEl, html)) return; // unchanged — keep the DOM (and its handlers)
   laneEl.querySelectorAll('.lt-card').forEach((el) => {
     el.onclick = (e) => {
       if (e.target.closest('.lt-menu')) { e.stopPropagation(); openLtMenu(el.dataset.id, e.clientX, e.clientY); return; }
@@ -132,30 +133,33 @@ function tileHtml(c) {
     '<span class="grow"></span>' +
     (hasLink ? '<span class="t-ind" title="has link">📎</span>' : '') +
     (msgs ? '<span class="t-ind" title="' + msgs + ' messages">💬' + msgs + '</span>' : '') +
-    '<span class="t-ago">' + ago(cardRecency(c)) + '</span>' +
+    agoSpanHtml(cardRecency(c), 't-ago') +
     '</div></div>';
 }
 
 export function renderBoard() {
   renderLane();
+  const cols = columns();
+  const html = !cols.length
+    ? '<div class="empty">waiting for board…</div>'
+    : cols.map((col) => {
+      const list = cards().filter((c) => c.column === col.id && cardVisible(c)).sort(byRecency);
+      return '<div class="column" data-id="' + esc(col.id) + '"><h2><span>' + esc(col.title || col.id) + '</span>' +
+        '<span class="count">' + list.length + '</span>' +
+        '<button class="add-card" title="new card here">+</button></h2>' +
+        '<div class="cards">' + list.map(tileHtml).join('') + '</div></div>';
+    }).join('');
+  // unchanged markup = leave the DOM (and scroll/selection/handlers) alone;
+  // only a real change pays the rebuild + scroll save/restore
+  if (boardEl.__bcHtml === html) return;
+  boardEl.__bcHtml = html;
   const sx = boardEl.scrollLeft;
   const colScroll = {};
   boardEl.querySelectorAll('.column').forEach((col) => {
     colScroll[col.dataset.id] = col.querySelector('.cards').scrollTop;
   });
-
-  const cols = columns();
-  if (!cols.length) {
-    boardEl.innerHTML = '<div class="empty">waiting for board…</div>';
-    return;
-  }
-  boardEl.innerHTML = cols.map((col) => {
-    const list = cards().filter((c) => c.column === col.id && cardVisible(c)).sort(byRecency);
-    return '<div class="column" data-id="' + esc(col.id) + '"><h2><span>' + esc(col.title || col.id) + '</span>' +
-      '<span class="count">' + list.length + '</span>' +
-      '<button class="add-card" title="new card here">+</button></h2>' +
-      '<div class="cards">' + list.map(tileHtml).join('') + '</div></div>';
-  }).join('');
+  boardEl.innerHTML = html;
+  if (!cols.length) return;
   boardEl.scrollLeft = sx;
   boardEl.querySelectorAll('.column').forEach((col) => {
     if (colScroll[col.dataset.id] != null) col.querySelector('.cards').scrollTop = colScroll[col.dataset.id];
