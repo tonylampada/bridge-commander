@@ -42,7 +42,7 @@ const opts = {
   name: null, color: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
-  mode: null, briefFile: null, resume: false, outcome: null,
+  mode: null, briefFile: null, resume: false, outcome: null, model: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -73,6 +73,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--json') opts.json = true;
   else if (a === '--spawn') opts.spawn = true;
   else if (a === '--harness') opts.harness = argv[++i];
+  else if (a === '--model') opts.model = argv[++i];
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
   else if (a === '--resume') opts.resume = true;
@@ -458,14 +459,14 @@ async function cmdMove() {
 
 async function cmdPatch() {
   const id = positional[0];
-  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--body-file f|-] [--attr k=v]... (--attr k= deletes)');
-  if (opts.owner !== null) die('owner is immutable — archive and recreate under the other lieutenant');
+  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--owner L] [--body-file f|-] [--attr k=v]... (--attr k= deletes)');
   const body = {};
+  if (opts.owner !== null) body.owner = opts.owner; // allowed only while no worker is bound (server enforces)
   if (opts.title !== null) body.title = opts.title;
   if (opts.type !== null) body.type = opts.type;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   if (opts.attrs.length) body.attributes = parseAttrs(opts.attrs);
-  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --body-file / --attr)');
+  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --owner / --body-file / --attr)');
   await request('PATCH', '/api/cards/' + encodeURIComponent(id), body);
   console.log('patched ' + id);
 }
@@ -516,16 +517,18 @@ async function cmdRestore() {
 async function cmdStart() {
   const id = positional[0];
   if (!id) {
-    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume] [--harness h]\n' +
+    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume] [--harness h] [--model m]\n' +
       '  ONE atomic op: provision an isolated worktree, spawn the worker session with the brief\n' +
       '  as launch prompt, bind session/worktree/branch to the card, move it to Working.\n' +
       '  --brief-file adds/overrides the task text (default: the card body).\n' +
-      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.');
+      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.\n' +
+      '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.');
   }
   const body = { actor: opts.actor || 'agent' };
   if (opts.briefFile) body.brief = readInput(opts.briefFile);
   if (opts.resume) body.resume = true;
   if (opts.harness) body.harness = opts.harness;
+  if (opts.model) body.model = opts.model;
   console.log((opts.resume ? 'resuming' : 'starting') + ' a worker for ' + id + ' (worktree + real session — can take a minute)...');
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/start', body, 180000);
   const w = r.worker;

@@ -779,10 +779,23 @@ function moveCard(card, body, actorDefault) {
 }
 
 function patchCard(card, body) {
-  // A card is born inside one lieutenant and stays until it dies — no owner
-  // reassignment (moving work between lieutenants = archive + recreate).
+  // Owner reassignment is allowed ONLY while no worker is bound to the card
+  // (live or recorded): a worker's session/worktree belong to the owning
+  // lieutenant's supervision, so mid-work handovers stay forbidden.
   if (body.owner !== undefined) {
-    return { error: 'owner is immutable — archive and recreate under the other lieutenant' };
+    const newOwner = String(body.owner).replace(/^lieutenant:/, '');
+    if (newOwner !== card.owner) {
+      if (findWorker(card.id)) {
+        return { error: 'owner change refused: card has a worker bound (session/worktree) — finish or archive first' };
+      }
+      if (!board.lieutenants.some((l) => l.id === newOwner)) {
+        return { error: 'unknown lieutenant: ' + newOwner };
+      }
+      const prev = card.owner;
+      card.owner = newOwner;
+      card.events.push(mkEvent(
+        { actor: body.actor, text: 'owner: ' + prev + ' → ' + newOwner }, { kind: 'moved' }));
+    }
   }
   if (body.title !== undefined) card.title = String(body.title).slice(0, 200);
   if (body.body !== undefined) card.body = String(body.body);
@@ -1000,9 +1013,11 @@ async function startCard(card, body) {
     project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
     cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
   });
+  const spawnOpts = { session, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
+  if (body && body.model) spawnOpts.extraArgs = ['--model', String(body.model)];
   let ref;
   try {
-    ref = await impl.spawn(wt.path, prompt, { session, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
+    ref = await impl.spawn(wt.path, prompt, spawnOpts);
   } catch (e) {
     releaseWorktree(wt, project.path); // best-effort: no spawnless lease left behind
     return { error: 'worker spawn failed: ' + String((e && e.message) || e), code: 502 };

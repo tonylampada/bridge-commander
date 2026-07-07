@@ -1,5 +1,5 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
-import { S, card, lieutenant, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
+import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
 import { esc, hhmm, ago, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename } from './util.js';
 import { md } from './md.js';
 import { api } from './api.js';
@@ -263,6 +263,20 @@ export function renderDetail() {
   if (ownerChip) {
     ownerChip.style.cursor = 'pointer';
     ownerChip.onclick = () => toggleFilter('owner', c.owner);
+    // Owner reassignment (allowed server-side only while no worker is bound):
+    // a small ✎ on the chip cycles through a prompt of the other lieutenants.
+    const edit = document.createElement('button');
+    edit.type = 'button'; edit.textContent = '✎'; edit.title = 'change owner (only while no worker is bound)';
+    edit.style.cssText = 'border:none;background:none;cursor:pointer;padding:0 2px;font-size:11px;opacity:.6';
+    edit.onclick = async (e) => {
+      e.stopPropagation();
+      const others = lieutenants().filter((l) => l.id !== c.owner);
+      if (!others.length) return alert('no other lieutenant to hand this card to');
+      const pick = prompt('new owner id (' + others.map((l) => l.id).join(', ') + '):', others[0].id);
+      if (!pick || pick === c.owner) return;
+      try { await api.patchCard(c.id, { owner: pick }); } catch (err) { alert(err.message); }
+    };
+    ownerChip.appendChild(edit);
   }
 
   // labels (user-owned)
