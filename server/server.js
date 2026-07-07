@@ -17,7 +17,7 @@
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
 //             workers:  [{card, ref, worktree: {path, tool}, branch?, project,
-//                         spawnedAt, done?, outcome?, flagged?, lastTurnEnd?, turns?}],
+//                         spawnedAt, done?, outcome?, flagged?, paused?, lastTurnEnd?, turns?}],
 //             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
 //                        created, updated, threadStart, pendingOrder,
 //                        status: {worker: null|{id, state, expires}},  // lease; only status.set writes it
@@ -245,6 +245,8 @@ const BUILTIN_KINDS = {
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
+  'worker-paused': { emoji: '💤', level: 2 },
+  parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
   'needs-captain': { emoji: '🚨', level: 1 },
 };
@@ -1009,6 +1011,7 @@ async function doStartCard(card, body) {
     delete existing.outcome;
     delete existing.flagged;
     delete existing.stopNotified;
+    delete existing.paused; // a revived worker is watched again
     enterWorking(card, 'worker ' + ref.session + ' resumed in ' + existing.worktree.path);
     return { worker: existing, resumed: true };
   }
@@ -1161,6 +1164,81 @@ async function workerSend(card, body) {
   return { ok: true, event: ev, session: w.ref.session };
 }
 
+// worker.pause — a DELIBERATE stop: kill the worker's session but record the
+// stop as intentional, so supervision never reports it as a crash (the whole
+// point — a `tmux kill-session` otherwise reads as WORKER DIED). The paused
+// marker is set BEFORE the kill (the supervision tick re-checks it after its
+// own alive() await, closing the mark/kill race) and the registry entry +
+// worktree/branch stay intact, so `card start --resume` revives the worker
+// exactly like a died one. body.park composes the park (Working → Backlog).
+async function pauseWorker(card, body) {
+  const w = findWorker(card.id);
+  if (!w) return { error: 'no worker recorded for card ' + card.id + ' — nothing to pause', code: 404 };
+  if (w.done) {
+    return { error: 'worker for ' + card.id + ' already reported done — nothing to pause (the lieutenant verifies and hands off)', code: 409 };
+  }
+  if (body && body.park && card.column !== 'working') {
+    return { error: 'pause --park needs a Working card — ' + card.id + ' is in ' + columnTitle(card.column), code: 409 };
+  }
+  w.paused = now(); // BEFORE the kill: the death must never look like a crash
+  delete w.stopNotified;
+  try {
+    await harnessFor(w.ref).kill(w.ref);
+  } catch (e) {
+    delete w.paused; // the session may still be alive — stay honest, let supervision judge
+    return { error: 'pause failed killing session ' + w.ref.session + ': ' + String((e && e.message) || e), code: 502 };
+  }
+  const actor = String((body && body.actor) || 'agent').slice(0, 60);
+  const ev = mkEvent({
+    text: 'worker ' + w.ref.session + ' paused (deliberate) — resume: card start ' + card.id + ' --resume',
+    actor,
+  }, { kind: 'worker-paused' });
+  card.events.push(ev);
+  card.updated = now();
+  const out = { ok: true, event: ev, session: w.ref.session };
+  if (body && body.park) {
+    const p = await parkCard(card, body);
+    if (p.error) { out.parked = false; out.parkError = p.error; }
+    else { out.parked = true; out.parkEvent = p.event; }
+  }
+  return out;
+}
+
+// card.park — the narrow lieutenant door out of Working: Backlog, legal ONLY
+// when the recorded worker is absent or dead (liveness re-checked HERE, server
+// side — the CLI's opinion is not trusted), so the Working ⇔ live-worker
+// invariant is never weakened. A live worker refuses loudly: pausing is
+// worker.pause's job. The dead worker's record stays for card start --resume.
+async function parkCard(card, body) {
+  if (card.column !== 'working') {
+    return { error: 'park moves a Working card back to Backlog — ' + card.id + ' is in ' + columnTitle(card.column), code: 409 };
+  }
+  const w = findWorker(card.id);
+  if (w) {
+    let up = false;
+    try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+    if (up) {
+      return w.done
+        ? { error: 'refusing to park ' + card.id + ': its worker reported done and session ' + w.ref.session
+            + ' is still alive — verify the work and hand off (card move ' + card.id + ' review), or archive', code: 409 }
+        : { error: 'refusing to park ' + card.id + ': worker session ' + w.ref.session
+            + ' is ALIVE — pause it first (worker pause ' + card.id + ' [--park]) or let it finish', code: 409 };
+    }
+  }
+  const from = card.column;
+  card.column = 'backlog';
+  card.pendingOrder = null;
+  card.updated = now();
+  if (w) delete w.stopNotified; // leaving Working ends the stop-state
+  const ev = mkEvent({
+    actor: (body && body.actor) || 'agent',
+    text: 'parked (worker ' + (w ? w.ref.session + (w.paused ? ', paused' : ', dead') : 'absent') + '): '
+      + columnTitle(from) + ' → ' + columnTitle('backlog'),
+  }, { kind: 'parked' });
+  card.events.push(ev);
+  return { ok: true, event: ev };
+}
+
 // ---------- supervision loop (invariant 8: supervision is infrastructure) ----------
 // Every ~30s: harness.alive on every lieutenant + worker ref.
 //   lieutenant dead  -> harness.resume when resumable (memory recoverable),
@@ -1234,10 +1312,12 @@ async function superviseTick() {
       }
     }
     for (const w of board.workers) {
-      if (w.done || w.flagged) continue;
+      if (w.done || w.flagged || w.paused) continue;
       let up = false;
       try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
-      if (up) continue;
+      // paused re-checked after the await: a pause landing mid-tick (marked,
+      // then killed while alive() was in flight) must not read as a crash.
+      if (up || w.paused) continue;
       w.flagged = true;
       changed = true;
       const card = findCard(w.card);
@@ -1514,7 +1594,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, card: publicCard(r.card, 'user'), event: r.event });
     }
-    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|worker\/signal|worker\/done|worker\/send))?$/.exec(p);
+    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|park|worker\/signal|worker\/done|worker\/send|worker\/pause))?$/.exec(p);
     if (cardRoute) {
       const card = findCard(decodeURIComponent(cardRoute[1]));
       if (!card) return sendJson(res, 404, { error: 'unknown card: ' + decodeURIComponent(cardRoute[1]) });
@@ -1536,6 +1616,19 @@ const server = http.createServer(async (req, res) => {
         if (r.error) return sendJson(res, r.code || 400, { error: r.error });
         saveBoard(); broadcast();
         return sendJson(res, 200, { ok: true, event: r.event, session: r.session });
+      }
+      if (sub === 'worker/pause' && req.method === 'POST') {
+        const r = await pauseWorker(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, event: r.event, session: r.session,
+          parked: r.parked, parkError: r.parkError, card: publicCard(card, 'user') });
+      }
+      if (sub === 'park' && req.method === 'POST') {
+        const r = await parkCard(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, event: r.event, card: publicCard(card, 'user') });
       }
       if (sub === 'worker/done' && req.method === 'POST') {
         const r = workerDone(card, JSON.parse(await readBody(req) || '{}'));
