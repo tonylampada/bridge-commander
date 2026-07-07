@@ -5,20 +5,20 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { startServerWithColumns, runCli } = require('./helper');
+const { startServerWithLieutenant, withOwner, LT, runCli } = require('./helper');
 
 function archiveRecords(s) {
-  return fs.readFileSync(path.join(s.dir, 'boards', s.board + '.archive.jsonl'), 'utf8')
+  return fs.readFileSync(path.join(s.dir, '.bridge-command', 'archive.jsonl'), 'utf8')
     .split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
 test('restore round-trip: frozen state intact, level-1 event appended, archive record kept', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', {
-      title: 'Revive me', column: 'doing', body: 'the deliverable so far',
-      labels: ['blue'], attributes: { type: 'implementation', repo: 'demo-app' },
-    });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Revive me', column: 'peer', type: 'implementation', body: 'the deliverable so far',
+      labels: ['blue'], attributes: { repo: 'demo-app', branch: 'bc/revive-me' },
+    }));
     await s.api('POST', '/api/cards/revive-me/events', { text: 'made progress', level: 2 });
     await s.api('POST', '/api/feedback', { target: 'card:revive-me', text: 'how is it going?' });
     await s.api('POST', '/api/message', { target: 'card:revive-me', text: 'halfway there' });
@@ -33,11 +33,13 @@ test('restore round-trip: frozen state intact, level-1 event appended, archive r
     assert.strictEqual(r.status, 200);
     const card = (await s.api('GET', '/api/cards/revive-me')).body;
 
-    // frozen state restored in full: body, thread, attributes, column as frozen
-    assert.strictEqual(card.column, 'doing');
+    // frozen state restored in full: body, thread, attributes, type, owner, column
+    assert.strictEqual(card.column, 'peer');
+    assert.strictEqual(card.type, 'implementation');
+    assert.strictEqual(card.owner, LT);
     assert.strictEqual(card.body, 'the deliverable so far');
     assert.deepStrictEqual(card.labels, ['blue']);
-    assert.deepStrictEqual(card.attributes, { type: 'implementation', repo: 'demo-app' });
+    assert.deepStrictEqual(card.attributes, { repo: 'demo-app', branch: 'bc/revive-me' });
     assert.deepStrictEqual(card.thread, frozen.thread);
     // all frozen events kept, plus exactly one loud resurrection event on top
     assert.deepStrictEqual(card.events.slice(0, frozen.events.length), frozen.events);
@@ -59,12 +61,12 @@ test('restore round-trip: frozen state intact, level-1 event appended, archive r
 });
 
 test('restore 404 when never archived, 409 when already on the board', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
     let r = await s.api('POST', '/api/cards/ghost/restore', {});
     assert.strictEqual(r.status, 404);
 
-    await s.api('POST', '/api/cards', { title: 'Alive' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Alive' }));
     r = await s.api('POST', '/api/cards/alive/restore', {});
     assert.strictEqual(r.status, 409); // on the board: conflict wins over never-archived
 
@@ -78,9 +80,9 @@ test('restore 404 when never archived, 409 when already on the board', async () 
 });
 
 test('multiple archive records for one id: the most recent snapshot wins', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Twice dead', body: 'v1' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Twice dead', body: 'v1' }));
     await s.api('POST', '/api/cards/twice-dead/archive', {});
     await s.api('POST', '/api/cards/twice-dead/restore', {});
     await s.api('PATCH', '/api/cards/twice-dead', { body: 'v2' });
@@ -99,18 +101,18 @@ test('multiple archive records for one id: the most recent snapshot wins', async
 });
 
 test('restored card derives status like any other: worker absent, owed/unread from restored state', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Derived' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Derived' }));
     await s.api('POST', '/api/cards/derived/status', { worker: { id: 'task-1', state: 'working' } });
-    await s.api('POST', '/api/feedback', { target: 'card:derived', text: 'ping?' }); // last word is the user's
-    await s.api('POST', '/api/read', { target: 'card:derived' }); // user has read everything so far
+    await s.api('POST', '/api/feedback', { target: 'card:derived', text: 'ping?' }); // last word is the captain's
+    await s.api('POST', '/api/read', { target: 'card:derived' }); // captain has read everything so far
     await s.api('POST', '/api/cards/derived/archive', {});
 
     await s.api('POST', '/api/cards/derived/restore', {});
     const st = (await s.api('GET', '/api/cards/derived')).body.status;
     assert.deepStrictEqual(st.worker, { id: null, state: 'absent' }); // lease not resurrected
-    assert.strictEqual(st.owed, true); // restored thread still ends on the user's message
+    assert.strictEqual(st.owed, true); // restored thread still ends on the captain's message
     assert.strictEqual(st.unread, true); // the level-1 resurrection event landed after the read
 
     // status.set works on the restored card as usual
@@ -123,13 +125,13 @@ test('restored card derives status like any other: worker absent, owed/unread fr
   }
 });
 
-test('cli: bridge-axi restore resurrects with the default event text', async () => {
-  const s = await startServerWithColumns();
+test('cli: bc-axi card restore resurrects with the default event text', async () => {
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Cli card' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Cli card' }));
     await s.api('POST', '/api/cards/cli-card/archive', {});
-    const args = ['--port', String(s.port), '--board', s.board];
-    const r = await runCli(['restore', 'cli-card', ...args], { BRIDGE_DIR: s.dir });
+    const args = ['--workspace', s.dir, '--port', String(s.port)];
+    const r = await runCli(['card', 'restore', 'cli-card', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /restored cli-card/);
     const card = (await s.api('GET', '/api/cards/cli-card')).body;
@@ -137,7 +139,7 @@ test('cli: bridge-axi restore resurrects with the default event text', async () 
     assert.strictEqual(ev.text, 'resurrected');
     assert.strictEqual(ev.level, 1);
 
-    const miss = await runCli(['restore', 'nope', ...args], { BRIDGE_DIR: s.dir });
+    const miss = await runCli(['card', 'restore', 'nope', ...args]);
     assert.notStrictEqual(miss.code, 0);
     assert.match(miss.stderr, /404/);
   } finally {

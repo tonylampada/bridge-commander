@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { startServer, startServerWithColumns, runCli, sleep } = require('./helper');
+const { startServer, startServerWithLieutenant, withOwner, runCli, sleep } = require('./helper');
 
 async function cardStatus(s, id) {
   const r = await s.api('GET', '/api/cards/' + id);
@@ -15,9 +15,9 @@ async function cardStatus(s, id) {
 }
 
 test('status.set validates worker shape, state, and ttl', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Task' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Task' }));
 
     let r = await s.api('POST', '/api/cards/nope/status', { worker: { id: 'w1', state: 'working' } });
     assert.strictEqual(r.status, 404);
@@ -44,9 +44,9 @@ test('status.set validates worker shape, state, and ttl', async () => {
 });
 
 test('absent when no worker; state absent (or worker null) unlinks', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Bare' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Bare' }));
     let st = await cardStatus(s, 'bare');
     assert.deepStrictEqual(st, { worker: { id: null, state: 'absent' }, owed: false, unread: false });
 
@@ -69,9 +69,9 @@ test('absent when no worker; state absent (or worker null) unlinks', async () =>
 });
 
 test('working/needs-you lease decays to idle after its ttl; idle does not decay further', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Leased' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Leased' }));
 
     await s.api('POST', '/api/cards/leased/status', { worker: { id: 'w1', state: 'working' }, ttl: 0.3 });
     let st = await cardStatus(s, 'leased');
@@ -96,11 +96,11 @@ test('working/needs-you lease decays to idle after its ttl; idle does not decay 
 });
 
 test('lease survives a restart; expiry is derived on read, so decay happens even while down', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   let s = null;
   try {
-    s = await startServerWithColumns({ dir });
-    await s.api('POST', '/api/cards', { title: 'Task' });
+    s = await startServerWithLieutenant({ dir });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Task' }));
     await s.api('POST', '/api/cards/task/status', { worker: { id: 'w1', state: 'working' }, ttl: 60 });
     await s.stop();
 
@@ -121,12 +121,12 @@ test('lease survives a restart; expiry is derived on read, so decay happens even
   }
 });
 
-test('owed: flips true on a user thread message, false on agent reply, survives restart', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-test-'));
+test('owed: flips true on a captain thread message, false on lieutenant reply, survives restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   let s = null;
   try {
-    s = await startServerWithColumns({ dir });
-    await s.api('POST', '/api/cards', { title: 'Ask' });
+    s = await startServerWithLieutenant({ dir });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Ask' }));
     assert.strictEqual((await cardStatus(s, 'ask')).owed, false);
 
     await s.api('POST', '/api/feedback', { target: 'card:ask', text: 'please check' });
@@ -138,7 +138,7 @@ test('owed: flips true on a user thread message, false on agent reply, survives 
     await s.api('POST', '/api/feedback', { target: 'card:ask', text: 'and this?' });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, true);
 
-    // the replaced in-memory indicator forgot this on restart; owed must not
+    // owed is derived from persisted state: a restart must not forget it
     await s.stop();
     s = await startServer({ dir });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, true);
@@ -151,13 +151,13 @@ test('owed: flips true on a user thread message, false on agent reply, survives 
   }
 });
 
-test('unread: level-1 event or agent reply sets it; reading the card clears it; survives restart', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-test-'));
+test('unread: level-1 event or lieutenant reply sets it; reading the card clears it; survives restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   let s = null;
   const read = () => s.api('POST', '/api/read', { user: 'user', target: 'card:watch' });
   try {
-    s = await startServerWithColumns({ dir });
-    await s.api('POST', '/api/cards', { title: 'Watch' });
+    s = await startServerWithLieutenant({ dir });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Watch' }));
     assert.strictEqual((await cardStatus(s, 'watch')).unread, false);
 
     await s.api('POST', '/api/cards/watch/events', { text: 'quiet progress', level: 2 });
@@ -171,7 +171,7 @@ test('unread: level-1 event or agent reply sets it; reading the card clears it; 
     assert.strictEqual((await cardStatus(s, 'watch')).unread, false);
 
     await s.api('POST', '/api/message', { target: 'card:watch', text: 'done, take a look' });
-    assert.strictEqual((await cardStatus(s, 'watch')).unread, true); // agent reply after last read
+    assert.strictEqual((await cardStatus(s, 'watch')).unread, true); // lieutenant reply after last read
 
     // unread and its read marker are persisted state — a restart changes nothing
     await s.stop();
@@ -184,7 +184,7 @@ test('unread: level-1 event or agent reply sets it; reading the card clears it; 
 
     await s.api('POST', '/api/feedback', { target: 'card:watch', text: 'thanks' });
     const st = await cardStatus(s, 'watch');
-    assert.strictEqual(st.unread, false); // the user's own message is never unread to them
+    assert.strictEqual(st.unread, false); // the captain's own message is never unread to them
     assert.strictEqual(st.owed, true);
   } finally {
     if (s) await s.stop();
@@ -192,43 +192,43 @@ test('unread: level-1 event or agent reply sets it; reading the card clears it; 
   }
 });
 
-test('cli: bridge-axi status verb sets and reads the worker lease', async () => {
-  const s = await startServerWithColumns();
-  const env = { BRIDGE_DIR: s.dir };
-  const portArgs = ['--port', String(s.port), '--board', s.board];
+test('cli: bc-axi status verb sets and reads the worker lease', async () => {
+  const s = await startServerWithLieutenant();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
   try {
-    await s.api('POST', '/api/cards', { title: 'CLI card' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'CLI card' }));
 
-    let r = await runCli(['status', 'cli-card', 'working', '--worker', 'fix-1', ...portArgs], env);
+    let r = await runCli(['status', 'cli-card', 'working', '--worker', 'fix-1', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /worker=working\(fix-1\)/);
     assert.strictEqual((await cardStatus(s, 'cli-card')).worker.state, 'working');
 
-    r = await runCli(['status', 'cli-card', ...portArgs], env); // read-back
+    r = await runCli(['status', 'cli-card', ...args]); // read-back
     assert.match(r.stdout, /worker=working\(fix-1\) owed=false unread=false/);
 
-    r = await runCli(['status', 'cli-card', 'working', ...portArgs], env); // missing --worker
+    r = await runCli(['status', 'cli-card', 'working', ...args]); // missing --worker
     assert.strictEqual(r.code, 1);
 
-    r = await runCli(['status', 'cli-card', 'bogus', '--worker', 'fix-1', ...portArgs], env);
+    r = await runCli(['status', 'cli-card', 'bogus', '--worker', 'fix-1', ...args]);
     assert.strictEqual(r.code, 1); // server rejects bad state
 
-    r = await runCli(['status', 'cli-card', 'absent', ...portArgs], env);
+    r = await runCli(['status', 'cli-card', 'absent', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /worker=absent/);
 
-    r = await runCli(['status', ...portArgs], env); // bare status = server status, unchanged
+    r = await runCli(['status', ...args]); // bare status = server status
     assert.match(r.stdout, /server: up/);
+    assert.match(r.stdout, /lieutenants=1/);
   } finally {
     await s.stop();
   }
 });
 
 test('board payload: every card carries derived status; worker is never mirrored into attributes', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Plain' });
-    await s.api('POST', '/api/cards', { title: 'Leased' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Plain' }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Leased' }));
     await s.api('POST', '/api/cards/leased/status', { worker: { id: 'w1', state: 'working' } });
     const b = (await s.api('GET', '/api/board')).body;
     for (const c of b.cards) {
@@ -237,32 +237,6 @@ test('board payload: every card carries derived status; worker is never mirrored
     }
     assert.strictEqual(b.cards.find((c) => c.id === 'plain').status.worker.state, 'absent');
     assert.strictEqual(b.cards.find((c) => c.id === 'leased').status.worker.state, 'working');
-  } finally {
-    await s.stop();
-  }
-});
-
-// Load-time data migration: a board file written before the status model may
-// still store the old feeder's attributes.worker; normalizeBoard adopts it as a
-// lease so existing stripes survive the upgrade. The write API does NOT
-// translate — status.set is the only writer of card.status.worker.
-test('data migration: a stored legacy worker attribute is adopted as a lease on load', async () => {
-  const s = await startServer({
-    seed: (dir) => {
-      const boards = path.join(dir, 'boards');
-      fs.mkdirSync(boards, { recursive: true });
-      // pre-cut board file: stripe stored as an attribute, no status lease
-      fs.writeFileSync(path.join(boards, 'testboard.json'), JSON.stringify({
-        columns: [{ id: 'todo', title: 'To do' }],
-        cards: [{ id: 'old', title: 'Old', column: 'todo', attributes: { worker: 'needs-you', repo: 'gamma' } }],
-      }));
-    },
-  });
-  try {
-    const c = (await s.api('GET', '/api/cards/old')).body;
-    assert.strictEqual(c.status.worker.state, 'needs-you');
-    assert.strictEqual(c.status.worker.id, 'old');
-    assert.deepStrictEqual(c.attributes, { repo: 'gamma' });
   } finally {
     await s.stop();
   }

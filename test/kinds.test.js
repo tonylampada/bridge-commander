@@ -7,11 +7,12 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { startServer, startServerWithColumns, runCli } = require('./helper');
+const { startServer, startServerWithLieutenant, withOwner, runCli } = require('./helper');
 
 const BUILTINS = {
   created: { emoji: '🐣', level: 2 },
   moved: { emoji: '🔁', level: 2 },
+  ordered: { emoji: '⏳', level: 2 },
   handoff: { emoji: '👀', level: 1 },
   landed: { emoji: '🏁', level: 1 },
   killed: { emoji: '🪦', level: 2 },
@@ -20,7 +21,7 @@ const BUILTINS = {
 };
 
 test('kinds set/get roundtrip: built-ins under registered, idempotent replace, validation', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
     // fresh board: effective map = the structural built-ins, nothing registered
     let r = await s.api('GET', '/api/kinds');
@@ -40,7 +41,7 @@ test('kinds set/get roundtrip: built-ins under registered, idempotent replace, v
     assert.deepStrictEqual(r.body.kinds.handoff, { emoji: '🤝', level: 2 }); // registered wins
     assert.deepStrictEqual(r.body.kinds.created, { emoji: '🐣', level: 2 }); // built-ins remain under
 
-    // identical map = no-op (idempotent, like the columns frame)
+    // identical map = no-op (idempotent)
     r = await s.api('PUT', '/api/kinds', reg);
     assert.strictEqual(r.body.unchanged, true);
 
@@ -65,12 +66,12 @@ test('kinds set/get roundtrip: built-ins under registered, idempotent replace, v
 });
 
 test('registered kinds persist with the board and survive a restart', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bridge-test-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   const reg = { deploy: { emoji: '🚀', level: 1 } };
-  const s1 = await startServerWithColumns({ dir });
+  const s1 = await startServer({ dir });
   try {
     await s1.api('PUT', '/api/kinds', reg);
-    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, 'boards', s1.board + '.json'), 'utf8'));
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, '.bridge-command', 'board.json'), 'utf8'));
     assert.deepStrictEqual(onDisk.kinds, reg); // only the registered map is stored
   } finally {
     await s1.stop();
@@ -87,9 +88,9 @@ test('registered kinds persist with the board and survive a restart', async () =
 });
 
 test('event level resolves from the effective map; explicit level always wins', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Leveled' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Leveled' }));
     await s.api('PUT', '/api/kinds', { deploy: { emoji: '🚀', level: 1 }, question: { emoji: '❔', level: 2 } });
 
     // registered kind: level from the map
@@ -109,10 +110,10 @@ test('event level resolves from the effective map; explicit level always wins', 
   }
 });
 
-test('unknown kinds are opaque: stored as-is, defaulted level, no crash on legacy kinds', async () => {
-  const s = await startServerWithColumns();
+test('unknown kinds are opaque: stored as-is, defaulted level', async () => {
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Opaque' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Opaque' }));
     // card event: unknown kind, level falls back to 2
     let r = await s.api('POST', '/api/cards/opaque/events', { text: 'custom', kind: 'totally-custom' });
     assert.strictEqual(r.body.event.kind, 'totally-custom');
@@ -121,51 +122,55 @@ test('unknown kinds are opaque: stored as-is, defaulted level, no crash on legac
     r = await s.api('POST', '/api/events', { text: 'board-wide', kind: 'legacy-info' });
     assert.strictEqual(r.body.event.kind, 'legacy-info');
     assert.strictEqual(r.body.event.level, 1);
-    // legacy stored kinds (info/success/alert) round-trip through the API unchanged
-    r = await s.api('POST', '/api/cards/opaque/events', { text: 'old data', kind: 'success' });
-    assert.strictEqual(r.body.event.kind, 'success');
   } finally {
     await s.stop();
   }
 });
 
-test('side effects are typed: created, handoff/moved (+override), landed, killed, resurrected', async () => {
-  const s = await startServerWithColumns();
+test('side effects are typed: created, handoff/moved/ordered, landed, killed, resurrected', async () => {
+  const s = await startServerWithLieutenant();
   try {
     // create -> created (level 2)
-    let r = await s.api('POST', '/api/cards', { title: 'Typed' });
+    let r = await s.api('POST', '/api/cards', withOwner({ title: 'Typed' }));
     assert.strictEqual(r.body.card.events[0].kind, 'created');
     assert.strictEqual(r.body.card.events[0].level, 2);
 
-    // agent move -> handoff (level 1: agent move notifies)
-    r = await s.api('POST', '/api/cards/typed/move', { column: 'doing' });
+    // lieutenant handoff -> review = handoff (level 1: notifies the captain)
+    r = await s.api('POST', '/api/cards/typed/move', { column: 'review' });
     assert.strictEqual(r.body.event.kind, 'handoff');
     assert.strictEqual(r.body.event.level, 1);
 
-    // agent move with kind override -> moved (level 2 from the map: quiet)
+    // captain drag review -> backlog is an ORDER, typed `ordered` (level 2)
+    r = await s.api('POST', '/api/cards/typed/move', { column: 'backlog', actor: 'user' });
+    assert.strictEqual(r.body.ordered, 'rework-order');
+    assert.strictEqual(r.body.event.kind, 'ordered');
+    assert.strictEqual(r.body.event.level, 2);
+
+    // captain drag review -> peer applies -> moved (level 2) + queue item
+    r = await s.api('POST', '/api/cards/typed/move', { column: 'peer', actor: 'user' });
+    assert.strictEqual(r.body.event.kind, 'moved');
+    assert.strictEqual(r.body.event.level, 2);
+    const feed = await s.api('GET', '/api/feed');
+    assert.strictEqual(feed.body.items.filter((e) => e.kind === 'card-moved').length, 1);
+
+    // lieutenant move with kind override -> moved (level 2 from the map: quiet)
+    await s.api('POST', '/api/cards/typed/move', { column: 'backlog', actor: 'user' }); // peer→backlog applies
     r = await s.api('POST', '/api/cards/typed/move', { column: 'review', kind: 'moved' });
     assert.strictEqual(r.body.event.kind, 'moved');
     assert.strictEqual(r.body.event.level, 2);
-
-    // user move -> moved (level 2), and the feedback push is unchanged
-    r = await s.api('POST', '/api/cards/typed/move', { column: 'todo', actor: 'user' });
-    assert.strictEqual(r.body.event.kind, 'moved');
-    assert.strictEqual(r.body.event.level, 2);
-    const poll = await s.api('GET', '/api/poll?nowait=1');
-    assert.strictEqual(poll.body.events.filter((e) => e.kind === 'card-moved').length, 1);
 
     // archive reason merged -> landed (level 1)
     r = await s.api('POST', '/api/cards/typed/archive', { reason: 'merged' });
     assert.strictEqual(r.body.event.kind, 'landed');
     assert.strictEqual(r.body.event.level, 1);
 
-    // archive reason killed -> killed (level 2: the human's own act, no bell)
-    await s.api('POST', '/api/cards', { title: 'Doomed' });
+    // archive reason killed -> killed (level 2: the captain's own act, no bell)
+    await s.api('POST', '/api/cards', withOwner({ title: 'Doomed' }));
     r = await s.api('POST', '/api/cards/doomed/archive', { reason: 'killed', actor: 'user' });
     assert.strictEqual(r.body.event.kind, 'killed');
     assert.strictEqual(r.body.event.level, 2);
 
-    // restore -> resurrected (level 1, loud as before)
+    // restore -> resurrected (level 1, loud)
     r = await s.api('POST', '/api/cards/doomed/restore', {});
     assert.strictEqual(r.body.event.kind, 'resurrected');
     assert.strictEqual(r.body.event.level, 1);
@@ -175,14 +180,14 @@ test('side effects are typed: created, handoff/moved (+override), landed, killed
 });
 
 test('side-effect levels follow a registered override of a built-in kind', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
     await s.api('PUT', '/api/kinds', {
-      handoff: { emoji: '👀', level: 2 }, // agent moves go quiet
+      handoff: { emoji: '👀', level: 2 }, // handoffs go quiet on this board
       killed: { emoji: '🪦', level: 1 },  // kills ring the bell on this board
     });
-    await s.api('POST', '/api/cards', { title: 'Overridden' });
-    let r = await s.api('POST', '/api/cards/overridden/move', { column: 'doing' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Overridden' }));
+    let r = await s.api('POST', '/api/cards/overridden/move', { column: 'review' });
     assert.strictEqual(r.body.event.kind, 'handoff');
     assert.strictEqual(r.body.event.level, 2);
     r = await s.api('POST', '/api/cards/overridden/archive', { reason: 'killed' });
@@ -193,25 +198,24 @@ test('side-effect levels follow a registered override of a built-in kind', async
   }
 });
 
-test('cli: bridge-axi kinds sets from a file and prints the effective map', async () => {
-  const s = await startServerWithColumns();
-  const portArgs = ['--port', String(s.port), '--board', s.board];
-  const env = { BRIDGE_DIR: s.dir };
+test('cli: bc-axi kinds sets from a file and prints the effective map', async () => {
+  const s = await startServerWithLieutenant();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
   try {
     const file = path.join(s.dir, 'kinds.json');
     fs.writeFileSync(file, JSON.stringify({ deploy: { emoji: '🚀', level: 1 } }));
-    let r = await runCli(['kinds', file, ...portArgs], env);
+    let r = await runCli(['kinds', file, ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /kinds=1/);
-    r = await runCli(['kinds', file, ...portArgs], env);
+    r = await runCli(['kinds', file, ...args]);
     assert.match(r.stdout, /kinds=1 \(unchanged\)/);
 
-    r = await runCli(['kinds', ...portArgs], env);
+    r = await runCli(['kinds', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /deploy\t🚀\tL1\tregistered/);
     assert.match(r.stdout, /handoff\t👀\tL1\tbuilt-in/);
 
-    r = await runCli(['kinds', '--json', ...portArgs], env);
+    r = await runCli(['kinds', '--json', ...args]);
     const parsed = JSON.parse(r.stdout);
     assert.deepStrictEqual(parsed.registered, { deploy: { emoji: '🚀', level: 1 } });
     assert.deepStrictEqual(parsed.kinds.deploy, { emoji: '🚀', level: 1 });
@@ -220,18 +224,18 @@ test('cli: bridge-axi kinds sets from a file and prints the effective map', asyn
   }
 });
 
-test('back-compat: old board json (kindless and legacy-kind events, no kinds field) loads and serves', async () => {
+test('hand-edited board json (kindless events, foreign columns) loads and serves', async () => {
   const s = await startServer({
-    board: 'legacy',
     seed(dir) {
-      fs.mkdirSync(path.join(dir, 'boards'), { recursive: true });
-      fs.writeFileSync(path.join(dir, 'boards', 'legacy.json'), JSON.stringify({
+      const stateDir = path.join(dir, '.bridge-command');
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(path.join(stateDir, 'board.json'), JSON.stringify({
         title: 'legacy', seq: 3,
-        columns: [{ id: 'todo', title: 'To do' }],
+        lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [] }],
         cards: [{
-          id: 'old-card', title: 'Old card', column: 'todo',
+          id: 'old-card', title: 'Old card', column: 'todo', owner: 'ada',
           events: [
-            { seq: 1, ts: '2025-01-01T00:00:00.000Z', level: 2, kind: 'info', text: 'created in To do', actor: 'agent' },
+            { seq: 1, ts: '2025-01-01T00:00:00.000Z', level: 2, kind: 'info', text: 'created', actor: 'agent' },
             { seq: 2, ts: '2025-01-02T00:00:00.000Z', level: 1, kind: 'success', text: 'shipped', actor: 'agent' },
             { seq: 3, ts: '2025-01-03T00:00:00.000Z', level: 2, text: 'no kind at all', actor: 'agent' },
           ],
@@ -242,17 +246,20 @@ test('back-compat: old board json (kindless and legacy-kind events, no kinds fie
   try {
     const board = (await s.api('GET', '/api/board')).body;
     assert.strictEqual(board.cards.length, 1);
-    const evs = board.cards[0].events;
-    assert.strictEqual(evs[0].kind, 'info'); // legacy kinds preserved as opaque tokens
+    const card = board.cards[0];
+    assert.strictEqual(card.column, 'backlog'); // foreign column collapses into the fixed frame
+    assert.strictEqual(card.type, 'implementation'); // missing type defaults
+    const evs = card.events;
+    assert.strictEqual(evs[0].kind, 'info'); // stored kinds preserved as opaque tokens
     assert.strictEqual(evs[1].kind, 'success');
     assert.strictEqual(evs[2].kind, undefined); // kindless event survives
-    assert.deepStrictEqual(board.kinds, BUILTINS); // effective map served even for old files
+    assert.deepStrictEqual(board.kinds, BUILTINS); // effective map served even for hand-edited files
     // notifications still derive from levels regardless of kind
     const notif = (await s.api('GET', '/api/notifications')).body;
     assert.strictEqual(notif.items.length, 1);
     assert.strictEqual(notif.items[0].text, 'shipped');
     // and new mutations on the old board work
-    const r = await s.api('POST', '/api/cards/old-card/move', { column: 'todo' });
+    const r = await s.api('POST', '/api/cards/old-card/move', { column: 'backlog' });
     assert.strictEqual(r.body.unchanged, true);
   } finally {
     await s.stop();

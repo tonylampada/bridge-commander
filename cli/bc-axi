@@ -1,43 +1,54 @@
 #!/usr/bin/env node
-// bridge-axi — agent CLI for the bridge board. Node built-ins only, zero deps.
-// Run with no args for full usage. Message/body text always goes via --text-file,
-// --body-file, or stdin — never interpolated into a shell command.
+// bc-axi — agent CLI for the bridge-command board. Node built-ins only, zero deps.
+// Run with no args for full usage. Message/body/charter text always goes via
+// --text-file, --body-file, --charter-file, or stdin — never interpolated into a
+// shell command.
+//
+// Workspace resolution (no --board, no global state): --workspace wins; else walk
+// up from cwd to the nearest directory containing .bridge-command/; `open` may
+// bootstrap a fresh workspace in cwd. The server port comes from the workspace's
+// .bridge-command/config.json (default 4780); --port overrides.
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 const { spawn } = require('child_process');
 
 const SELF_DIR = path.dirname(fs.realpathSync(process.argv[1]));
-const SERVER_JS = path.join(SELF_DIR, 'server.js');
-// State root: $BRIDGE_DIR when set (tests point it at a temp dir), else ~/.bridge.
-const BRIDGE_DIR = process.env.BRIDGE_DIR || path.join(os.homedir(), '.bridge');
-const BOARDS_DIR = path.join(BRIDGE_DIR, 'boards');
+const SERVER_JS = path.join(SELF_DIR, '..', 'server', 'server.js');
+const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
 
 // ---------- args ----------
 const argv = process.argv.slice(2);
-const cmd = argv.shift();
+let cmd = argv.shift();
 const opts = {
-  port: 4777, board: 'default', host: '',
-  textFile: null, bodyFile: null, title: null, column: null, id: null,
+  workspace: '', port: 0, host: '',
+  textFile: null, bodyFile: null, charterFile: null,
+  title: null, column: null, id: null, type: null, owner: null, lieutenant: null,
+  name: null, color: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
-  if (a === '--port') opts.port = parseInt(argv[++i], 10);
-  else if (a === '--board') opts.board = argv[++i];
+  if (a === '--workspace') opts.workspace = argv[++i];
+  else if (a === '--port') opts.port = parseInt(argv[++i], 10);
   else if (a === '--host') opts.host = argv[++i];
   else if (a === '--text-file') opts.textFile = argv[++i];
   else if (a === '--body-file') opts.bodyFile = argv[++i];
+  else if (a === '--charter-file') opts.charterFile = argv[++i];
   else if (a === '--title') opts.title = argv[++i];
   else if (a === '--column') opts.column = argv[++i];
   else if (a === '--id') opts.id = argv[++i];
+  else if (a === '--type') opts.type = argv[++i];
+  else if (a === '--owner') opts.owner = argv[++i];
+  else if (a === '--lieutenant') opts.lieutenant = argv[++i];
+  else if (a === '--name') opts.name = argv[++i];
+  else if (a === '--color') opts.color = argv[++i];
   else if (a === '--level') opts.level = parseInt(argv[++i], 10);
   else if (a === '--kind') opts.kind = argv[++i];
   else if (a === '--actor') opts.actor = argv[++i];
@@ -50,9 +61,36 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--json') opts.json = true;
   else positional.push(a);
 }
-const BASE = 'http://127.0.0.1:' + opts.port;
-const PID_FILE = path.join(BRIDGE_DIR, 'server-' + opts.port + '.pid');
-const CONFIG_FILE = path.join(BRIDGE_DIR, 'config.json');
+// Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
+if ((cmd === 'card' || cmd === 'lieutenant') && positional.length) cmd = cmd + ' ' + positional.shift();
+
+// ---------- workspace resolution ----------
+function findWorkspace(start) {
+  let dir = path.resolve(start);
+  for (;;) {
+    if (fs.existsSync(path.join(dir, '.bridge-command'))) return dir;
+    const up = path.dirname(dir);
+    if (up === dir) return null;
+    dir = up;
+  }
+}
+const WORKSPACE = opts.workspace
+  ? path.resolve(opts.workspace)
+  : (cmd === 'open' ? (findWorkspace(process.cwd()) || process.cwd()) : findWorkspace(process.cwd()));
+if (!WORKSPACE) die('no workspace found: no .bridge-command/ from cwd upward (run `bc-axi open` to start one here, or pass --workspace)');
+const STATE_DIR = path.join(WORKSPACE, '.bridge-command');
+const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
+const PID_FILE = path.join(STATE_DIR, 'server.pid');
+
+function readConfig() {
+  try {
+    const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    if (c && typeof c === 'object' && !Array.isArray(c)) return c;
+  } catch (e) {}
+  return {};
+}
+const PORT = opts.port || (Number.isInteger(readConfig().port) && readConfig().port > 0 ? readConfig().port : DEFAULT_PORT);
+const BASE = 'http://127.0.0.1:' + PORT;
 
 // ---------- helpers ----------
 function request(method, urlPath, body, timeoutMs) {
@@ -96,36 +134,129 @@ function parseAttrs(list) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function hhmm(iso) { try { return new Date(iso).toISOString().slice(5, 16).replace('T', ' '); } catch (e) { return ''; } }
+const TARGET_RE = /^(lieutenant:.+|card:.+)$/;
 
-// ---------- subcommands ----------
+// ---------- server ----------
 async function cmdOpen() {
   let st = await serverUp();
   if (!st) {
-    const args = [SERVER_JS, '--port', String(opts.port), '--board', opts.board];
+    const args = [SERVER_JS, WORKSPACE, '--port', String(PORT)];
     if (opts.host) args.push('--host', opts.host); // else server resolves: config.json "host" > 127.0.0.1
     const child = spawn(process.execPath, args, {
       detached: true, stdio: 'ignore',
     });
     child.unref();
     for (let i = 0; i < 20 && !st; i++) { await sleep(150); st = await serverUp(); }
-    if (!st) die('failed to start server on port ' + opts.port);
-    console.log('http://localhost:' + opts.port + '/');
-    console.log('started board=' + opts.board + ' cards=' + st.cards);
+    if (!st) die('failed to start server on port ' + PORT);
+    console.log('http://localhost:' + PORT + '/');
+    console.log('started workspace=' + st.workspace + ' cards=' + st.cards);
   } else {
-    console.log('http://localhost:' + opts.port + '/');
-    console.log('already running board=' + st.board + ' cards=' + st.cards);
+    console.log('http://localhost:' + PORT + '/');
+    console.log('already running workspace=' + st.workspace + ' cards=' + st.cards);
   }
 }
 
-async function cmdColumns() {
-  if (!positional.length) { // print
-    const b = await request('GET', '/api/board');
-    for (const c of b.columns) console.log(c.id + '\t' + c.title);
-    return;
+async function cmdStop() {
+  let pid = null;
+  try { pid = parseInt(fs.readFileSync(PID_FILE, 'utf8'), 10); } catch (e) {}
+  if (!pid) { const st = await serverUp(); pid = st && st.pid; }
+  if (!pid) die('no server found for workspace ' + WORKSPACE);
+  try { process.kill(pid, 'SIGTERM'); } catch (e) { die('failed to stop pid ' + pid + ': ' + e.message); }
+  console.log('stopped pid=' + pid);
+}
+
+// ---------- lieutenants ----------
+async function cmdLtCreate() {
+  if (!opts.name) die('usage: bc-axi lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-]');
+  const body = { name: opts.name };
+  if (opts.id) body.id = opts.id;
+  if (opts.color) body.color = opts.color;
+  if (opts.charterFile) body.charter = readInput(opts.charterFile);
+  if (opts.actor) body.actor = opts.actor;
+  const r = await request('POST', '/api/lieutenants', body);
+  console.log('lieutenant ' + r.lieutenant.id + ' created (' + r.lieutenant.color + ')');
+}
+
+async function cmdLtList() {
+  const r = await request('GET', '/api/lieutenants');
+  if (opts.json) return console.log(JSON.stringify(r.lieutenants, null, 2));
+  for (const l of r.lieutenants) {
+    const charter = (l.charter || '').split('\n')[0].slice(0, 80);
+    console.log(l.id + '\t' + l.name + '\t' + l.color + (charter ? '\t' + charter : ''));
   }
-  const cols = JSON.parse(readInput(positional[0]));
-  const r = await request('PUT', '/api/columns', cols);
-  console.log('columns=' + r.columns + (r.unchanged ? ' (unchanged)' : ''));
+}
+
+// ---------- reads ----------
+async function cmdBoard() {
+  const b = await request('GET', '/api/board');
+  if (opts.json) return console.log(JSON.stringify(b, null, 2));
+  console.log(b.title + (b.subtitle ? ' — ' + b.subtitle : ''));
+  if (b.lieutenants.length) {
+    console.log('\nlieutenants: ' + b.lieutenants.map((l) => l.id).join(', '));
+  }
+  for (const col of b.columns) {
+    const cards = b.cards.filter((c) => c.column === col.id);
+    console.log('\n' + col.title + ' (' + cards.length + ')');
+    for (const c of cards) {
+      const at = c.attributes || {};
+      const st = c.status || {};
+      const w = st.worker && st.worker.state !== 'absent' ? st.worker.state : '';
+      const prs = Array.isArray(at.prs) && at.prs.length ? 'PRs:' + at.prs.map((p) => p.state).join(',') : '';
+      const extras = [c.type, c.owner, (c.labels || []).join(','), prs,
+        w, c.pendingOrder ? c.pendingOrder.kind : '', st.owed ? 'owed' : '', st.unread ? 'unread' : '']
+        .filter(Boolean).join(' | ');
+      console.log('  ' + c.id + '  ' + c.title + (extras ? '  [' + extras + ']' : ''));
+    }
+  }
+}
+
+async function cmdShow() {
+  const id = positional[0] || die('usage: bc-axi card show <card-id>');
+  const c = await request('GET', '/api/cards/' + encodeURIComponent(id));
+  if (opts.json) return console.log(JSON.stringify(c, null, 2));
+  console.log('# ' + c.title + '  (id=' + c.id + ', type=' + c.type + ', owner=' + c.owner + ', column=' + c.column + ')');
+  console.log('status: ' + fmtStatus(c.status));
+  if (c.pendingOrder) console.log('pending order: ' + c.pendingOrder.kind + ' (seq ' + c.pendingOrder.seq + ')');
+  const at = c.attributes || {};
+  for (const [k, v] of Object.entries(at)) console.log(k + ': ' + (typeof v === 'object' ? JSON.stringify(v) : v));
+  if ((c.labels || []).length) console.log('labels: ' + c.labels.join(', '));
+  if (c.body) console.log('\n--- body ---\n' + c.body);
+  if ((c.events || []).length) {
+    console.log('\n--- events ---');
+    for (const e of c.events) console.log(hhmm(e.ts) + '  L' + e.level + ' ' + (e.kind || '-') + '  ' + e.text + '  (' + e.actor + ')');
+  }
+  if ((c.thread || []).length) {
+    console.log('\n--- thread ---');
+    for (const m of c.thread) console.log(hhmm(m.ts) + '  ' + m.author + ': ' + m.text.replace(/\n/g, '\n    '));
+  }
+}
+
+async function cmdThread() {
+  const target = positional[0];
+  if (!target || !TARGET_RE.test(target)) die('usage: bc-axi thread <lieutenant:ID|card:ID>');
+  const b = await request('GET', '/api/board');
+  let msgs;
+  const lt = /^lieutenant:(.+)$/.exec(target);
+  if (lt) {
+    const l = b.lieutenants.find((x) => x.id === lt[1]);
+    if (!l) die('unknown lieutenant: ' + lt[1]);
+    msgs = l.chat || [];
+  } else {
+    const c = b.cards.find((x) => x.id === target.slice(5));
+    if (!c) die('unknown card: ' + target.slice(5));
+    msgs = c.thread || [];
+  }
+  if (opts.json) return console.log(JSON.stringify(msgs, null, 2));
+  for (const m of msgs) console.log(hhmm(m.ts) + '  ' + m.author + ': ' + m.text.replace(/\n/g, '\n    '));
+}
+
+async function cmdArchived() {
+  const r = await request('GET', '/api/archive?limit=' + (parseInt(positional[0], 10) || 20));
+  if (opts.json) return console.log(JSON.stringify(r.archive, null, 2));
+  for (const rec of r.archive) {
+    const why = rec.reason ? rec.reason + (rec.note ? ': ' + rec.note : '') : '';
+    console.log(hhmm(rec.ts) + '  ' + rec.card.id + '  ' + rec.card.title + (why ? '  (' + why + ')' : ''));
+  }
 }
 
 async function cmdKinds() {
@@ -143,66 +274,17 @@ async function cmdKinds() {
   console.log('kinds=' + r.kinds + (r.unchanged ? ' (unchanged)' : ''));
 }
 
-async function cmdBoard() {
-  const b = await request('GET', '/api/board');
-  if (opts.json) return console.log(JSON.stringify(b, null, 2));
-  console.log(b.title + (b.subtitle ? ' — ' + b.subtitle : ''));
-  for (const col of b.columns) {
-    const cards = b.cards.filter((c) => c.column === col.id);
-    console.log('\n' + col.title + ' (' + cards.length + ')');
-    for (const c of cards) {
-      const at = c.attributes || {};
-      const st = c.status || {};
-      const w = st.worker && st.worker.state !== 'absent' ? st.worker.state : '';
-      const extras = [at.type, at.owner, (c.labels || []).join(','), at.pr ? 'PR:' + at.pr_state : '',
-        w, st.owed ? 'owed' : '', st.unread ? 'unread' : '']
-        .filter(Boolean).join(' | ');
-      console.log('  ' + c.id + '  ' + c.title + (extras ? '  [' + extras + ']' : ''));
-    }
-  }
-}
-
-async function cmdShow() {
-  const id = positional[0] || die('usage: bridge-axi show <card-id>');
-  const c = await request('GET', '/api/cards/' + encodeURIComponent(id));
-  if (opts.json) return console.log(JSON.stringify(c, null, 2));
-  console.log('# ' + c.title + '  (id=' + c.id + ', column=' + c.column + ')');
-  console.log('status: ' + fmtStatus(c.status));
-  const at = c.attributes || {};
-  for (const [k, v] of Object.entries(at)) console.log(k + ': ' + v);
-  if ((c.labels || []).length) console.log('labels: ' + c.labels.join(', '));
-  if (c.body) console.log('\n--- body ---\n' + c.body);
-  if ((c.events || []).length) {
-    console.log('\n--- events ---');
-    for (const e of c.events) console.log(hhmm(e.ts) + '  L' + e.level + ' ' + e.kind + '  ' + e.text + '  (' + e.actor + ')');
-  }
-  if ((c.thread || []).length) {
-    console.log('\n--- thread ---');
-    for (const m of c.thread) console.log(hhmm(m.ts) + '  ' + m.author + ': ' + m.text.replace(/\n/g, '\n    '));
-  }
-}
-
-async function cmdThread() {
-  const target = positional[0];
-  if (!target || !/^(chat|card:.+)$/.test(target)) die('usage: bridge-axi thread <chat|card:ID>');
-  const b = await request('GET', '/api/board');
-  let msgs;
-  if (target === 'chat') msgs = b.chat;
-  else {
-    const c = b.cards.find((x) => x.id === target.slice(5));
-    if (!c) die('unknown card: ' + target.slice(5));
-    msgs = c.thread || [];
-  }
-  if (opts.json) return console.log(JSON.stringify(msgs, null, 2));
-  for (const m of msgs) console.log(hhmm(m.ts) + '  ' + m.author + ': ' + m.text.replace(/\n/g, '\n    '));
-}
-
+// ---------- card writes ----------
 async function cmdCreate() {
-  if (!opts.title) die('usage: bridge-axi create --title T [--column c] [--id id] [--body-file f|-] [--attr k=v]... [--label l]...');
+  if (!opts.title || !opts.owner) {
+    die('usage: bc-axi card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
+      '                    [--column c] [--id id] [--body-file f|-] [--attr k=v]... [--label l]...');
+  }
   const body = {
-    title: opts.title, actor: opts.actor || 'agent',
+    title: opts.title, owner: opts.owner, actor: opts.actor || 'agent',
     attributes: parseAttrs(opts.attrs), labels: opts.labels,
   };
+  if (opts.type) body.type = opts.type;
   if (opts.id) body.id = opts.id;
   if (opts.column) body.column = opts.column;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
@@ -212,29 +294,32 @@ async function cmdCreate() {
 
 async function cmdMove() {
   const id = positional[0], column = positional[1];
-  if (!id || !column) die('usage: bridge-axi move <card-id> <column> [--actor a] [--level 1|2] [--kind k]');
+  if (!id || !column) die('usage: bc-axi card move <card-id> <column> [--actor a] [--level 1|2] [--kind k]\n  (lieutenant moves land only in review — the handoff)');
   const body = { column, actor: opts.actor || 'agent' };
   if (opts.level) body.level = opts.level;
   if (opts.kind) body.kind = opts.kind;
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/move', body);
-  console.log(r.unchanged ? 'already in ' + column : 'moved ' + id + ' -> ' + column);
+  if (r.ordered) console.log('ordered ' + r.ordered + ' for ' + id + ' (queue seq ' + r.seq + ')');
+  else console.log(r.unchanged ? 'already in ' + column : 'moved ' + id + ' -> ' + column);
 }
 
 async function cmdPatch() {
   const id = positional[0];
-  if (!id) die('usage: bridge-axi patch <card-id> [--title T] [--body-file f|-] [--attr k=v]... (--attr k= deletes)');
+  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--owner lt] [--body-file f|-] [--attr k=v]... (--attr k= deletes)');
   const body = {};
   if (opts.title !== null) body.title = opts.title;
+  if (opts.type !== null) body.type = opts.type;
+  if (opts.owner !== null) body.owner = opts.owner;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   if (opts.attrs.length) body.attributes = parseAttrs(opts.attrs);
-  if (!Object.keys(body).length) die('nothing to patch (use --title / --body-file / --attr)');
+  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --owner / --body-file / --attr)');
   await request('PATCH', '/api/cards/' + encodeURIComponent(id), body);
   console.log('patched ' + id);
 }
 
 async function cmdEvent() {
   const id = positional[0];
-  if (!id) die('usage: bridge-axi event <card-id> [--level 1|2] [--kind K] [--text-file f|-]\n  (text from --text-file or stdin; kind is an open token — a kind in the board\'s\n  kinds map sets the default level and emoji; explicit --level wins, else level 2)');
+  if (!id) die('usage: bc-axi event <card-id> [--level 1|2] [--kind K] [--text-file f|-]\n  (text from --text-file or stdin; kind is an open token — a kind in the board\'s\n  kinds map sets the default level and emoji; explicit --level wins, else level 2)');
   const text = readInput(opts.textFile).trim();
   const body = { text, actor: opts.actor || 'agent' };
   if (opts.level) body.level = opts.level;
@@ -253,7 +338,7 @@ async function cmdNotify() {
 
 async function cmdArchive() {
   const id = positional[0];
-  if (!id) die('usage: bridge-axi archive <card-id> [--reason merged|killed] [--note "..."] [--kind K] [--level 1|2]');
+  if (!id) die('usage: bc-axi card archive <card-id> [--reason merged|killed] [--note "..."] [--kind K] [--level 1|2]');
   const body = { actor: opts.actor || 'agent' };
   if (opts.reason) body.reason = opts.reason;
   if (opts.note) body.note = opts.note;
@@ -265,7 +350,7 @@ async function cmdArchive() {
 
 async function cmdRestore() {
   const id = positional[0];
-  if (!id) die('usage: bridge-axi restore <card-id> [--actor a] [--note "..."] [--kind K]\n  (resurrection event text from --note or --text-file; default "resurrected")');
+  if (!id) die('usage: bc-axi card restore <card-id> [--actor a] [--note "..."] [--kind K]\n  (resurrection event text from --note or --text-file; default "resurrected")');
   const body = { actor: opts.actor || 'agent' };
   if (opts.textFile) body.text = readInput(opts.textFile).trim();
   else if (opts.note) body.text = opts.note;
@@ -274,54 +359,42 @@ async function cmdRestore() {
   console.log('restored ' + id + ' in ' + r.card.column);
 }
 
-async function cmdArchived() {
-  const r = await request('GET', '/api/archive?limit=' + (parseInt(positional[0], 10) || 20));
-  if (opts.json) return console.log(JSON.stringify(r.archive, null, 2));
-  for (const rec of r.archive) {
-    const why = rec.reason ? rec.reason + (rec.note ? ': ' + rec.note : '') : '';
-    console.log(hhmm(rec.ts) + '  ' + rec.card.id + '  ' + rec.card.title + (why ? '  (' + why + ')' : ''));
-  }
-}
-
+// ---------- conversation & delivery ----------
 async function cmdSay() {
   const target = positional[0];
-  if (!target || !/^(chat|card:.+)$/.test(target)) die('usage: bridge-axi say <chat|card:ID> [--text-file <f>]  (text from --text-file or stdin)');
+  if (!target || !TARGET_RE.test(target)) die('usage: bc-axi say <lieutenant:ID|card:ID> [--actor a] [--text-file f|-]  (text from --text-file or stdin)');
   const text = readInput(opts.textFile);
-  await request('POST', '/api/message', { target, text_md: text, author: opts.actor || 'agent' });
+  const body = { target, text_md: text };
+  if (opts.actor) body.author = opts.actor;
+  await request('POST', '/api/message', body);
   console.log('said -> ' + target);
 }
 
-async function cmdPoll() {
-  // At-least-once: the server serves everything past its committed ack cursor and
-  // poll never advances it. After HANDLING the lines (replying), run
-  // `bridge-axi ack <seq>` with the highest seq handled; until then every poll
-  // re-offers the same lines (dedupe by seq), so a killed poller loses nothing.
-  for (;;) {
-    let r;
-    try { r = await request('GET', '/api/poll', null, 70000); }
-    catch (e) { die('poll failed: ' + e.message); }
-    if (r.events && r.events.length) {
-      for (const ev of r.events) console.log(JSON.stringify(ev));
-      return; // exit after first batch so a harness gets notified
-    }
-    // empty long-poll timed out; loop again
-  }
+async function cmdDrain() {
+  // feed.drain — at-least-once: the server serves everything past each
+  // lieutenant's committed ack cursor and drain never advances it. After
+  // HANDLING the items, run `bc-axi ack <seq>` with the highest seq handled;
+  // until then every drain re-offers the same items (dedupe by seq).
+  const q = opts.lieutenant ? '?lieutenant=' + encodeURIComponent(opts.lieutenant) : '';
+  const r = await request('GET', '/api/feed' + q);
+  for (const it of r.items) console.log(JSON.stringify(it));
 }
 
 async function cmdAck() {
   const seq = parseInt(positional[0], 10);
-  if (!Number.isInteger(seq) || seq < 0) die('usage: bridge-axi ack <seq>   (highest feedback seq you have HANDLED)');
-  const r = await request('POST', '/api/poll/ack', { seq });
-  console.log('acked ' + seq + ' (committed=' + r.ack + ')');
+  if (!Number.isInteger(seq) || seq < 0) die('usage: bc-axi ack <seq>   (highest queue seq you have HANDLED)');
+  const r = await request('POST', '/api/feed/ack', { seq });
+  console.log('acked ' + seq + ' (lieutenant=' + r.lieutenant + ' committed=' + r.ack + ')');
 }
 
+// ---------- status ----------
 function fmtStatus(s) {
   const w = s && s.worker ? s.worker : { id: null, state: 'absent' };
   return 'worker=' + w.state + (w.id ? '(' + w.id + ')' : '') + ' owed=' + !!(s && s.owed) + ' unread=' + !!(s && s.unread);
 }
 
 async function cmdStatus() {
-  // status                                   -> server status (unchanged)
+  // status                                   -> server status
   // status <card-id>                         -> the card's derived status
   // status <card-id> <state> [--worker W] [--ttl secs]  -> status.set (worker lease)
   const id = positional[0];
@@ -335,26 +408,18 @@ async function cmdStatus() {
     const body = state === 'absent'
       ? { worker: null }
       : { worker: { id: opts.worker, state } };
-    if (state !== 'absent' && !opts.worker) die('usage: bridge-axi status <card-id> <absent|idle|working|needs-you> [--worker <worker-id>] [--ttl <secs>]\n  (--worker required unless state is absent)');
+    if (state !== 'absent' && !opts.worker) die('usage: bc-axi status <card-id> <absent|idle|working|needs-you> [--worker <worker-id>] [--ttl <secs>]\n  (--worker required unless state is absent)');
     if (opts.ttl != null) body.ttl = opts.ttl;
     const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/status', body);
     return console.log(id + ': ' + fmtStatus(r.status));
   }
   const st = await serverUp();
-  if (!st) { console.log('server: down (port ' + opts.port + ')'); process.exit(1); }
-  const pending = Math.max(0, st.feedback_seq - (st.feedback_ack || 0));
-  console.log('server: up  board=' + st.board + '  cards=' + st.cards + '  pending-feedback=' + pending + '  url=http://localhost:' + opts.port + '/');
+  if (!st) { console.log('server: down (workspace ' + WORKSPACE + ', port ' + PORT + ')'); process.exit(1); }
+  console.log('server: up  workspace=' + st.workspace + '  cards=' + st.cards + '  lieutenants=' + st.lieutenants +
+    '  pending-queue=' + st.queue_pending + '  url=http://localhost:' + PORT + '/');
 }
 
-async function cmdStop() {
-  let pid = null;
-  try { pid = parseInt(fs.readFileSync(PID_FILE, 'utf8'), 10); } catch (e) {}
-  if (!pid) { const st = await serverUp(); pid = st && st.pid; }
-  if (!pid) die('no server found on port ' + opts.port);
-  try { process.kill(pid, 'SIGTERM'); } catch (e) { die('failed to stop pid ' + pid + ': ' + e.message); }
-  console.log('stopped pid=' + pid);
-}
-
+// ---------- config ----------
 async function cmdConfig() {
   const sub = positional[0];
   if (sub === 'show') {
@@ -363,83 +428,83 @@ async function cmdConfig() {
     return;
   }
   if (sub === 'voices') {
-    if (positional.length < 2) die('usage: bridge-axi config voices "<name,name,...>"  ("" clears the filter)');
+    if (positional.length < 2) die('usage: bc-axi config voices "<name,name,...>"  ("" clears the filter)');
     const names = positional.slice(1).join(' ').split(',').map((s) => s.trim()).filter(Boolean);
     let cfg = {};
     try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (e) {}
     if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
     if (names.length) cfg.voices = names; else delete cfg.voices;
-    fs.mkdirSync(BRIDGE_DIR, { recursive: true });
+    fs.mkdirSync(STATE_DIR, { recursive: true });
     fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + '\n');
     console.log(names.length ? 'voices=' + names.join(',') : 'voices cleared');
     return;
   }
-  die('usage: bridge-axi config <show | voices "<name,name,...>">');
+  die('usage: bc-axi config <show | voices "<name,name,...>">');
 }
 
 const commands = {
-  open: cmdOpen, columns: cmdColumns, kinds: cmdKinds, board: cmdBoard, show: cmdShow, thread: cmdThread,
-  create: cmdCreate, move: cmdMove, patch: cmdPatch, event: cmdEvent, notify: cmdNotify,
-  archive: cmdArchive, restore: cmdRestore, archived: cmdArchived, say: cmdSay, poll: cmdPoll, ack: cmdAck,
-  status: cmdStatus, config: cmdConfig, stop: cmdStop,
+  open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
+  board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
+  'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList,
+  'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
+  'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
+  show: cmdShow, // alias for card show
+  event: cmdEvent, notify: cmdNotify,
+  say: cmdSay, drain: cmdDrain, ack: cmdAck,
 };
 if (!commands[cmd]) {
-  die('bridge-axi — agent CLI for the bridge board. All commands take [--port N] [--board NAME].\n' +
+  die('bc-axi — agent CLI for the bridge-command board.\n' +
+    'Workspace: nearest .bridge-command/ from cwd upward, or --workspace DIR. Port: workspace config.json (default 4780), or --port N.\n' +
     '\nserver:\n' +
-    '  open [--host H]                        start server if needed (idempotent), print URL.\n' +
-    '                                         Bind host: --host > "host" in ~/.bridge/config.json\n' +
-    '                                         > 127.0.0.1 (localhost-only default)\n' +
-    '  status                                 up/down, board, card count, pending feedback\n' +
-    '  stop                                   stop the server\n' +
-    '\nstatus (the ONE work signal; worker is a lease, owed/unread are server-derived):\n' +
+    '  open [--host H]                        start the workspace server if needed (idempotent), print URL.\n' +
+    '                                         Bootstraps .bridge-command/ in cwd on first run.\n' +
+    '  status                                 up/down, cards, lieutenants, pending queue items\n' +
+    '  stop                                   stop the workspace server\n' +
+    '\nlieutenant:\n' +
+    '  lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-]\n' +
+    '                                         register a lieutenant (color auto-assigned when omitted)\n' +
+    '  lieutenant list [--json]               id, name, color, charter first line\n' +
+    '\nread:\n' +
+    '  board [--json]                         lane + columns + card one-liners (or full JSON)\n' +
+    '  card show <card-id> [--json]           one card: type, owner, attrs, body, events, thread\n' +
+    '  thread <lieutenant:ID|card:ID> [--json] print a conversation thread\n' +
+    '  archived [n] [--json]                  last n archived cards (default 20)\n' +
+    '  kinds [--json]                         print the effective kinds map (built-ins + registered)\n' +
+    '\ncard:\n' +
+    '  card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
+    '              [--column c] [--id id] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
+    '                                         new card (default: implementation, backlog)\n' +
+    '  card move <card-id> <column>           lieutenant moves land ONLY in review (the handoff,\n' +
+    '                                         level-1 event). Captain drags happen in the UI; a\n' +
+    '                                         captain backlog→working / review→backlog drag is an\n' +
+    '                                         ORDER (queue item), not a move\n' +
+    '  card patch <card-id> [--title T] [--type t] [--owner lt] [--body-file f|-] [--attr k=v]...\n' +
+    '                                         update card (k= deletes attr); body = the deliverable,\n' +
+    '                                         rewritten to current state before every handoff\n' +
+    '  card archive <card-id> [--reason merged|killed] [--note "..."]\n' +
+    '                                         kill = archive (append-only file, off the board)\n' +
+    '  card restore <card-id> [--note "..."]  resurrect the most recent archived snapshot in full;\n' +
+    '                                         appends a loud level-1 event\n' +
+    '\nevents & chat:\n' +
+    '  event <card-id> [--level 1|2] [--kind K] [--text-file f|-]   append timeline event\n' +
+    '                                         level 1 rings the captain; level 2 = timeline only\n' +
+    '  notify [--kind K] [--text-file f|-]    board-level notification (no card)\n' +
+    '  say <lieutenant:ID|card:ID> [--actor a] [--text-file f|-]\n' +
+    '                                         post a chat message; a card thread\'s interlocutor is\n' +
+    '                                         the owning lieutenant (lieutenant-main says also notify)\n' +
+    '\ndelivery (at-least-once):\n' +
+    '  drain [--lieutenant <id>]              print pending QueueItems as JSON lines (captain\n' +
+    '    messages, start/rework orders, card-created/moved). Drain never removes: handle the\n' +
+    '    items, then ack the highest seq handled; unacked items re-offer (dedupe by seq)\n' +
+    '  ack <seq>                              commit that seq\'s lieutenant ack cursor\n' +
+    '\nstatus (worker lease; owed/unread are server-derived):\n' +
     '  status <card-id> [--json]              the card\'s derived status: worker/owed/unread\n' +
     '  status <card-id> <state> --worker <id> [--ttl <secs>]\n' +
     '                                         status.set: link worker + state (absent|idle|working|needs-you)\n' +
     '                                         as a lease; past the TTL (default 600s) working/needs-you\n' +
-    '                                         decays to idle; "status <card-id> absent" unlinks the worker\n' +
-    '\nread:\n' +
-    '  board [--json]                         columns + card one-liners (or full JSON)\n' +
-    '  show <card-id> [--json]                one card: attributes, body, events, thread\n' +
-    '  thread <chat|card:ID> [--json]         print a conversation thread\n' +
-    '  archived [n] [--json]                  last n archived cards (default 20)\n' +
-    '  columns                                print the column frame (id<TAB>title)\n' +
-    '  kinds [--json]                         print the effective kinds map (built-ins + registered)\n' +
-    '\nwrite:\n' +
-    '  create --title T [--column c] [--id id] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
-    '                                         new card (default column: first)\n' +
-    '  move <card-id> <column> [--kind K]     move card; records an event. Agent move defaults to\n' +
-    '                                         kind handoff (notifies), other actors to kind moved;\n' +
-    '                                         --kind overrides (e.g. --kind moved for a quiet agent move)\n' +
-    '  patch <card-id> [--title T] [--body-file f|-] [--attr k=v]...   update card (k= deletes attr)\n' +
-    '  event <card-id> [--level 1|2] [--kind K] [--text-file f|-]     append timeline event\n' +
-    '                                         kind is an open token; a kind in the kinds map sets the\n' +
-    '                                         default level and emoji. Explicit --level wins, else 2.\n' +
-    '                                         level 1 notifies the human; level 2 = timeline only\n' +
-    '  notify [--kind K] [--text-file f|-]    board-level notification (no card)\n' +
-    '  archive <card-id> [--reason merged|killed] [--note "..."]\n' +
-    '                                         kill = archive (append-only file, off the board);\n' +
-    '                                         reason is the validated enum (default killed),\n' +
-    '                                         free text goes in --note\n' +
-    '  restore <card-id> [--note "..."]       resurrect: bring the most recent archived snapshot\n' +
-    '                                         back onto the board with frozen state intact (the\n' +
-    '                                         archive record stays); appends a loud level-1 event\n' +
-    '                                         (--note or --text-file = its text, default "resurrected")\n' +
-    '  say <chat|card:ID> [--text-file f|-]   post a chat message (main chat says also notify)\n' +
-    '  columns <file.json|->                  replace the column frame [{id,title}] (idempotent)\n' +
-    '  kinds <file.json|->                    replace the board\'s registered kinds map (idempotent):\n' +
-    '                                         {"<kind>": {"emoji": "…", "level": 1|2}}. Registered entries\n' +
-    '                                         override the built-ins: created 🐣2 moved 🔁2 handoff 👀1\n' +
-    '                                         landed 🏁1 killed 🪦2 resurrected 🧟1 question 🙋1\n' +
-    '\nloop (at-least-once):\n' +
-    '  poll                                   BLOCK until unacked user feedback, print JSON lines, exit\n' +
-    '    lines: {"seq","ts","kind":"message|card-created|card-moved","target","text",...}\n' +
-    '    run as a tracked background task; on exit handle lines, reply via say,\n' +
-    '    then ack the highest seq handled, re-run poll\n' +
-    '  ack <seq>                              commit the server ack cursor to <seq>. Feedback is\n' +
-    '    NOT considered delivered until acked: an unacked line is re-offered by every poll\n' +
-    '    (so a killed poller loses nothing; dedupe repeats by seq)\n' +
+    '                                         decays to idle; "status <card-id> absent" unlinks\n' +
     '\nconfig:\n' +
     '  config show | config voices "a,b"      TTS voice filter for the UI\n' +
-    '\nText/body always via --text-file/--body-file or stdin ("-"), never shell-interpolated.');
+    '\nText/body/charter always via --text-file/--body-file/--charter-file or stdin ("-"), never shell-interpolated.');
 }
 commands[cmd]().catch((e) => die(e.message));

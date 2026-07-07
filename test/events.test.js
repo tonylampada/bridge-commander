@@ -2,12 +2,12 @@
 // Event append (card and board level), levels, seq ordering, notifications/read state.
 const test = require('node:test');
 const assert = require('node:assert');
-const { startServerWithColumns } = require('./helper');
+const { startServerWithLieutenant, withOwner, LT } = require('./helper');
 
 test('card events: default level 2, explicit level 1, open kind tokens, monotonic seq', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Evented' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Evented' }));
 
     let r = await s.api('POST', '/api/cards/evented/events', { text: 'quiet note' });
     assert.strictEqual(r.status, 200);
@@ -37,7 +37,7 @@ test('card events: default level 2, explicit level 1, open kind tokens, monotoni
 });
 
 test('board-level events default to level 1', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
     let r = await s.api('POST', '/api/events', { text: 'board-wide notice' });
     assert.strictEqual(r.status, 200);
@@ -52,9 +52,9 @@ test('board-level events default to level 1', async () => {
 });
 
 test('notifications: level-1 slice of the unified stream, read state persists per user', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Noisy' }); // level-2 birth event
+    await s.api('POST', '/api/cards', withOwner({ title: 'Noisy' })); // level-2 birth event
     await s.api('POST', '/api/cards/noisy/events', { text: 'important', level: 1 });
     await s.api('POST', '/api/events', { text: 'board alert' }); // level 1
 
@@ -85,19 +85,19 @@ test('notifications: level-1 slice of the unified stream, read state persists pe
 });
 
 test('thread read markers are stored per user and target', async () => {
-  const s = await startServerWithColumns();
+  const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', { title: 'Readable' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Readable' }));
     let r = await s.api('POST', '/api/read', { target: 'card:readable', ts: '2026-01-01T00:00:00.000Z' });
     assert.strictEqual(r.status, 200);
-    r = await s.api('POST', '/api/read', { target: 'chat' });
+    r = await s.api('POST', '/api/read', { target: 'lieutenant:' + LT });
     assert.strictEqual(r.status, 200);
     r = await s.api('POST', '/api/read', { target: 'bogus' });
     assert.strictEqual(r.status, 400);
 
     const board = (await s.api('GET', '/api/board')).body;
     assert.strictEqual(board.reads.user.threads['card:readable'], '2026-01-01T00:00:00.000Z');
-    assert.ok(board.reads.user.threads.chat);
+    assert.ok(board.reads.user.threads['lieutenant:' + LT]);
   } finally {
     await s.stop();
   }

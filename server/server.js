@@ -1,96 +1,118 @@
 #!/usr/bin/env node
-// bridge server — generic agent board. Node built-ins only, zero deps.
-// Usage: node server.js --port 4777 --board default [--host H]
-// Bind host: --host flag > "host" in ~/.bridge/config.json > 127.0.0.1 (localhost-only).
-// A non-loopback bind also listens on 127.0.0.1 so local CLI calls keep working.
+// bridge-command server — the harness control surface. Node built-ins only, zero deps.
+// Usage: node server/server.js [workspace] [--workspace DIR] [--port N] [--host H]
+// One workspace = one board. All state lives in <workspace>/.bridge-command/:
+//   board.json     the board (canonical state of the world)
+//   archive.jsonl  append-only frozen card snapshots (reason: merged|killed)
+//   config.json    { port, host?, voices? } — port default 4780, written on first boot
+//   queue/<lieutenant>.jsonl  durable per-lieutenant delivery queue (global seq)
+//   queue/<lieutenant>.ack    committed ack cursor (at-least-once; only ack removes)
+//   server.pid     single server instance per workspace
 //
-// Data model v2 (one JSON file per board, ~/.bridge/boards/<name>.json):
+// Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
-//             columns: [{id, title}],                       // owned state, ordered
-//             cards:   [{id, title, column, labels[], attributes{}, body,
-//                        created, updated, threadStart,
+//             columns: fixed frame (backlog | working | review | peer),
+//             lieutenants: [{id, name, color, charter, chat: [{author,text,ts}], created}],
+//             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
+//                        created, updated, threadStart, pendingOrder,
 //                        status: {worker: null|{id, state, expires}},  // lease; only status.set writes it
 //                        events: [{seq, ts, level, kind, text, actor}],
 //                        thread: [{author, text, ts}] }],
-//             chat:    [{author, text, ts}],
 //             events:  [{seq, ts, level, kind?, text, actor, card?, cardTitle?}], // board-level
 //             labels:  [{name, color}],                     // user-owned registry
 //             kinds:   {<kind>: {emoji, level}},            // registered kinds map (overrides built-ins)
 //             reads:   { <user>: { notifSeq, notifSeqs[], threads: {<target>: ts} } } }
 //
+// Every card belongs to exactly one lieutenant (`owner`); card `type` is
+// plan | implementation | investigation. Chat targets are `lieutenant:<id>`
+// (a lieutenant's main chat) and `card:<id>` (a card thread, whose interlocutor
+// is the owning lieutenant).
+//
+// Captain drag semantics (side effects, per the DNA): backlog → working and
+// review → backlog do NOT move the card; they append a start-order / rework-order
+// QueueItem to the owning lieutenant (the card carries `pendingOrder` until it
+// actually moves). Every other captain drag applies normally. Lieutenant moves
+// are allowed only → review (the handoff).
+//
 // Events are append-only and carry a global monotonic seq. The unified stream =
 // board.events + every card's events, ordered by seq. Notifications are the
-// level-1 slice of that stream UNION unseen agent-authored card-thread replies
-// (the same per-user read state that derives a card's `unread`); read state
-// persists in board.reads (server-side).
-// Kill = archive: the card is snapshotted to <name>.archive.jsonl (append-only,
-// reason: merged|killed) and removed from the board. No destructive delete.
-// Restore = resurrection: the most recent archived snapshot comes back onto the
-// board in full (never a blank rebirth) with a loud level-1 event; the archive
-// log stays append-only, so the board — not the archive — is truth for liveness.
+// level-1 slice of that stream UNION unseen lieutenant-authored card-thread
+// replies (per-user read state persists in board.reads, server-side).
+// Kill = archive; restore = resurrection with frozen state and a loud level-1
+// event; the archive log stays append-only — the board is truth for liveness.
 'use strict';
 
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 // ---------- args ----------
 function parseArgs(argv) {
-  const o = { port: 4777, board: 'default', host: '' };
+  const o = { workspace: '', port: 0, host: '' };
+  const pos = [];
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') o.port = parseInt(argv[++i], 10);
-    else if (argv[i] === '--board') o.board = argv[++i];
+    else if (argv[i] === '--workspace') o.workspace = argv[++i];
     else if (argv[i] === '--host') o.host = argv[++i];
+    else pos.push(argv[i]);
   }
-  if (!Number.isInteger(o.port) || o.port <= 0) { console.error('bad --port'); process.exit(1); }
+  if (!o.workspace && pos.length) o.workspace = pos[0];
+  if (o.port && (!Number.isInteger(o.port) || o.port <= 0)) { console.error('bad --port'); process.exit(1); }
   if (o.host && !/^[\w.:-]+$/.test(o.host)) { console.error('bad --host'); process.exit(1); }
-  if (!/^[\w.-]+$/.test(o.board)) { console.error('bad --board (use [A-Za-z0-9_.-])'); process.exit(1); }
   return o;
 }
 const opts = parseArgs(process.argv.slice(2));
 
-// ---------- paths ----------
-// State root: $BRIDGE_DIR when set (tests point it at a temp dir), else ~/.bridge.
-const BRIDGE_DIR = process.env.BRIDGE_DIR || path.join(os.homedir(), '.bridge');
-const BOARDS_DIR = path.join(BRIDGE_DIR, 'boards');
-const BOARD_FILE = path.join(BOARDS_DIR, opts.board + '.json');
-const ARCHIVE_FILE = path.join(BOARDS_DIR, opts.board + '.archive.jsonl');
-const FEEDBACK_FILE = path.join(BOARDS_DIR, opts.board + '.feedback.jsonl');
-const PID_FILE = path.join(BRIDGE_DIR, 'server-' + opts.port + '.pid');
-const CONFIG_FILE = path.join(BRIDGE_DIR, 'config.json');
-const UI_DIR = path.join(__dirname, 'ui');
-fs.mkdirSync(BOARDS_DIR, { recursive: true });
+// ---------- paths (workspace-scoped; no global state) ----------
+const WORKSPACE = path.resolve(opts.workspace || process.cwd());
+const STATE_DIR = path.join(WORKSPACE, '.bridge-command');
+const BOARD_FILE = path.join(STATE_DIR, 'board.json');
+const ARCHIVE_FILE = path.join(STATE_DIR, 'archive.jsonl');
+const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
+const QUEUE_DIR = path.join(STATE_DIR, 'queue');
+const PID_FILE = path.join(STATE_DIR, 'server.pid');
+const UI_DIR = path.join(__dirname, '..', 'ui');
+fs.mkdirSync(QUEUE_DIR, { recursive: true });
 
-// ---------- user config (~/.bridge/config.json; read per-request, defensive) ----------
-function userConfig() {
+const DEFAULT_PORT = 4780;
+
+// ---------- workspace config (.bridge-command/config.json) ----------
+function readConfig() {
   try {
     const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    if (c && typeof c === 'object' && Array.isArray(c.voices)) {
-      const voices = c.voices.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
-      if (voices.length) return { voices };
-    }
+    if (c && typeof c === 'object' && !Array.isArray(c)) return c;
   } catch (e) {}
+  return {};
+}
+function userConfig() {
+  const c = readConfig();
+  if (Array.isArray(c.voices)) {
+    const voices = c.voices.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
+    if (voices.length) return { voices };
+  }
   return { voices: null };
 }
-
-// Bind host is machine-private config, never baked into callers:
-// --host flag > "host" in config.json > 127.0.0.1.
+// Port: --port flag > config.json "port" > 4780. The resolved port is written
+// back into config.json when absent, so the CLI and UI can always find it.
+const cfg = readConfig();
+const PORT = opts.port || (Number.isInteger(cfg.port) && cfg.port > 0 ? cfg.port : DEFAULT_PORT);
+if (!Number.isInteger(cfg.port) || cfg.port <= 0) {
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(Object.assign({}, cfg, { port: PORT }), null, 2) + '\n');
+}
+// Bind host is machine-private config: --host flag > config.json "host" > 127.0.0.1.
 function configHost() {
-  try {
-    const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
-    if (c && typeof c === 'object' && typeof c.host === 'string' && /^[\w.:-]+$/.test(c.host.trim())) return c.host.trim();
-  } catch (e) {}
+  const c = readConfig();
+  if (typeof c.host === 'string' && /^[\w.:-]+$/.test(c.host.trim())) return c.host.trim();
   return '';
 }
 const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
 const BIND_HOST = opts.host || configHost() || '127.0.0.1';
 
-// ---------- pidfile: single instance per port ----------
+// ---------- pidfile: single instance per workspace ----------
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
 if (fs.existsSync(PID_FILE)) {
   const old = parseInt(fs.readFileSync(PID_FILE, 'utf8'), 10);
-  if (old && pidAlive(old)) process.exit(0); // live server already on this port
+  if (old && pidAlive(old)) process.exit(0); // live server already owns this workspace
 }
 fs.writeFileSync(PID_FILE, String(process.pid));
 function cleanup() {
@@ -101,31 +123,49 @@ for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { cleanup(); proc
 
 // ---------- board state ----------
 function now() { return new Date().toISOString(); }
+
+// The fixed column frame. No Done: cards leave by archive (merged | killed).
+const COLUMNS = [
+  { id: 'backlog', title: '📋 Backlog' },
+  { id: 'working', title: '🔨 Working' },
+  { id: 'review', title: '👀 Your review' },
+  { id: 'peer', title: '🤝 Peer review' },
+];
+const CARD_TYPES = ['plan', 'implementation', 'investigation'];
+
 // Worker lease states. `absent` is never persisted: it is the derived state of a
 // card with no worker linked (persisted lease = null).
 const WORKER_STATES = ['absent', 'idle', 'working', 'needs-you'];
 const WORKER_LEASE_STATES = ['idle', 'working', 'needs-you'];
-const WORKER_TTL_SECS = parseFloat(process.env.BRIDGE_WORKER_TTL_SECS) || 600;
+const WORKER_TTL_SECS = parseFloat(process.env.BC_WORKER_TTL_SECS) || 600;
+
 function defaultBoard() {
   return {
-    title: opts.board, subtitle: '', updated: now(), seq: 0,
-    columns: [], cards: [], chat: [], events: [], labels: [], reads: {}, kinds: {},
+    title: path.basename(WORKSPACE), subtitle: '', updated: now(), seq: 0,
+    columns: COLUMNS, lieutenants: [], cards: [], events: [], labels: [], reads: {}, kinds: {},
   };
 }
 function normalizeBoard(doc) {
   const b = Object.assign(defaultBoard(), doc);
-  if (!Array.isArray(b.columns)) b.columns = [];
+  b.columns = COLUMNS; // the frame is fixed — never board data
+  if (!Array.isArray(b.lieutenants)) b.lieutenants = [];
   if (!Array.isArray(b.cards)) b.cards = [];
-  if (!Array.isArray(b.chat)) b.chat = [];
   if (!Array.isArray(b.events)) b.events = [];
   if (!Array.isArray(b.labels)) b.labels = [];
   if (!b.reads || typeof b.reads !== 'object') b.reads = {};
   b.kinds = sanitizeKinds(b.kinds);
+  for (const lt of b.lieutenants) {
+    if (!Array.isArray(lt.chat)) lt.chat = [];
+    if (typeof lt.charter !== 'string') lt.charter = '';
+  }
   for (const c of b.cards) {
     if (!Array.isArray(c.events)) c.events = [];
     if (!Array.isArray(c.thread)) c.thread = [];
     if (!Array.isArray(c.labels)) c.labels = [];
     if (!c.attributes || typeof c.attributes !== 'object') c.attributes = {};
+    if (!CARD_TYPES.includes(c.type)) c.type = 'implementation';
+    if (!b.columns.some((k) => k.id === c.column)) c.column = 'backlog';
+    if (c.pendingOrder && !(typeof c.pendingOrder === 'object' && c.pendingOrder.kind)) c.pendingOrder = null;
     // status: keep only a valid persisted worker lease; an absent status stays
     // absent (means "status.set never touched this card"), odd shapes collapse
     // to a cleared lease. Decay is derived on read, never persisted.
@@ -134,10 +174,6 @@ function normalizeBoard(doc) {
       const ok = w && typeof w === 'object' && w.id && WORKER_LEASE_STATES.includes(w.state);
       c.status = { worker: ok ? { id: String(w.id), state: w.state, expires: w.expires || null } : null };
     }
-    // data migration: board files written before the status model may still
-    // store the old feeder's `worker` attribute; adopt it as a lease on load
-    // so existing stripes survive the upgrade off card.status alone.
-    if (c.attributes && 'worker' in c.attributes) adoptWorkerAttr(c, c.attributes);
   }
   // seq must top every stored event (defensive after hand edits)
   let max = b.seq || 0;
@@ -159,13 +195,14 @@ function saveBoard() {
 }
 
 // ---------- events / kinds ----------
-// A kind is an open token. The bridge ships structural defaults only for the
+// A kind is an open token. The server ships structural defaults only for the
 // kinds its OWN operations emit; a board may register its own kinds map
 // (PUT /api/kinds) whose entries are merged OVER these built-ins. A kind in
 // neither map is stored as-is (opaque token: no emoji, level falls back to 2).
 const BUILTIN_KINDS = {
   created: { emoji: '🐣', level: 2 },
   moved: { emoji: '🔁', level: 2 },
+  ordered: { emoji: '⏳', level: 2 },
   handoff: { emoji: '👀', level: 1 },
   landed: { emoji: '🏁', level: 1 },
   killed: { emoji: '🪦', level: 2 },
@@ -219,49 +256,84 @@ function registerCardLabels() {
   }
 }
 
-// ---------- feedback queue (user -> agent; durable jsonl, monotonic seq) ----------
-let feedback = [];
-try {
-  feedback = fs.readFileSync(FEEDBACK_FILE, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-} catch (e) {}
-let fseq = feedback.length ? feedback[feedback.length - 1].seq : 0;
-function pushFeedback(rec) {
-  const ev = Object.assign({ seq: ++fseq, ts: now() }, rec);
-  feedback.push(ev);
-  fs.appendFileSync(FEEDBACK_FILE, JSON.stringify(ev) + '\n');
-  flushPollers();
-  return ev;
+// ---------- lieutenants ----------
+const LT_PALETTE = ['#58b6ff', '#3ecf8e', '#e6c04a', '#c678dd', '#e2795b', '#56b6c2', '#98c379', '#e06c75'];
+function findLieutenant(id) { return board.lieutenants.find((l) => l.id === id); }
+function createLieutenant(body) {
+  const name = String(body.name || '').trim();
+  if (!name) return { error: 'name required' };
+  const id = body.id ? String(body.id) : slug(name);
+  if (!/^[\w][\w.-]*$/.test(id)) return { error: 'bad lieutenant id (use [A-Za-z0-9_.-])' };
+  if (findLieutenant(id)) return { error: 'lieutenant exists: ' + id, code: 409 };
+  const color = validColor(body.color) || LT_PALETTE[board.lieutenants.length % LT_PALETTE.length];
+  const lt = {
+    id, name: name.slice(0, 60), color,
+    charter: String(body.charter || '').slice(0, 8000),
+    chat: [], created: now(),
+  };
+  board.lieutenants.push(lt);
+  const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' joined the bridge', actor: body.actor || 'user', level: 2 }, {});
+  board.events.push(ev);
+  return { lieutenant: lt };
 }
 
-// ---------- committed ack cursor (at-least-once delivery) ----------
-// Feedback <= ackSeq has been HANDLED by the agent, not merely delivered. Poll
-// serves everything past it and never advances it; only POST /api/poll/ack does.
-// So a poller that dies before the agent handles its lines re-offers the same
-// feedback on the next poll — duplicates are possible, loss is not (dedupe by seq).
-const ACK_FILE = path.join(BOARDS_DIR, opts.board + '.feedback.ack');
-function loadAck() {
-  try { return parseInt(fs.readFileSync(ACK_FILE, 'utf8'), 10) || 0; }
+// ---------- delivery queues (per-lieutenant durable jsonl, GLOBAL seq) ----------
+// One QueueItem = one durable delivery to a lieutenant: captain message,
+// drag-order, or (future) worker event. At-least-once: drain serves everything
+// past the lieutenant's committed ack cursor and never advances it; only
+// POST /api/feed/ack does. Unacked items re-offer forever (dedupe by seq).
+// The send-keys wake half of delivery is a later phase; the durable queue is
+// the write-ahead ground truth.
+function queueFile(lt) { return path.join(QUEUE_DIR, lt + '.jsonl'); }
+function ackFile(lt) { return path.join(QUEUE_DIR, lt + '.ack'); }
+function readQueue(lt) {
+  try {
+    return fs.readFileSync(queueFile(lt), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch (e) { return []; }
+}
+function queueIds() {
+  const ids = new Set(board.lieutenants.map((l) => l.id));
+  try {
+    for (const f of fs.readdirSync(QUEUE_DIR)) if (f.endsWith('.jsonl')) ids.add(f.slice(0, -6));
+  } catch (e) {}
+  return [...ids];
+}
+// The queue seq is global across every lieutenant's queue (QueueItems are
+// seq-ordered board-wide). Recovered from the files at boot.
+let qseq = 0;
+for (const lt of queueIds()) for (const it of readQueue(lt)) if (it.seq > qseq) qseq = it.seq;
+function readAck(lt) {
+  try { return parseInt(fs.readFileSync(ackFile(lt), 'utf8'), 10) || 0; }
   catch (e) { return 0; }
 }
-let ackSeq = loadAck();
-function commitAck(n) {
-  if (n <= ackSeq) return;
-  ackSeq = n;
-  fs.writeFileSync(ACK_FILE, String(ackSeq));
+function queuePush(lt, rec) {
+  const item = Object.assign({ seq: ++qseq, ts: now(), lieutenant: lt }, rec);
+  fs.appendFileSync(queueFile(lt), JSON.stringify(item) + '\n');
+  return item;
 }
-
-// ---------- long-poll waiters ----------
-let pollers = []; // {since, res, timer}; since=null means "the committed ack cursor"
-function feedbackSince(since) { return feedback.filter((e) => e.seq > since); }
-function pollerSince(p) { return p.since == null ? ackSeq : p.since; }
-function flushPollers() {
-  pollers = pollers.filter((p) => {
-    const evs = feedbackSince(pollerSince(p));
-    if (!evs.length) return true;
-    clearTimeout(p.timer);
-    sendJson(p.res, 200, { events: evs, cursor: fseq, ack: ackSeq });
-    return false;
-  });
+function pendingItems(lt) {
+  const ack = readAck(lt);
+  return readQueue(lt).filter((it) => it.seq > ack);
+}
+function drainItems(lt) {
+  const lts = lt ? [lt] : queueIds();
+  const out = [];
+  for (const id of lts) out.push(...pendingItems(id));
+  out.sort((a, b) => a.seq - b.seq);
+  return out;
+}
+// ack <seq>: commit the cursor of the lieutenant whose queue holds that seq.
+// Committing seq N acks every item <= N in that lieutenant's queue (items are
+// seq-ascending per queue). Acking an already-acked seq is a harmless no-op.
+function commitAck(seq) {
+  for (const lt of queueIds()) {
+    const items = readQueue(lt);
+    if (!items.some((it) => it.seq === seq)) continue;
+    const cur = readAck(lt);
+    if (seq > cur) fs.writeFileSync(ackFile(lt), String(seq));
+    return { ok: true, lieutenant: lt, ack: Math.max(cur, seq) };
+  }
+  return { error: 'unknown seq: ' + seq, code: 400 };
 }
 
 // ---------- card status (the ONE work signal; derived on read) ----------
@@ -278,16 +350,16 @@ function derivedWorker(card) {
   if ((state === 'working' || state === 'needs-you') && w.expires && Date.parse(w.expires) <= Date.now()) state = 'idle';
   return { id: w.id, state, expires: w.expires };
 }
-function lastCardReadMs(card, user) {
+function lastThreadReadMs(target, user) {
   const r = board.reads[String(user || 'user').slice(0, 60)];
-  const ts = r && r.threads && r.threads['card:' + card.id];
+  const ts = r && r.threads && r.threads[target];
   return ts ? Date.parse(ts) : 0;
 }
 function cardStatus(card, user) {
   const thread = card.thread || [];
   const last = thread.length ? thread[thread.length - 1] : null;
-  const owed = !!(last && last.author === 'user'); // latest thread message is the user's, unanswered
-  const readMs = lastCardReadMs(card, user);
+  const owed = !!(last && last.author === 'user'); // latest thread message is the captain's, unanswered
+  const readMs = lastThreadReadMs('card:' + card.id, user);
   let unread = false;
   for (const m of thread) if (m.author !== 'user' && Date.parse(m.ts) > readMs) { unread = true; break; }
   if (!unread) for (const e of card.events || []) if (e.level === 1 && Date.parse(e.ts) > readMs) { unread = true; break; }
@@ -295,11 +367,10 @@ function cardStatus(card, user) {
 }
 // Last REAL activity on a card, derived (never persisted). A card's mutable
 // `updated` is bumped by incidental/system writes too — a status-lease refresh or
-// decay (status.set) and any attribute patch (the feeder's periodic sync) — so it
-// reads "now" for cards nothing meaningful happened to. Real activity always lands
-// as an event (created/moved/handoff/…) or a thread message, so the max of those
-// timestamps (floored at `created`) reflects genuine activity and ignores the
-// bookkeeping writes. The UI shows and sorts on this, not `updated`.
+// decay (status.set) and any attribute patch — so it reads "now" for cards nothing
+// meaningful happened to. Real activity always lands as an event or a thread
+// message, so the max of those timestamps (floored at `created`) reflects genuine
+// activity and ignores the bookkeeping writes. The UI shows and sorts on this.
 function cardActivity(card) {
   let ts = card.created || card.updated || '';
   for (const e of card.events || []) if (e.ts && e.ts > ts) ts = e.ts;
@@ -307,8 +378,7 @@ function cardActivity(card) {
   return ts;
 }
 // Serialization view: cards go out with the derived `status` and `activity`
-// attached; the stored board keeps only the raw lease. `card.status` is the single
-// READ source for worker/owed/unread — nothing is mirrored into attributes.
+// attached; the stored board keeps only the raw lease.
 function publicCard(card, user) {
   return Object.assign({}, card, { status: cardStatus(card, user), activity: cardActivity(card) });
 }
@@ -340,23 +410,6 @@ function setStatus(card, body) {
   return { ok: true };
 }
 
-// Load-time data migration only (normalizeBoard): a stored pre-status-model
-// `attributes.worker` value (working|needs-you|idle) is translated into the
-// status.set lease (default TTL; worker id = the existing lease id or the card
-// id) so old board files upgrade cleanly. The write API no longer translates:
-// status.set is the only writer of card.status.worker.
-function adoptWorkerAttr(card, attributes) {
-  if (!attributes || typeof attributes !== 'object' || !('worker' in attributes)) return;
-  const v = attributes.worker;
-  delete attributes.worker;
-  if (WORKER_LEASE_STATES.includes(v)) {
-    const id = (card.status && card.status.worker && card.status.worker.id) || card.id;
-    setStatus(card, { worker: { id, state: v } });
-  } else {
-    setStatus(card, { worker: null }); // null (delete) or unknown value: unlink
-  }
-}
-
 // ---------- SSE clients ----------
 const sseClients = new Set();
 function broadcast() {
@@ -380,12 +433,30 @@ function readBody(req) {
   });
 }
 function findCard(id) { return board.cards.find((c) => c.id === id); }
+// Chat targets: lieutenant:<id> (main chat) | card:<id> (card thread).
 function threadFor(target) {
-  if (target === 'chat') return board.chat;
-  const m = /^card:(.+)$/.exec(target || '');
+  let m = /^lieutenant:(.+)$/.exec(target || '');
+  if (m) {
+    const lt = findLieutenant(m[1]);
+    if (lt) return (lt.chat = lt.chat || []);
+    return null;
+  }
+  m = /^card:(.+)$/.exec(target || '');
   if (m) {
     const card = findCard(m[1]);
     if (card) return (card.thread = card.thread || []);
+  }
+  return null;
+}
+// The lieutenant a target's deliveries route to: the lieutenant itself, or the
+// card's owner (a card thread's interlocutor is always the owning lieutenant).
+function targetLieutenant(target) {
+  let m = /^lieutenant:(.+)$/.exec(target || '');
+  if (m) return findLieutenant(m[1]);
+  m = /^card:(.+)$/.exec(target || '');
+  if (m) {
+    const card = findCard(m[1]);
+    if (card) return findLieutenant(card.owner);
   }
   return null;
 }
@@ -418,11 +489,11 @@ function allEvents() {
   return out;
 }
 
-// The bell: everything the user hasn't seen yet. Level-1 events (read state:
-// notifSeq/notifSeqs) UNION agent-authored card-thread replies (read state: the
-// same per-user thread read marker that derives a card's `unread`, so opening
-// the card clears them). Main-chat agent messages already ride their level-1
-// event, so chat threads are excluded here — no double count. Level-2 events
+// The bell: everything the captain hasn't seen yet. Level-1 events (read state:
+// notifSeq/notifSeqs) UNION lieutenant-authored card-thread replies (read state:
+// the same per-user thread read marker that derives a card's `unread`, so opening
+// the card clears them). Lieutenant main-chat messages already ride their level-1
+// event, so those threads are excluded here — no double count. Level-2 events
 // never notify. Reply items are shaped like event items minus the seq
 // (ts/text/actor/card/cardTitle/read) plus kind "reply" to tell them apart.
 function notificationItems(user) {
@@ -430,7 +501,7 @@ function notificationItems(user) {
   const items = allEvents().filter((e) => e.level === 1)
     .map((e) => Object.assign({}, e, { read: e.seq <= r.notifSeq || r.notifSeqs.includes(e.seq) }));
   for (const c of board.cards) {
-    const readMs = lastCardReadMs(c, user);
+    const readMs = lastThreadReadMs('card:' + c.id, user);
     for (const m of c.thread || []) {
       if (m.author === 'user') continue;
       items.push({ ts: m.ts, level: 1, kind: 'reply', text: m.text, actor: m.author,
@@ -444,51 +515,87 @@ function notificationItems(user) {
 function createCard(body, actorDefault) {
   const title = String(body.title || '').trim();
   if (!title) return { error: 'title required' };
+  const owner = String(body.owner || '').trim();
+  if (!owner) return { error: 'owner required (every card belongs to exactly one lieutenant)' };
+  if (!findLieutenant(owner)) return { error: 'unknown lieutenant: ' + owner };
+  const type = body.type ? String(body.type) : 'implementation';
+  if (!CARD_TYPES.includes(type)) return { error: 'bad type (use ' + CARD_TYPES.join('|') + ')' };
   const id = body.id ? String(body.id) : newCardId(title);
   if (!/^[\w][\w.:-]*$/.test(id)) return { error: 'bad card id (use [A-Za-z0-9_.:-])' };
   if (findCard(id)) return { error: 'card exists: ' + id, code: 409 };
-  const column = body.column ? String(body.column) : (board.columns[0] && board.columns[0].id);
-  if (!column || !board.columns.some((c) => c.id === column)) return { error: 'unknown column: ' + column };
+  const column = body.column ? String(body.column) : 'backlog';
+  if (!board.columns.some((c) => c.id === column)) return { error: 'unknown column: ' + column };
   const actor = String(body.actor || actorDefault || 'agent').slice(0, 60);
   const card = {
-    id, title: title.slice(0, 200), column,
+    id, title: title.slice(0, 200), type, owner, column,
     labels: Array.isArray(body.labels) ? body.labels.filter((l) => typeof l === 'string' && l) : [],
     attributes: (body.attributes && typeof body.attributes === 'object') ? body.attributes : {},
     body: typeof body.body === 'string' ? body.body : '',
-    created: now(), updated: now(), threadStart: null,
+    created: now(), updated: now(), threadStart: null, pendingOrder: null,
     events: [], thread: [],
   };
   card.events.push(mkEvent({ text: 'created in ' + columnTitle(column), actor }, { kind: 'created' }));
   board.cards.push(card);
   registerCardLabels();
-  if (actor !== 'agent') pushFeedback({ kind: 'card-created', target: 'card:' + id, text: title, column });
+  if (actor === 'user') queuePush(owner, { kind: 'card-created', card: id, text: card.title, column });
   return { card };
 }
 
+// card.move — who moves matters (the DNA's side-effects table):
+//   captain (actor "user"):
+//     backlog → working  = start-order: the card does NOT move; a QueueItem goes
+//                          to the owner and the card carries pendingOrder
+//     review → backlog   = rework-order: same, optionally carrying the captain's
+//                          comment (body.text)
+//     anything else      = applies normally (parking in peer, reordering, …)
+//   lieutenant (any other actor): only → review (the handoff, a level-1 event)
+// Any APPLIED move clears pendingOrder — the ordered move happening (or the
+// captain rearranging) resolves the order marker.
 function moveCard(card, body, actorDefault) {
   const column = String(body.column || '');
   if (!board.columns.some((c) => c.id === column)) return { error: 'unknown column: ' + column };
   const actor = String(body.actor || actorDefault || 'agent').slice(0, 60);
   if (column === card.column) return { ok: true, unchanged: true };
   const from = card.column;
+
+  if (actor === 'user') {
+    const order = from === 'backlog' && column === 'working' ? 'start-order'
+      : from === 'review' && column === 'backlog' ? 'rework-order' : null;
+    if (order) {
+      const item = queuePush(card.owner, Object.assign(
+        { kind: order, card: card.id, from, to: column },
+        String(body.text || '').trim() ? { text: String(body.text).slice(0, 2000) } : {}));
+      card.pendingOrder = { kind: order, seq: item.seq, ts: item.ts };
+      const ev = mkEvent({ actor, kind: 'ordered',
+        text: (order === 'start-order' ? 'start ordered' : 'rework ordered') + ' (' + columnTitle(from) + ' → ' + columnTitle(column) + ')' }, {});
+      card.events.push(ev);
+      card.updated = now();
+      return { ok: true, ordered: order, event: ev, seq: item.seq };
+    }
+  } else if (column !== 'review') {
+    return { error: 'lieutenants move cards only to review (the handoff)' };
+  }
+
   card.column = column;
+  card.pendingOrder = null;
   card.updated = now();
   // A move is a deliberate act: it always lands on the timeline. Default kind:
-  // an agent move is a handoff (level 1 from the kinds map — notifies the human);
-  // any other actor's move is `moved` (level 2). `kind` in the body overrides
-  // (e.g. a non-handoff agent move passes kind "moved"); levels come from the
-  // effective kinds map unless an explicit level is given.
+  // a lieutenant move is a handoff (level 1 from the kinds map — rings the
+  // captain); a captain move is `moved` (level 2). `kind` in the body overrides;
+  // levels come from the effective kinds map unless an explicit level is given.
   const ev = mkEvent(
     { level: body.level, kind: body.kind, actor, text: columnTitle(from) + ' → ' + columnTitle(column) },
-    { kind: actor === 'agent' ? 'handoff' : 'moved' });
+    { kind: actor === 'user' ? 'moved' : 'handoff' });
   card.events.push(ev);
-  if (actor !== 'agent') pushFeedback({ kind: 'card-moved', target: 'card:' + card.id, text: card.title, from, column });
+  if (actor === 'user') queuePush(card.owner, { kind: 'card-moved', card: card.id, from, to: column });
   return { ok: true, event: ev };
 }
 
 function patchCard(card, body) {
   if (body.title !== undefined) card.title = String(body.title).slice(0, 200);
   if (body.body !== undefined) card.body = String(body.body);
+  if (body.type !== undefined && CARD_TYPES.includes(body.type)) card.type = body.type;
+  if (body.owner !== undefined && findLieutenant(String(body.owner))) card.owner = String(body.owner);
   if (Array.isArray(body.labels)) card.labels = body.labels.filter((l) => typeof l === 'string' && l);
   if (body.attributes && typeof body.attributes === 'object') {
     for (const [k, v] of Object.entries(body.attributes)) {
@@ -522,7 +629,7 @@ function archiveCard(card, body, actorDefault) {
   board.cards = board.cards.filter((c) => c.id !== card.id);
   // The kill lands on the board-level stream (the card is gone) with a card
   // reference. Typed by reason: merged = landed (level 1 — worth a bell),
-  // killed = killed (level 2 — the human's own act, no bell). Levels come from
+  // killed = killed (level 2 — the captain's own act, no bell). Levels come from
   // the effective kinds map.
   const ev = mkEvent(
     { level: body && body.level, kind: body && body.kind, actor, text: reason + ': ' + (note || card.title) },
@@ -551,7 +658,9 @@ function restoreCard(id, body) {
   if (!Array.isArray(card.thread)) card.thread = [];
   if (!Array.isArray(card.labels)) card.labels = [];
   if (!card.attributes || typeof card.attributes !== 'object') card.attributes = {};
+  if (!CARD_TYPES.includes(card.type)) card.type = 'implementation';
   card.status = { worker: null }; // the lease starts absent until the next status.set
+  card.pendingOrder = null;
   for (const e of card.events) if (e.seq > board.seq) board.seq = e.seq; // defensive: no seq reuse
   const ev = mkEvent({
     level: body && body.level, kind: body && body.kind, actor: body && body.actor,
@@ -594,9 +703,12 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/board') return sendJson(res, 200, publicBoard(url.searchParams.get('user') || 'user'));
     if (route === 'GET /api/config') return sendJson(res, 200, userConfig());
     if (route === 'GET /api/status') {
+      let pending = 0;
+      for (const lt of queueIds()) pending += pendingItems(lt).length;
       return sendJson(res, 200, {
-        board: opts.board, port: opts.port, cards: board.cards.length, seq: board.seq,
-        feedback_seq: fseq, feedback_ack: ackSeq,
+        workspace: WORKSPACE, port: PORT, cards: board.cards.length,
+        lieutenants: board.lieutenants.length, seq: board.seq,
+        queue_seq: qseq, queue_pending: pending,
         pid: process.pid,
       });
     }
@@ -624,6 +736,15 @@ const server = http.createServer(async (req, res) => {
       if (data.length > 2e6) return sendJson(res, 413, { error: 'file too large to preview' });
       if (data.includes(0)) return sendJson(res, 415, { error: 'binary file' });
       return sendJson(res, 200, { name: path.basename(file), content: data.toString('utf8') });
+    }
+
+    // ----- lieutenants -----
+    if (route === 'GET /api/lieutenants') return sendJson(res, 200, { lieutenants: board.lieutenants });
+    if (route === 'POST /api/lieutenants') {
+      const r = createLieutenant(JSON.parse(await readBody(req) || '{}'));
+      if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, lieutenant: r.lieutenant });
     }
 
     // ----- cards -----
@@ -694,22 +815,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, event: ev });
     }
 
-    // ----- columns (owned state; idempotent replace) -----
-    if (route === 'PUT /api/columns') {
-      const cols = JSON.parse(await readBody(req) || 'null');
-      if (!Array.isArray(cols) || !cols.every((c) => c && typeof c.id === 'string' && typeof c.title === 'string')) {
-        return sendJson(res, 400, { error: 'columns must be [{id:string,title:string}]' });
-      }
-      const next = cols.map((c) => ({ id: c.id, title: c.title }));
-      if (JSON.stringify(next) === JSON.stringify(board.columns)) {
-        return sendJson(res, 200, { ok: true, columns: board.columns.length, unchanged: true });
-      }
-      board.columns = next;
-      saveBoard(); broadcast();
-      return sendJson(res, 200, { ok: true, columns: board.columns.length });
-    }
-
-    // ----- kinds (registered map; idempotent replace, mirrors the columns frame) -----
+    // ----- kinds (registered map; idempotent replace) -----
     if (route === 'GET /api/kinds') {
       return sendJson(res, 200, { kinds: effectiveKinds(), registered: board.kinds });
     }
@@ -742,34 +848,42 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- chat -----
-    if (route === 'POST /api/message') { // agent -> human
+    if (route === 'POST /api/message') { // lieutenant -> captain (chat.say, lieutenant side)
       const body = JSON.parse(await readBody(req) || '{}');
-      const target = body.target || 'chat';
+      const target = String(body.target || '');
       const thread = threadFor(target);
       if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text_md || body.text || '');
       if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
-      const msg = { author: String(body.author || 'agent').slice(0, 60), text, ts: now() };
+      // Default author: the target's lieutenant — the interlocutor is always the
+      // owning lieutenant, card threads included.
+      const lt = targetLieutenant(target);
+      const msg = { author: String(body.author || (lt && lt.name) || 'agent').slice(0, 60), text, ts: now() };
       thread.push(msg);
       const m = /^card:(.+)$/.exec(target);
       if (m) {
         const card = findCard(m[1]);
         if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
       } else {
-        // A free-form agent message in the main chat is a level-1 notification.
+        // A free-form lieutenant message in its main chat is a level-1 notification.
         const ev = mkEvent({ text: text.slice(0, 200), actor: msg.author, level: body.level, kind: body.kind }, { level: 1 });
         board.events.push(ev);
       }
-      saveBoard(); broadcast(); // an agent reply clears derived owed via broadcast
+      saveBoard(); broadcast(); // a lieutenant reply clears derived owed via broadcast
       return sendJson(res, 200, { ok: true });
     }
-    if (route === 'POST /api/feedback') { // human -> agent
+    if (route === 'POST /api/feedback') { // captain -> lieutenant (chat.say, captain side)
       const body = JSON.parse(await readBody(req) || '{}');
-      const target = body.target || 'chat';
+      const target = String(body.target || '');
       const thread = threadFor(target);
       if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text || '');
       if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
+      const lt = targetLieutenant(target);
+      if (!lt) return sendJson(res, 404, { error: 'no lieutenant behind target: ' + target });
+      // Write-ahead delivery: the QueueItem lands FIRST; the send-keys wake half
+      // of delivery arrives in a later phase. A dead session loses nothing.
+      const item = queuePush(lt.id, { kind: 'message', target, text });
       const msg = { author: 'user', text, ts: now() };
       thread.push(msg);
       const m = /^card:(.+)$/.exec(target);
@@ -777,9 +891,8 @@ const server = http.createServer(async (req, res) => {
         const card = findCard(m[1]);
         if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
       }
-      const ev = pushFeedback({ kind: 'message', target, text });
-      saveBoard(); broadcast(); // user message flips derived owed via broadcast
-      return sendJson(res, 200, { ok: true, seq: ev.seq });
+      saveBoard(); broadcast(); // a captain message flips derived owed via broadcast
+      return sendJson(res, 200, { ok: true, seq: item.seq });
     }
 
     // ----- read state (persisted server-side, per user) -----
@@ -788,12 +901,12 @@ const server = http.createServer(async (req, res) => {
       const r = userReads(body.user);
       if (body.all) {
         r.notifSeq = board.seq; r.notifSeqs = [];
-        // Clearing is reading: unseen agent replies clear via the same thread
-        // read marker that opening the card would set, so mark-all advances it
-        // for every card that still has an unseen reply.
+        // Clearing is reading: unseen lieutenant replies clear via the same
+        // thread read marker that opening the card would set, so mark-all
+        // advances it for every card that still has an unseen reply.
         const ts = now();
         for (const c of board.cards) {
-          const readMs = lastCardReadMs(c, body.user);
+          const readMs = lastThreadReadMs('card:' + c.id, body.user);
           if ((c.thread || []).some((m) => m.author !== 'user' && Date.parse(m.ts) > readMs)) {
             r.threads['card:' + c.id] = ts;
           }
@@ -809,7 +922,7 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req) || '{}');
       const r = userReads(body.user);
       const target = String(body.target || '');
-      if (!/^(chat|card:.+)$/.test(target)) return sendJson(res, 400, { error: 'bad target' });
+      if (!/^(lieutenant:.+|card:.+)$/.test(target)) return sendJson(res, 400, { error: 'bad target' });
       r.threads[target] = body.ts || now();
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true });
@@ -856,31 +969,21 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, labels: board.labels });
     }
 
-    // ----- agent long-poll (no ?since = everything past the committed ack cursor) -----
-    if (route === 'GET /api/poll') {
-      const sinceParam = url.searchParams.get('since');
-      const since = sinceParam == null || sinceParam === '' ? null : (parseInt(sinceParam, 10) || 0);
-      const evs = feedbackSince(since == null ? ackSeq : since);
-      if (evs.length) return sendJson(res, 200, { events: evs, cursor: fseq, ack: ackSeq });
-      if (url.searchParams.get('nowait')) return sendJson(res, 200, { events: [], cursor: fseq, ack: ackSeq });
-      const poller = { since, res, timer: null };
-      poller.timer = setTimeout(() => {
-        pollers = pollers.filter((x) => x !== poller);
-        sendJson(res, 200, { events: [], cursor: fseq, ack: ackSeq });
-      }, 60000);
-      req.on('close', () => { clearTimeout(poller.timer); pollers = pollers.filter((x) => x !== poller); });
-      pollers.push(poller);
-      return;
+    // ----- feed.drain: pending QueueItems past the committed ack cursor -----
+    if (route === 'GET /api/feed') {
+      const lt = url.searchParams.get('lieutenant') || '';
+      if (lt && !findLieutenant(lt)) return sendJson(res, 404, { error: 'unknown lieutenant: ' + lt });
+      return sendJson(res, 200, { items: drainItems(lt), head: qseq });
     }
 
-    // ----- agent ack: commit the cursor AFTER the feedback was handled -----
-    if (route === 'POST /api/poll/ack') {
+    // ----- feed.ack: commit the cursor AFTER the items were handled -----
+    if (route === 'POST /api/feed/ack') {
       const body = JSON.parse(await readBody(req) || '{}');
       const seq = parseInt(body.seq, 10);
       if (!Number.isInteger(seq) || seq < 0) return sendJson(res, 400, { error: 'seq required (integer)' });
-      if (seq > fseq) return sendJson(res, 400, { error: 'seq ' + seq + ' beyond queue head ' + fseq });
-      commitAck(seq);
-      return sendJson(res, 200, { ok: true, ack: ackSeq });
+      const r = commitAck(seq);
+      if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+      return sendJson(res, 200, r);
     }
 
     // ----- SSE -----
@@ -899,12 +1002,13 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.on('error', (e) => { console.error('server error: ' + e.message); cleanup(); process.exit(1); });
-server.listen(opts.port, BIND_HOST, () => {
-  console.log('bridge server up: http://localhost:' + opts.port + '/ host=' + BIND_HOST + ' board=' + opts.board + ' pid=' + process.pid);
+server.listen(PORT, BIND_HOST, () => {
+  console.log('bridge-command server up: http://localhost:' + PORT + '/ host=' + BIND_HOST +
+    ' workspace=' + WORKSPACE + ' pid=' + process.pid);
 });
 // Non-loopback bind: also listen on loopback so local CLI/UI keep working.
 if (!LOOPBACKS.includes(BIND_HOST) && BIND_HOST !== '0.0.0.0') {
   const local = http.createServer(server.listeners('request')[0]);
   local.on('error', (e) => { console.error('loopback listener error: ' + e.message); });
-  local.listen(opts.port, '127.0.0.1');
+  local.listen(PORT, '127.0.0.1');
 }
