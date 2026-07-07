@@ -982,6 +982,11 @@ async function doStartCard(card, body) {
 
   const existing = findWorker(card.id);
   if (body && body.resume) {
+    if (body.brief) {
+      return { error: 'resume does not deliver briefs — the reincarnated worker keeps its own context '
+        + 'and the brief would be silently dropped. To hand a live worker new instructions: '
+        + 'bc-axi worker send ' + card.id + ' --text-file <f|->' };
+    }
     if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
     let ref;
     try {
@@ -1117,6 +1122,37 @@ function workerDone(card, body) {
   card.updated = now();
   queuePush(card.owner, { kind: 'worker-done', card: card.id, text: outcome.slice(0, 2000) });
   return { ok: true, event: ev };
+}
+
+// worker.send — lieutenant -> live worker: deliver text into the worker's
+// session through the harness typer (verified submission), the same send half
+// captain-feedback delivery uses for its wake. Workers have no queue, so the
+// pane IS the delivery — the send is awaited and its real outcome reported;
+// a level-2 card event records what was handed over.
+async function workerSend(card, body) {
+  const text = String((body && body.text) || '').trim();
+  if (!text) return { error: 'text required' };
+  const w = findWorker(card.id);
+  if (!w) {
+    return { error: 'no worker bound to card ' + card.id + ' — start one first (card start ' + card.id + ')', code: 404 };
+  }
+  if (w.done) {
+    return { error: 'worker for ' + card.id + ' already reported done — spawn a fresh one (card start ' + card.id + ') instead of sending into a finished session', code: 409 };
+  }
+  let up = false;
+  try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+  if (!up) {
+    return { error: 'worker session ' + w.ref.session + ' is not alive — resume it first (card start ' + card.id + ' --resume), then send', code: 409 };
+  }
+  try {
+    await harnessFor(w.ref).send(w.ref, text);
+  } catch (e) {
+    return { error: 'delivery to ' + w.ref.session + ' failed: ' + String((e && e.message) || e), code: 502 };
+  }
+  const ev = mkEvent({ text: 'sent to worker: ' + text.slice(0, 1900), actor: (body && body.actor) || 'agent' }, { kind: 'worker-send' });
+  card.events.push(ev);
+  card.updated = now();
+  return { ok: true, event: ev, session: w.ref.session };
 }
 
 // ---------- supervision loop (invariant 8: supervision is infrastructure) ----------
@@ -1472,7 +1508,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, card: publicCard(r.card, 'user'), event: r.event });
     }
-    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|worker\/signal|worker\/done))?$/.exec(p);
+    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|worker\/signal|worker\/done|worker\/send))?$/.exec(p);
     if (cardRoute) {
       const card = findCard(decodeURIComponent(cardRoute[1]));
       if (!card) return sendJson(res, 404, { error: 'unknown card: ' + decodeURIComponent(cardRoute[1]) });
@@ -1488,6 +1524,12 @@ const server = http.createServer(async (req, res) => {
         if (r.error) return sendJson(res, 400, { error: r.error });
         saveBoard(); broadcast();
         return sendJson(res, 200, { ok: true, event: r.event });
+      }
+      if (sub === 'worker/send' && req.method === 'POST') {
+        const r = await workerSend(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, event: r.event, session: r.session });
       }
       if (sub === 'worker/done' && req.method === 'POST') {
         const r = workerDone(card, JSON.parse(await readBody(req) || '{}'));
@@ -1604,7 +1646,19 @@ const server = http.createServer(async (req, res) => {
       const m = /^card:(.+)$/.exec(target);
       if (m) {
         const card = findCard(m[1]);
-        if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
+        if (card) {
+          card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts;
+          // A card-thread say from anyone but the owning lieutenant — its own
+          // worker (whose session resolves to no lieutenant), a peer, raw
+          // tooling — must WAKE the owner: the thread alone notifies nobody.
+          // Default-notify: only a session-identified owner is exempt (author
+          // names can't be trusted — an unidentified worker is stamped with
+          // the owner's name). Captain messages ride /api/feedback, never here.
+          const fromOwner = !!(caller && caller.id === card.owner);
+          if (!fromOwner && msg.author !== 'user') {
+            queuePush(card.owner, { kind: 'worker-said', card: card.id, target, author: msg.author, text: text.slice(0, 2000) });
+          }
+        }
       } else {
         // A free-form lieutenant message in its main chat is a level-1 notification.
         const ev = mkEvent({ text: text.slice(0, 200), actor: msg.author, level: body.level, kind: body.kind }, { level: 1 });

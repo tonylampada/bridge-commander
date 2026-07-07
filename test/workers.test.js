@@ -371,3 +371,59 @@ test('fresh restart after done: refuses over a live session; releases the dead o
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test('worker send: delivers into the live worker session + level-2 card event; loud errors when it cannot', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    const wsArgs = ['--workspace', s.dir, '--port', String(s.port)];
+
+    // no worker bound → clear error, API and CLI
+    await s.api('POST', '/api/cards', withOwner({ title: 'Steer', id: 'steer', attributes: { repo: 'proj' } }));
+    let r = await s.api('POST', '/api/cards/steer/worker/send', { text: 'too early' });
+    assert.strictEqual(r.status, 404);
+    assert.match(r.body.error, /no worker bound/);
+    let cli = await runCli(['worker', 'send', 'steer', 'too early', ...wsArgs]);
+    assert.strictEqual(cli.code, 1);
+    assert.match(cli.stderr, /no worker bound/);
+
+    // live worker → text typed into its session (the fake logs sends), event recorded
+    assert.strictEqual((await s.api('POST', '/api/cards/steer/start', { harness: 'fake' })).status, 200);
+    const sess = workerSession(s.dir, 'steer');
+    cli = await runCli(['worker', 'send', 'steer', 'also fix the flaky test', ...wsArgs]);
+    assert.strictEqual(cli.code, 0, cli.stderr);
+    assert.match(cli.stdout, /sent -> worker /);
+    const sends = fs.readFileSync(path.join(fdir, sess + '.sends.jsonl'), 'utf8')
+      .trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepStrictEqual(sends.map((x) => x.text), ['also fix the flaky test']);
+    const card = (await s.api('GET', '/api/cards/steer')).body;
+    const ev = card.events[card.events.length - 1];
+    assert.strictEqual(ev.kind, 'worker-send');
+    assert.strictEqual(ev.level, 2);
+    assert.match(ev.text, /also fix the flaky test/);
+
+    // empty text rejected; a done worker refuses (spawn fresh instead)
+    assert.strictEqual((await s.api('POST', '/api/cards/steer/worker/send', { text: '  ' })).status, 400);
+    await s.api('POST', '/api/cards/steer/worker/done', { outcome: 'landed' });
+    r = await s.api('POST', '/api/cards/steer/worker/send', { text: 'one more thing' });
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /already reported done/);
+  } finally { await teardown(); }
+});
+
+test('card start --resume refuses a brief and points at worker send (API + CLI)', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Rez', id: 'rez', attributes: { repo: 'proj' } }));
+    await s.api('POST', '/api/cards/rez/start', { harness: 'fake' });
+    const r = await s.api('POST', '/api/cards/rez/start', { resume: true, brief: 'new instructions' });
+    assert.strictEqual(r.status, 400);
+    assert.match(r.body.error, /worker send rez/);
+    // the CLI refuses loudly before even reaching the server
+    const bf = path.join(s.dir, 'brief.md');
+    fs.writeFileSync(bf, 'new instructions');
+    const cli = await runCli(['card', 'start', 'rez', '--resume', '--brief-file', bf,
+      '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 1);
+    assert.match(cli.stderr, /worker send rez/);
+  } finally { await teardown(); }
+});

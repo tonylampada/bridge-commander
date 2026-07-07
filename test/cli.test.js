@@ -95,11 +95,24 @@ test('cli card create / board / say / drain / ack round-trip against a test serv
     // lieutenant reply via say (interlocutor default: the owning lieutenant)
     const sayFile = path.join(s.dir, 'reply.md');
     fs.writeFileSync(sayFile, 'on it, captain');
-    r = await runCli(['say', 'card:cli-card', '--text-file', sayFile, ...args]);
+    r = await runCli(['say', 'card:cli-card', '--text-file', sayFile, ...args], { TMUX: '' });
     assert.strictEqual(r.code, 0, r.stderr);
     const card = (await s.api('GET', '/api/cards/cli-card')).body;
     assert.strictEqual(card.thread[1].author, 'Ada');
     assert.strictEqual(card.thread[1].text, 'on it, captain');
+
+    // an UNIDENTIFIED card-thread say default-notifies the owner (worker-said);
+    // only a session-identified owner is exempt (Ada here has no ref)
+    r = await runCli(['drain', '--lieutenant', LT, '--json', ...args]);
+    const said = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
+    assert.strictEqual(said.length, 1);
+    assert.strictEqual(said[0].kind, 'worker-said');
+    assert.strictEqual(said[0].text, 'on it, captain');
+    r = await runCli(['drain', '--lieutenant', LT, ...args]);
+    assert.match(r.stdout, /worker said — card cli-card/);
+    assert.match(r.stdout, /bc-axi worker send cli-card/);
+    r = await runCli(['ack', String(said[0].seq), ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
 
     // lieutenant handoff via the CLI
     r = await runCli(['card', 'move', 'cli-card', 'review', ...args]);
