@@ -211,10 +211,23 @@ function wire() {
       e.preventDefault();
       col.classList.remove('drag-over');
       const cardId = e.dataTransfer.getData('text/bc-card');
-      if (cardId) { try { await api.moveCard(cardId, id); } catch (err) { alert(err.message); } }
+      if (cardId) { try { await api.moveCard(cardId, id, orderComment(cardId, id)); } catch (err) { alert(err.message); } }
     };
     col.querySelector('.add-card').onclick = (e) => { e.stopPropagation(); openNewCard(id); };
   });
+}
+
+// A captain move that becomes an ORDER (any → working = start-order,
+// review → backlog = rework-order) carries an optional comment for the owning
+// lieutenant (the DNA: the rework-order QueueItem carries the captain's thread
+// comment). Empty or cancelled = no comment; the order still goes.
+function orderComment(cardId, to) {
+  const c = cards().find((k) => k.id === cardId);
+  if (!c || c.column === to) return '';
+  const order = to === 'working' ? 'start order'
+    : c.column === 'review' && to === 'backlog' ? 'rework order' : '';
+  if (!order) return '';
+  return (window.prompt('Comment for the ' + order + ' (optional):', '') || '').trim();
 }
 
 // ---------- move / actions menu ----------
@@ -231,7 +244,7 @@ export function openMoveMenu(cardId, x, y) {
     const b = document.createElement('button');
     b.textContent = (col.id === c.column ? '● ' : '') + col.title;
     if (col.id === c.column) b.className = 'cur';
-    else b.onclick = async () => { closeMoveMenu(); try { await api.moveCard(cardId, col.id); } catch (e) { alert(e.message); } };
+    else b.onclick = async () => { closeMoveMenu(); try { await api.moveCard(cardId, col.id, orderComment(cardId, col.id)); } catch (e) { alert(e.message); } };
     menuEl.appendChild(b);
   }
   const sep = document.createElement('div');

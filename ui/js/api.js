@@ -18,8 +18,10 @@ export const api = {
   retireLieutenant: (id) => j('DELETE', '/api/lieutenants/' + encodeURIComponent(id), { actor: 'user' }),
   createCard: (card) => j('POST', '/api/cards', Object.assign({ actor: 'user' }, card)),
   // A captain move may come back as {ordered: 'start-order'|'rework-order'}
-  // instead of an applied move — backlog→working and review→backlog are orders.
-  moveCard: (id, column) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/move', { column, actor: 'user' }),
+  // instead of an applied move — any→working and review→backlog are orders.
+  // `text` rides on the order QueueItem as the captain's comment.
+  moveCard: (id, column, text) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/move',
+    Object.assign({ column, actor: 'user' }, text ? { text } : {})),
   patchCard: (id, patch) => j('PATCH', '/api/cards/' + encodeURIComponent(id), patch),
   archiveCard: (id, reason) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/archive', { actor: 'user', reason }),
   feedback: (target, text) => j('POST', '/api/feedback', { target, text }),
