@@ -502,19 +502,24 @@ a.a-uri { color: var(--accent); }
 .md th, .md td { border: 1px solid var(--line2); padding: 3px 8px; text-align: left; vertical-align: top; }
 .md th { background: var(--panel2); color: var(--dim); font-weight: 600; font-size: 12px; white-space: nowrap; }
 
-/* ---------- move menu ---------- */
-#move-menu {
+/* ---------- move menu (owner menu shares the look) ---------- */
+#move-menu, #owner-menu {
   position: fixed; z-index: 80; min-width: 190px; display: flex; flex-direction: column;
   background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; padding: 5px;
   box-shadow: var(--shadow); animation: pop-in .12s ease-out;
 }
-#move-menu .mm-head { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 5px 10px 3px; }
-#move-menu button { text-align: left; font-size: 12.5px; padding: 7px 10px; border-radius: 7px; }
-#move-menu button:hover { background: var(--panel2); }
+#move-menu .mm-head, #owner-menu .mm-head { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 5px 10px 3px; }
+#move-menu button, #owner-menu button { text-align: left; font-size: 12.5px; padding: 7px 10px; border-radius: 7px; }
+#move-menu button:hover, #owner-menu button:hover { background: var(--panel2); }
 #move-menu button.cur { color: var(--faint); cursor: default; }
 #move-menu button.danger { color: var(--danger); }
 #move-menu button.danger:hover { background: rgba(239, 100, 97, .1); }
 #move-menu .mm-sep { height: 1px; background: var(--line); margin: 4px 6px; }
+#owner-menu button { display: flex; align-items: center; gap: 7px; }
+#owner-menu button .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+#owner-menu .mm-none { color: var(--faint); font-size: 12.5px; padding: 7px 10px; }
+.attr-owner .owner-edit { border: none; background: none; cursor: pointer; padding: 0 2px; font-size: 11px; opacity: .6; }
+.attr-owner .owner-edit:hover { opacity: 1; }
 
 /* ---------- new card modal ---------- */
 #nc-overlay {
