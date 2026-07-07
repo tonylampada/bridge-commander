@@ -83,7 +83,12 @@ just trust the outcome text — then rewrite the card body to current state (wha
 where: file, branch, PR) and hand off (`card move <id> review`) — the card never leaves
 Working by itself.
 `worker-died` means the session died mid-work: resume it (`card start <id> --resume`,
-same worktree and memory) or move the card back. Steer a live worker with a short line
+same worktree and memory) or park the card back to Backlog (`card park <id>` — legal only
+while the worker is absent or dead; the server re-checks). To stop a worker ON PURPOSE
+(machine pressure, deprioritized work), never kill its session by hand — that reads as a
+crash. Use `bc-axi worker pause <id>` (deliberate stop, no WORKER DIED alarm, record and
+worktree stay resumable), or `worker pause <id> --park` to also shelve the card in one
+step. Steer a live worker with a short line
 typed into its tmux session (the card's `session` attribute); anything long belongs in a rework restart
 with an updated brief. Never do the worker's job yourself.
 

@@ -42,7 +42,7 @@ const opts = {
   name: null, color: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
-  mode: null, briefFile: null, resume: false, outcome: null, model: null,
+  mode: null, briefFile: null, resume: false, outcome: null, model: null, park: false,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -77,6 +77,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
   else if (a === '--resume') opts.resume = true;
+  else if (a === '--park') opts.park = true;
   else if (a === '--outcome') opts.outcome = argv[++i];
   else positional.push(a);
 }
@@ -584,6 +585,42 @@ async function cmdWorkerSend() {
   console.log('sent -> worker ' + r.session + ' (card ' + id + ')');
 }
 
+// worker.pause — the lieutenant's DELIBERATE stop: the server kills the worker
+// session but records the stop as intentional (worker-paused event, no
+// WORKER DIED alarm); the record + worktree stay resumable. --park composes
+// card park (Working → Backlog) in the same call.
+async function cmdWorkerPause() {
+  const id = positional[0];
+  if (!id) {
+    die('usage: bc-axi worker pause <card-id> [--park]\n' +
+      '  Kill the worker\'s session as a DELIBERATE stop (no WORKER DIED alarm); the worker\n' +
+      '  record and worktree survive for card start <card-id> --resume.\n' +
+      '  --park also moves the card Working -> Backlog (card park) in the same step.');
+  }
+  const body = { actor: opts.actor || 'agent' };
+  if (opts.park) body.park = true;
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/worker/pause', body, 60000);
+  console.log('paused worker ' + r.session + ' (card ' + id + ') — deliberate stop; resume: bc-axi card start ' + id + ' --resume');
+  if (opts.park) {
+    if (r.parked) console.log('parked ' + id + ' -> backlog');
+    else die('pause landed but park failed: ' + (r.parkError || 'unknown'));
+  }
+}
+
+// card.park — the narrow door out of Working for a dead/absent worker: the
+// server re-checks liveness itself and refuses an alive worker loudly.
+async function cmdCardPark() {
+  const id = positional[0];
+  if (!id) {
+    die('usage: bc-axi card park <card-id>\n' +
+      '  Move a Working card whose worker is absent or DEAD back to Backlog (timeline event).\n' +
+      '  Liveness is re-checked server-side; a live worker refuses — pause it instead\n' +
+      '  (bc-axi worker pause <card-id> [--park]).');
+  }
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/park', { actor: opts.actor || 'agent' }, 60000);
+  console.log('parked ' + id + ' -> backlog (event #' + r.event.seq + ')');
+}
+
 // ---------- projects (F6) ----------
 async function cmdProjectAdd() {
   const source = positional[0];
@@ -676,7 +713,7 @@ async function cmdDrain() {
       hint = 'worker stopped without reporting — peek its session (tmux attach -t ' + sess + ') or steer it, then act';
     } else if (it.kind === 'worker-died') {
       head = 'WORKER DIED — ' + cardBit(it.card);
-      hint = 'the worker session died without done: resume it (bc-axi card start ' + it.card + ' --resume) or move the card back to backlog';
+      hint = 'the worker session died without done: resume it (bc-axi card start ' + it.card + ' --resume) or park the card back to backlog (bc-axi card park ' + it.card + ')';
     } else if (it.kind === 'pr-merged') {
       head = 'PR MERGED — ' + cardBit(it.card);
       hint = 'the server archived the card and released the worktree; nothing to do beyond noting it';
@@ -770,8 +807,9 @@ const commands = {
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
-  'card start': cmdStart,
+  'card start': cmdStart, 'card park': cmdCardPark,
   'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone, 'worker send': cmdWorkerSend,
+  'worker pause': cmdWorkerPause,
   show: cmdShow, // alias for card show
   event: cmdEvent, notify: cmdNotify,
   say: cmdSay, drain: cmdDrain, ack: cmdAck,
@@ -834,9 +872,16 @@ if (!commands[cmd]) {
     '                                         cards, Working cards, and unregistered repos. --resume\n' +
     '                                         reincarnates the recorded worker (after worker-died);\n' +
     '                                         it never takes --brief-file (use worker send instead)\n' +
+    '  card park <card-id>                    move a Working card whose worker is absent or DEAD back\n' +
+    '                                         to Backlog (liveness re-checked server-side; a live\n' +
+    '                                         worker refuses — pause it instead). Timeline event\n' +
     '  worker send <card-id> "<instructions>" [--text-file f|-]\n' +
     '                                         hand a LIVE worker new instructions: typed into its\n' +
     '                                         session with verified submission (run by the lieutenant)\n' +
+    '  worker pause <card-id> [--park]        DELIBERATE stop: kill the worker session WITHOUT the\n' +
+    '                                         WORKER DIED alarm (worker-paused event); record +\n' +
+    '                                         worktree survive for card start --resume. --park also\n' +
+    '                                         moves the card Working -> Backlog (run by the lieutenant)\n' +
     '\nworker (run by the worker itself, from its worktree):\n' +
     '  worker signal <card-id> "<milestone>" [--text-file f|-]\n' +
     '                                         real milestone -> level-2 card event + QueueItem to owner\n' +
