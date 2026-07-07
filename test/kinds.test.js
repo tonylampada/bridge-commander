@@ -22,6 +22,7 @@ const BUILTINS = {
   signal: { emoji: '📡', level: 2 },
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
+  'worker-stopped': { emoji: '⏸️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
   'needs-captain': { emoji: '🚨', level: 1 },
 };

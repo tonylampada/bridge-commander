@@ -16,9 +16,10 @@ test('restore round-trip: frozen state intact, level-1 event appended, archive r
   const s = await startServerWithLieutenant();
   try {
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Revive me', column: 'peer', type: 'implementation', body: 'the deliverable so far',
+      title: 'Revive me', type: 'implementation', body: 'the deliverable so far',
       labels: ['blue'], attributes: { repo: 'demo-app', branch: 'bc/revive-me' },
     }));
+    await s.api('POST', '/api/cards/revive-me/move', { column: 'peer', actor: 'user' }); // parked on the captain's shelf
     await s.api('POST', '/api/cards/revive-me/events', { text: 'made progress', level: 2 });
     await s.api('POST', '/api/feedback', { target: 'card:revive-me', text: 'how is it going?' });
     await s.api('POST', '/api/message', { target: 'card:revive-me', text: 'halfway there' });
@@ -95,6 +96,35 @@ test('multiple archive records for one id: the most recent snapshot wins', async
     assert.strictEqual(card.body, 'v2'); // latest frozen state, not the first
     assert.strictEqual(card.column, 'review');
     assert.strictEqual(archiveRecords(s).length, 2); // restore never rewrites the log
+  } finally {
+    await s.stop();
+  }
+});
+
+test('a snapshot frozen in Working restores into Backlog (never workerless Working)', async () => {
+  const nowIso = new Date().toISOString();
+  const s = await startServerWithLieutenant({
+    seed(dir) {
+      const sd = path.join(dir, '.bridge-command');
+      fs.mkdirSync(sd, { recursive: true });
+      fs.writeFileSync(path.join(sd, 'archive.jsonl'), JSON.stringify({
+        ts: nowIso, actor: 'user', reason: 'killed',
+        card: {
+          id: 'was-working', title: 'Was working', type: 'implementation', owner: LT, column: 'working',
+          labels: [], attributes: {}, body: '', created: nowIso, updated: nowIso,
+          threadStart: null, pendingOrder: null, events: [], thread: [],
+        },
+      }) + '\n');
+    },
+  });
+  try {
+    const r = await s.api('POST', '/api/cards/was-working/restore', {});
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.card.column, 'backlog');
+    const ev = r.body.card.events[r.body.card.events.length - 1];
+    assert.strictEqual(ev.level, 1);
+    assert.match(ev.text, /restored to backlog \(was working\)/);
+    assert.strictEqual((await s.api('GET', '/api/cards/was-working')).body.column, 'backlog');
   } finally {
     await s.stop();
   }

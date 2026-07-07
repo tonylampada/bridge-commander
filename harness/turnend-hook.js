@@ -19,6 +19,19 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { execFileSync } = require('node:child_process');
+
+// The hook runs inside the agent's own pane, so its tmux session identifies
+// the session exactly (the server attributes lieutenant turn-ends by it).
+// Empty when not under tmux; never fails the hook when tmux is absent.
+function tmuxSession() {
+  if (!process.env.TMUX) return '';
+  try {
+    return execFileSync('tmux', ['display-message', '-p', '#S'], { encoding: 'utf8' }).trim();
+  } catch {
+    return '';
+  }
+}
 
 function readStdin() {
   return new Promise((resolve) => {
@@ -56,6 +69,7 @@ async function main() {
     event: payload.hook_event_name || 'Stop',
     session_id: payload.session_id || null,
     cwd: payload.cwd || null,
+    tmux_session: tmuxSession(),
   };
 
   try {

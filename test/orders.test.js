@@ -41,7 +41,8 @@ test('captain backlog→working drag is a start-order, not a move', async () => 
 test('captain review→backlog drag is a rework-order carrying the comment', async () => {
   const s = await startServerWithLieutenant();
   try {
-    await s.api('POST', '/api/cards', withOwner({ title: 'Rejected', column: 'review' }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Rejected' }));
+    await s.api('POST', '/api/cards/rejected/move', { column: 'review' }); // the handoff put it on the captain's desk
     const r = await s.api('POST', '/api/cards/rejected/move', {
       column: 'backlog', actor: 'user', text: 'tests are missing — please add coverage',
     });
@@ -56,6 +57,40 @@ test('captain review→backlog drag is a rework-order carrying the comment', asy
     assert.strictEqual(it.kind, 'rework-order');
     assert.strictEqual(it.card, 'rejected');
     assert.strictEqual(it.text, 'tests are missing — please add coverage');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('captain drag into Working from ANY column is a start-order; lieutenant move to working is a 409', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    // review → working: previously fell through to a plain write (a workerless
+    // Working card); now the same start-order as backlog → working
+    await s.api('POST', '/api/cards', withOwner({ title: 'From review' }));
+    await s.api('POST', '/api/cards/from-review/move', { column: 'review' }); // the handoff
+    let r = await s.api('POST', '/api/cards/from-review/move', { column: 'working', actor: 'user' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.ordered, 'start-order');
+    let card = (await s.api('GET', '/api/cards/from-review')).body;
+    assert.strictEqual(card.column, 'review', 'the card did NOT move');
+    assert.strictEqual(card.pendingOrder.kind, 'start-order');
+
+    // peer → working too
+    await s.api('POST', '/api/cards', withOwner({ title: 'From peer' }));
+    await s.api('POST', '/api/cards/from-peer/move', { column: 'peer', actor: 'user' });
+    r = await s.api('POST', '/api/cards/from-peer/move', { column: 'working', actor: 'user' });
+    assert.strictEqual(r.body.ordered, 'start-order');
+    assert.strictEqual((await s.api('GET', '/api/cards/from-peer')).body.column, 'peer');
+
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
+    assert.strictEqual(items.filter((i) => i.kind === 'start-order').length, 2);
+
+    // a lieutenant move into working is refused loudly — only card.start enters
+    r = await s.api('POST', '/api/cards/from-review/move', { column: 'working' });
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /card start/);
+    assert.strictEqual((await s.api('GET', '/api/cards/from-review')).body.column, 'review');
   } finally {
     await s.stop();
   }

@@ -428,7 +428,7 @@ async function cmdKinds() {
 async function cmdCreate() {
   if (!opts.title || !opts.owner) {
     die('usage: bc-axi card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
-      '                    [--column c] [--id id] [--body-file f|-] [--attr k=v]... [--label l]...');
+      '                    [--id id] [--body-file f|-] [--attr k=v]... [--label l]...   (cards are born in Backlog)');
   }
   const body = {
     title: opts.title, owner: opts.owner, actor: opts.actor || 'agent',
@@ -455,14 +455,14 @@ async function cmdMove() {
 
 async function cmdPatch() {
   const id = positional[0];
-  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--owner lt] [--body-file f|-] [--attr k=v]... (--attr k= deletes)');
+  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--body-file f|-] [--attr k=v]... (--attr k= deletes)');
+  if (opts.owner !== null) die('owner is immutable — archive and recreate under the other lieutenant');
   const body = {};
   if (opts.title !== null) body.title = opts.title;
   if (opts.type !== null) body.type = opts.type;
-  if (opts.owner !== null) body.owner = opts.owner;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   if (opts.attrs.length) body.attributes = parseAttrs(opts.attrs);
-  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --owner / --body-file / --attr)');
+  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --body-file / --attr)');
   await request('PATCH', '/api/cards/' + encodeURIComponent(id), body);
   console.log('patched ' + id);
 }
@@ -583,6 +583,11 @@ async function cmdSay() {
   if (!target || !TARGET_RE.test(target)) die('usage: bc-axi say <lieutenant:ID|card:ID> [--actor a] [--text-file f|-]  (text from --text-file or stdin)');
   const text = readInput(opts.textFile);
   const body = { target, text_md: text };
+  // Author self-identification, like drain/ack: the server resolves the
+  // caller's tmux session to its lieutenant so a say to another lieutenant's
+  // chat or card is stamped as the CALLER, not the target. --actor overrides.
+  const sess = currentTmuxSession();
+  if (sess) body.session = sess;
   if (opts.actor) body.author = opts.actor;
   await request('POST', '/api/message', body);
   console.log('said -> ' + target);
@@ -633,6 +638,11 @@ async function cmdDrain() {
     } else if (it.kind === 'worker-done') {
       head = 'WORKER DONE — ' + cardBit(it.card);
       hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text), rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
+    } else if (it.kind === 'worker-stopped') {
+      const c = cards.find((x) => x.id === it.card);
+      const sess = (c && c.attributes && c.attributes.session) || '<session>';
+      head = 'WORKER STOPPED — ' + cardBit(it.card);
+      hint = 'worker stopped without reporting — peek its session (tmux attach -t ' + sess + ') or steer it, then act';
     } else if (it.kind === 'worker-died') {
       head = 'WORKER DIED — ' + cardBit(it.card);
       hint = 'the worker session died without done: resume it (bc-axi card start ' + it.card + ' --resume) or move the card back to backlog';
@@ -772,14 +782,15 @@ if (!commands[cmd]) {
     '  kinds [--json]                         print the effective kinds map (built-ins + registered)\n' +
     '\ncard:\n' +
     '  card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
-    '              [--column c] [--id id] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
-    '                                         new card (default: implementation, backlog)\n' +
+    '              [--id id] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
+    '                                         new card (default type: implementation; born in Backlog ONLY)\n' +
     '  card move <card-id> <column>           lieutenant moves land ONLY in review (the handoff,\n' +
-    '                                         level-1 event). Captain drags happen in the UI; a\n' +
-    '                                         captain backlog→working / review→backlog drag is an\n' +
-    '                                         ORDER (queue item), not a move\n' +
-    '  card patch <card-id> [--title T] [--type t] [--owner lt] [--body-file f|-] [--attr k=v]...\n' +
-    '                                         update card (k= deletes attr); body = the deliverable,\n' +
+    '                                         level-1 event); → working is refused (card start does it).\n' +
+    '                                         Captain drags happen in the UI; a captain drag into\n' +
+    '                                         working / review→backlog is an ORDER (queue item), not a move\n' +
+    '  card patch <card-id> [--title T] [--type t] [--body-file f|-] [--attr k=v]...\n' +
+    '                                         update card (k= deletes attr; owner is immutable — archive\n' +
+    '                                         and recreate to move work); body = the deliverable,\n' +
     '                                         rewritten to current state before every handoff\n' +
     '  card archive <card-id> [--reason merged|killed] [--note "..."]\n' +
     '                                         kill = archive (append-only file, off the board)\n' +

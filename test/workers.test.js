@@ -251,6 +251,47 @@ test('turn-end resolves worker refs (before lieutenant adoption), hook payload i
   } finally { await teardown(); }
 });
 
+test('worker turn-end without done on a Working card wakes the owner (worker-stopped), coalesced per stop-state', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Wedged', id: 'wedged', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/wedged/start', { harness: 'fake' })).body.worker;
+    const stopItems = async () => (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items
+      .filter((i) => i.kind === 'worker-stopped' && i.card === 'wedged');
+
+    // first stop: QueueItem + level-2 card event; the card does NOT move
+    let r = await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    assert.strictEqual(r.body.worker, 'wedged');
+    assert.strictEqual((await stopItems()).length, 1);
+    const card = (await s.api('GET', '/api/cards/wedged')).body;
+    assert.strictEqual(card.column, 'working');
+    const ev = card.events.find((e) => e.kind === 'worker-stopped');
+    assert.ok(ev, 'worker-stopped event on the card');
+    assert.strictEqual(ev.level, 2);
+    assert.match(ev.text, /stopped without reporting done/);
+
+    // repeat turn-ends in the same stop-state coalesce — no stacking
+    await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    assert.strictEqual((await stopItems()).length, 1);
+
+    // a signal opens a fresh stop-state: the next stop re-notifies
+    await s.api('POST', '/api/cards/wedged/worker/signal', { text: 'steered — back at it' });
+    await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    assert.strictEqual((await stopItems()).length, 2);
+
+    // the drain hint names the stop and the session to peek
+    const cli = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 0, cli.stderr);
+    assert.match(cli.stdout, /WORKER STOPPED — card wedged/);
+    assert.match(cli.stdout, /tmux attach -t bc-w-wedged/);
+
+    // after done, turn-ends only bump counters — never a worker-stopped item
+    await s.api('POST', '/api/cards/wedged/worker/done', { outcome: 'finished for real' });
+    await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    assert.strictEqual((await stopItems()).length, 2);
+  } finally { await teardown(); }
+});
+
 test('card start --resume reincarnates a dead recorded worker in the same worktree', async () => {
   const { s, teardown } = await boot();
   try {

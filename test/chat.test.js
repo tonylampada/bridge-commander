@@ -4,7 +4,9 @@
 // lieutenant. The "owes a reply" signal is card.status.owed (status.test.js).
 const test = require('node:test');
 const assert = require('node:assert');
-const { startServerWithLieutenant, withOwner, LT } = require('./helper');
+const fs = require('node:fs');
+const path = require('node:path');
+const { startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
 
 test('lieutenant say to its main chat lands in lieutenant.chat and rings a level-1 event', async () => {
   const s = await startServerWithLieutenant();
@@ -45,6 +47,60 @@ test('lieutenant say to a card thread appends to card.thread, sets threadStart, 
     // unknown card target is a 404
     const bad = await s.api('POST', '/api/message', { target: 'card:ghost', text: 'x' });
     assert.strictEqual(bad.status, 404);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('say author defaults to the session-resolved CALLER, not the target lieutenant', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace', ref: { harness: 'fake', session: 'bc-grace', cwd: '/tmp' } });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Cross' })); // owned by Ada
+
+    // Grace (identified by her session) posts on Ada's card → stamped Grace
+    let r = await s.api('POST', '/api/message', { target: 'card:cross', text: 'peer input', session: 'bc-grace' });
+    assert.strictEqual(r.status, 200);
+    let card = (await s.api('GET', '/api/cards/cross')).body;
+    assert.strictEqual(card.thread[0].author, 'Grace');
+
+    // explicit author still wins over the session
+    await s.api('POST', '/api/message', { target: 'card:cross', text: 'as someone else', session: 'bc-grace', author: 'custom' });
+    card = (await s.api('GET', '/api/cards/cross')).body;
+    assert.strictEqual(card.thread[1].author, 'custom');
+
+    // an unresolved session falls back to the target's lieutenant (unidentified callers)
+    await s.api('POST', '/api/message', { target: 'card:cross', text: 'anonymous', session: 'bc-nobody' });
+    card = (await s.api('GET', '/api/cards/cross')).body;
+    assert.strictEqual(card.thread[2].author, 'Ada');
+
+    // Grace saying into another lieutenant's MAIN chat is stamped Grace too
+    await s.api('POST', '/api/message', { target: 'lieutenant:' + LT, text_md: 'handoff note', session: 'bc-grace' });
+    const ada = (await s.api('GET', '/api/board')).body.lieutenants.find((l) => l.id === LT);
+    assert.strictEqual(ada.chat[0].author, 'Grace');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('cli: say self-identifies by its tmux session', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace', ref: { harness: 'fake', session: 'bc-grace', cwd: '/tmp' } });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Cli cross' }));
+    // stub tmux on PATH answering the caller's session name
+    const bin = path.join(s.dir, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho bc-grace\n');
+    fs.chmodSync(path.join(bin, 'tmux'), 0o755);
+    const textFile = path.join(s.dir, 'say.txt');
+    fs.writeFileSync(textFile, 'hello from grace');
+    const r = await runCli(['say', 'card:cli-cross', '--text-file', textFile,
+      '--workspace', s.dir, '--port', String(s.port)],
+    { TMUX: '/tmp/stub,1,0', PATH: bin + ':' + process.env.PATH });
+    assert.strictEqual(r.code, 0, r.stderr);
+    const card = (await s.api('GET', '/api/cards/cli-cross')).body;
+    assert.strictEqual(card.thread[0].author, 'Grace');
   } finally {
     await s.stop();
   }

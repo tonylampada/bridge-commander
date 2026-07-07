@@ -238,6 +238,7 @@ const BUILTIN_KINDS = {
   signal: { emoji: '📡', level: 2 },
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
+  'worker-stopped': { emoji: '⏸️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
   'needs-captain': { emoji: '🚨', level: 1 },
 };
@@ -354,7 +355,7 @@ async function spawnLieutenant(body) {
 }
 
 // lieutenant.retire — explicit only (the DNA). Refuses while the lieutenant
-// still owns non-archived cards (archive or reassign them first); otherwise
+// still owns non-archived cards (archive or finish them first); otherwise
 // kills its live session via the harness port, removes the lieutenant (ref
 // included) and its delivery queue, and lands a loud level-1 event.
 async function retireLieutenant(id, body) {
@@ -363,7 +364,7 @@ async function retireLieutenant(id, body) {
   const owned = board.cards.filter((c) => c.owner === id);
   if (owned.length) {
     return { error: 'lieutenant ' + id + ' still owns ' + owned.length + ' card(s): '
-      + owned.map((c) => c.id).join(', ') + ' — archive or reassign them first', code: 409 };
+      + owned.map((c) => c.id).join(', ') + ' — archive or finish them first', code: 409 };
   }
   if (isHarnessRef(lt.ref)) {
     try { await harnessFor(lt.ref).kill(lt.ref); }
@@ -665,6 +666,9 @@ function createCard(body, actorDefault) {
   // Working is a fact, not a label: a card is in Working iff a live worker
   // exists for it, and only card.start creates one. Cards are never BORN there.
   if (column === 'working') return { error: 'cards cannot be created in Working — a card enters Working only through card.start (which spawns its worker)' };
+  // Nor anywhere else: cards are born in Backlog ONLY (review is the handoff,
+  // peer is the captain's shelf — both are earned, never a birthplace).
+  if (column !== 'backlog') return { error: 'cards are born in Backlog only — create it there and move it after' };
   const actor = String(body.actor || actorDefault || 'agent').slice(0, 60);
   const card = {
     id, title: title.slice(0, 200), type, owner, column,
@@ -683,12 +687,15 @@ function createCard(body, actorDefault) {
 
 // card.move — who moves matters (the DNA's side-effects table):
 //   captain (actor "user"):
-//     backlog → working  = start-order: the card does NOT move; a QueueItem goes
-//                          to the owner and the card carries pendingOrder
+//     any column → working = start-order: the card does NOT move; a QueueItem
+//                          goes to the owner and the card carries pendingOrder
+//                          (invariant 3: only card.start enters Working — a
+//                          plain write would create a workerless Working card)
 //     review → backlog   = rework-order: same, optionally carrying the captain's
 //                          comment (body.text)
 //     anything else      = applies normally (parking in peer, reordering, …)
-//   lieutenant (any other actor): only → review (the handoff, a level-1 event)
+//   lieutenant (any other actor): only → review (the handoff, a level-1 event);
+//   → working is a 409 pointing at card.start.
 // Any APPLIED move clears pendingOrder — the ordered move happening (or the
 // captain rearranging) resolves the order marker.
 function moveCard(card, body, actorDefault) {
@@ -699,7 +706,7 @@ function moveCard(card, body, actorDefault) {
   const from = card.column;
 
   if (actor === 'user') {
-    const order = from === 'backlog' && column === 'working' ? 'start-order'
+    const order = column === 'working' ? 'start-order'
       : from === 'review' && column === 'backlog' ? 'rework-order' : null;
     if (order) {
       const item = queuePush(card.owner, Object.assign(
@@ -712,6 +719,8 @@ function moveCard(card, body, actorDefault) {
       card.updated = now();
       return { ok: true, ordered: order, event: ev, seq: item.seq };
     }
+  } else if (column === 'working') {
+    return { error: 'only card.start moves a card into Working (it spawns the worker) — run: card start ' + card.id, code: 409 };
   } else if (column !== 'review') {
     return { error: 'lieutenants move cards only to review (the handoff)' };
   }
@@ -719,6 +728,10 @@ function moveCard(card, body, actorDefault) {
   card.column = column;
   card.pendingOrder = null;
   card.updated = now();
+  if (from === 'working') {
+    const w = findWorker(card.id);
+    if (w) delete w.stopNotified; // leaving Working ends the stop-state
+  }
   // A move is a deliberate act: it always lands on the timeline. Default kind:
   // a lieutenant move is a handoff (level 1 from the kinds map — rings the
   // captain); a captain move is `moved` (level 2). `kind` in the body overrides;
@@ -732,10 +745,14 @@ function moveCard(card, body, actorDefault) {
 }
 
 function patchCard(card, body) {
+  // A card is born inside one lieutenant and stays until it dies — no owner
+  // reassignment (moving work between lieutenants = archive + recreate).
+  if (body.owner !== undefined) {
+    return { error: 'owner is immutable — archive and recreate under the other lieutenant' };
+  }
   if (body.title !== undefined) card.title = String(body.title).slice(0, 200);
   if (body.body !== undefined) card.body = String(body.body);
   if (body.type !== undefined && CARD_TYPES.includes(body.type)) card.type = body.type;
-  if (body.owner !== undefined && findLieutenant(String(body.owner))) card.owner = String(body.owner);
   if (Array.isArray(body.labels)) card.labels = body.labels.filter((l) => typeof l === 'string' && l);
   if (body.attributes && typeof body.attributes === 'object') {
     for (const [k, v] of Object.entries(body.attributes)) {
@@ -745,6 +762,7 @@ function patchCard(card, body) {
   }
   card.updated = now();
   registerCardLabels();
+  return { ok: true };
 }
 
 function readArchive() {
@@ -811,10 +829,15 @@ function restoreCard(id, body) {
   if (!CARD_TYPES.includes(card.type)) card.type = 'implementation';
   card.status = { worker: null }; // the lease starts absent until the next status.set
   card.pendingOrder = null;
+  // Working ⇔ live worker: a frozen Working snapshot restores workerless, so
+  // it lands in Backlog instead (card.start is the only way back into Working).
+  const wasWorking = card.column === 'working';
+  if (wasWorking) card.column = 'backlog';
   for (const e of card.events) if (e.seq > board.seq) board.seq = e.seq; // defensive: no seq reuse
   const ev = mkEvent({
     level: body && body.level, kind: body && body.kind, actor: body && body.actor,
-    text: String((body && body.text) || '').trim() || 'resurrected',
+    text: (String((body && body.text) || '').trim() || 'resurrected')
+      + (wasWorking ? ' — restored to backlog (was working)' : ''),
   }, { kind: 'resurrected' });
   card.events.push(ev);
   card.updated = now();
@@ -894,6 +917,7 @@ async function startCard(card, body) {
     existing.done = false;
     delete existing.outcome;
     delete existing.flagged;
+    delete existing.stopNotified;
     enterWorking(card, 'worker ' + ref.session + ' resumed in ' + existing.worktree.path);
     return { worker: existing, resumed: true };
   }
@@ -963,6 +987,8 @@ async function startCard(card, body) {
 function workerSignal(card, body) {
   const text = String((body && body.text) || '').trim();
   if (!text) return { error: 'text required' };
+  const w = findWorker(card.id);
+  if (w) delete w.stopNotified; // a fresh signal starts a fresh stop-state
   const ev = mkEvent({ text: text.slice(0, 2000), actor: (body && body.actor) || 'worker' }, { kind: 'signal' });
   card.events.push(ev);
   card.updated = now();
@@ -980,7 +1006,7 @@ function workerDone(card, body) {
   const outcome = String((body && body.outcome) || '').trim();
   if (!outcome) return { error: 'outcome required' };
   const w = findWorker(card.id);
-  if (w) { w.done = true; w.outcome = outcome.slice(0, 2000); delete w.flagged; }
+  if (w) { w.done = true; w.outcome = outcome.slice(0, 2000); delete w.flagged; delete w.stopNotified; }
   const urls = outcome.match(PR_URL_RE) || [];
   if (urls.length) {
     if (!Array.isArray(card.attributes.prs)) card.attributes.prs = [];
@@ -1263,15 +1289,20 @@ const server = http.createServer(async (req, res) => {
     // matches; (2) a lieutenant ref whose session name matches the hook's
     // session arg; (3) a WORKER ref by resumeId then session (workers' POSTs
     // arrive from the per-spawn hooks in their isolated worktrees — resolved
-    // BEFORE adoption so a worker's first POST can never be mis-adopted);
-    // (4) adoption — exactly one ref-bearing lieutenant still missing its
-    // resumeId (the founding teleport learns its claude id from its first turn
-    // end). Anything else is some other agent in the workspace: acknowledged,
-    // ignored.
+    // BEFORE lieutenant attribution so a worker's first POST can never be
+    // mis-adopted); (4) tmux attribution — the hook runs inside the agent's
+    // pane, so its tmux_session names the owning lieutenant's ref.session
+    // exactly (adopts/refreshes resumeId; works for any number of founders);
+    // (5) legacy adoption — only for old hooks whose payload carries no
+    // tmux_session field: exactly one ref-bearing lieutenant missing its
+    // resumeId, and never a session_id whose cwd is not that lieutenant's
+    // ref.cwd (a stray claude in the workspace must not become a lieutenant).
+    // Anything else is some other agent in the workspace: acknowledged, ignored.
     if (route === 'POST /api/turn-end') {
       const body = JSON.parse(await readBody(req) || '{}');
       const sid = body.session_id ? String(body.session_id) : '';
       const sname = body.session ? String(body.session) : '';
+      const tmux = typeof body.tmux_session === 'string' ? body.tmux_session : null;
       let lt = sid ? board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.resumeId === sid) : null;
       if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === sname);
       if (!lt) {
@@ -1281,13 +1312,29 @@ const server = http.createServer(async (req, res) => {
           if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
           w.lastTurnEnd = now();
           w.turns = (w.turns || 0) + 1;
+          // A worker turn-end IS the stop signal: a Working card whose worker
+          // stopped without done would otherwise be invisible to its owner.
+          // One item per stop-state — the flag clears on signal/done or when
+          // the card leaves Working, so repeats never stack.
+          const card = findCard(w.card);
+          let stopped = false;
+          if (card && card.column === 'working' && !w.done && !w.stopNotified) {
+            w.stopNotified = true;
+            stopped = true;
+            const text = 'worker ' + w.ref.session + ' stopped without reporting done';
+            card.events.push(mkEvent({ text, actor: 'server' }, { kind: 'worker-stopped' }));
+            card.updated = now();
+            queuePush(card.owner, { kind: 'worker-stopped', card: card.id, text });
+          }
           saveBoard();
+          if (stopped) broadcast();
           return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
         }
       }
-      if (!lt && sid) {
+      if (!lt && tmux) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
+      if (!lt && tmux === null && sid) {
         const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
-        if (cands.length === 1) lt = cands[0];
+        if (cands.length === 1 && body.cwd && path.resolve(String(body.cwd)) === cands[0].ref.cwd) lt = cands[0];
       }
       if (!lt) return sendJson(res, 200, { ok: true, lieutenant: null });
       if (sid && lt.ref.resumeId !== sid) lt.ref.resumeId = sid; // hook payload is ground truth
@@ -1345,7 +1392,8 @@ const server = http.createServer(async (req, res) => {
       }
       if (!sub && req.method === 'GET') return sendJson(res, 200, publicCard(card, url.searchParams.get('user') || 'user'));
       if (!sub && req.method === 'PATCH') {
-        patchCard(card, JSON.parse(await readBody(req) || '{}'));
+        const r = patchCard(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, 400, { error: r.error });
         saveBoard(); broadcast();
         return sendJson(res, 200, { ok: true, card: publicCard(card, 'user') });
       }
@@ -1357,7 +1405,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (sub === 'move' && req.method === 'POST') {
         const r = moveCard(card, JSON.parse(await readBody(req) || '{}'));
-        if (r.error) return sendJson(res, 400, { error: r.error });
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
         saveBoard(); broadcast();
         return sendJson(res, 200, r);
       }
@@ -1438,10 +1486,15 @@ const server = http.createServer(async (req, res) => {
       if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text_md || body.text || '');
       if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
-      // Default author: the target's lieutenant — the interlocutor is always the
-      // owning lieutenant, card threads included.
+      // Default author, most-identified first: explicit body.author; then the
+      // CALLER resolved from its tmux session (like drain/ack — so a lieutenant
+      // posting to another's chat or card is stamped as itself, not the target);
+      // then the target's lieutenant (unidentified callers — the interlocutor
+      // is the owning lieutenant, card threads included).
       const lt = targetLieutenant(target);
-      const msg = { author: String(body.author || (lt && lt.name) || 'agent').slice(0, 60), text, ts: now() };
+      const sess = body.session ? String(body.session) : '';
+      const caller = sess ? board.lieutenants.find((l) => l.ref && l.ref.session === sess) : null;
+      const msg = { author: String(body.author || (caller && caller.name) || (lt && lt.name) || 'agent').slice(0, 60), text, ts: now() };
       thread.push(msg);
       const m = /^card:(.+)$/.exec(target);
       if (m) {

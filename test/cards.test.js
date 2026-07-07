@@ -4,7 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { startServer, startServerWithLieutenant, withOwner, LT } = require('./helper');
+const { startServer, startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
 
 function archivePath(s) { return path.join(s.dir, '.bridge-command', 'archive.jsonl'); }
 
@@ -49,6 +49,15 @@ test('card create: defaults, slug ids, created event, owner + type validated', a
     assert.strictEqual(r.status, 400);
     r = await s.api('POST', '/api/cards', withOwner({ title: 'x', column: 'nope' }));
     assert.strictEqual(r.status, 400);
+
+    // born in Backlog ONLY: review and peer are no birthplace either
+    for (const column of ['review', 'peer']) {
+      r = await s.api('POST', '/api/cards', withOwner({ title: 'x', column }));
+      assert.strictEqual(r.status, 400);
+      assert.match(r.body.error, /born in Backlog only/);
+    }
+    r = await s.api('POST', '/api/cards', withOwner({ title: 'Explicit backlog', column: 'backlog' }));
+    assert.strictEqual(r.status, 200);
   } finally {
     await s.stop();
   }
@@ -90,6 +99,28 @@ test('card patch: title, body, type, attribute merge and delete, labels', async 
     // patching an unknown card is a 404
     r = await s.api('PATCH', '/api/cards/ghost', { title: 'x' });
     assert.strictEqual(r.status, 404);
+  } finally {
+    await s.stop();
+  }
+});
+
+test('card owner is immutable: PATCH with owner is a 400, nothing applied; CLI refuses --owner', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Held' }));
+    const r = await s.api('PATCH', '/api/cards/held', { owner: 'grace', title: 'Renamed' });
+    assert.strictEqual(r.status, 400);
+    assert.match(r.body.error, /owner is immutable — archive and recreate/);
+    const card = (await s.api('GET', '/api/cards/held')).body;
+    assert.strictEqual(card.owner, LT);
+    assert.strictEqual(card.title, 'Held', 'a refused patch applies nothing');
+
+    const cli = await runCli(['card', 'patch', 'held', '--owner', 'grace',
+      '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 1);
+    assert.match(cli.stderr, /owner is immutable/);
+    assert.strictEqual((await s.api('GET', '/api/cards/held')).body.owner, LT);
   } finally {
     await s.stop();
   }
