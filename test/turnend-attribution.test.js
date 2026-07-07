@@ -60,6 +60,27 @@ test('a stray session with a foreign tmux_session is dropped, never adopted', as
   }
 });
 
+test('a window-worker hook (session:window key) is never attributed to the cohabited lieutenant', async () => {
+  const s = await startServer();
+  try {
+    // Workers live as windows INSIDE the lieutenant's session, so a worker
+    // hook's tmux_session IS the lieutenant's session name. A stale worker
+    // POST (its registry record already gone) must not fall through to tmux
+    // attribution and corrupt the lieutenant's resumeId.
+    await s.api('POST', '/api/lieutenants', { name: 'Monica', id: 'monica',
+      ref: { harness: 'fake', session: 'bc-x-lt-monica', cwd: '/tmp', resumeId: 'uuid-lt' } });
+    const r = await s.api('POST', '/api/turn-end', {
+      session: 'bc-x-lt-monica:w-gone-card', session_id: 'uuid-stale-worker',
+      cwd: '/tmp/worktree', tmux_session: 'bc-x-lt-monica',
+    });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant, null);
+    assert.strictEqual((await lts(s))[0].ref.resumeId, 'uuid-lt', 'lieutenant resumeId untouched');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('legacy hooks (no tmux_session field): single-candidate adoption holds, foreign cwd refused', async () => {
   const s = await startServer();
   try {

@@ -14,7 +14,10 @@
 //
 // A HarnessRef is a plain, JSON-serializable object; `harness` names the
 // implementation and the rest is that implementation's opaque address:
-//   { harness: 'claude', session: 'bc-<id>', cwd: '/abs/path', resumeId?: '<uuid>' }
+//   { harness: 'claude', session: 'bc-<id>', window?: 'w-<id>', cwd: '/abs/path', resumeId?: '<uuid>' }
+// `window` marks a window-granular ref: the agent lives in a named window of
+// a shared session (workers inside their lieutenant's session) instead of
+// owning the whole session.
 //
 // Adding a harness = implementing the seven verbs and registering it here
 // (or shipping it as a builtin module). Nothing else.
@@ -64,6 +67,7 @@ function isHarnessRef(ref) {
     && typeof ref === 'object'
     && typeof ref.harness === 'string' && ref.harness.length > 0
     && typeof ref.session === 'string' && ref.session.length > 0
+    && (ref.window === undefined || (typeof ref.window === 'string' && ref.window.length > 0))
     && typeof ref.cwd === 'string' && ref.cwd.length > 0
     && (ref.resumeId === undefined || typeof ref.resumeId === 'string');
 }

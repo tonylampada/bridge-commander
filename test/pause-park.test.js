@@ -14,8 +14,13 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServer, startServerWithLieutenant, withOwner, runCli, sleep } = require('./helper');
-const { workerSession } = require('../server/names.js');
+const { startServer, startServerWithLieutenant, withOwner, runCli, sleep, LT } = require('./helper');
+const { lieutenantSession, workerWindow } = require('../server/names.js');
+
+// The worker's harness key: a window inside the owning lieutenant's session.
+function workerKey(dir, cardId) {
+  return lieutenantSession(dir, LT) + ':' + workerWindow(cardId);
+}
 
 function git(dir, ...args) {
   return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -62,7 +67,7 @@ test('worker pause: deliberate stop — session killed, worker-paused event, NO 
     await s.api('POST', '/api/cards', withOwner({ title: 'Nap', id: 'nap', attributes: { repo: 'proj' } }));
     const started = await s.api('POST', '/api/cards/nap/start', { harness: 'fake' });
     assert.strictEqual(started.status, 200, JSON.stringify(started.body));
-    const session = workerSession(s.dir, 'nap');
+    const session = workerKey(s.dir, 'nap');
 
     const r = await s.api('POST', '/api/cards/nap/worker/pause', { actor: 'agent' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -205,7 +210,7 @@ test('worker pause --park composes: one call, session dead + card in Backlog, no
     assert.strictEqual(card.column, 'backlog');
     assert.ok(card.events.some((e) => e.kind === 'worker-paused'));
     assert.ok(card.events.some((e) => e.kind === 'parked'));
-    assert.ok(!fs.existsSync(path.join(fdir, workerSession(s.dir, 'shelve') + '.json')), 'session killed');
+    assert.ok(!fs.existsSync(path.join(fdir, workerKey(s.dir, 'shelve') + '.json')), 'session killed');
 
     await sleep(700); // ticks over the paused+parked worker: silence
     const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;

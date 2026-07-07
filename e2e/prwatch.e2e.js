@@ -64,8 +64,8 @@ function tmux(...args) {
   return execFileSync('tmux', args, { encoding: 'utf8', env: ENV, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 function tryTmux(...args) { try { return tmux(...args); } catch (e) { return null; } }
-function capture(session, lines = 120) {
-  const out = tryTmux('capture-pane', '-p', '-t', '=' + session + ':', '-S', '-' + lines);
+function capture(target, lines = 120) {
+  const out = tryTmux('capture-pane', '-p', '-t', target, '-S', '-' + lines);
   return out === null ? '' : out;
 }
 function gh(...args) {
@@ -92,7 +92,11 @@ async function until(what, fn, ms, step = 2000) {
 
 const RUN = crypto.randomBytes(3).toString('hex');
 const CARD = 'prwatch-' + RUN;
-const SESSION = require(path.join(__dirname, '..', 'server', 'names.js')).workerSession(ws, CARD);
+// the worker lives as a WINDOW inside the owning lieutenant's session
+const names = require(path.join(__dirname, '..', 'server', 'names.js'));
+const SESSION = names.lieutenantSession(ws, 'ada');
+const WINDOW = names.workerWindow(CARD);
+const TARGET = '=' + SESSION + ':=' + WINDOW;
 const FILE = 'runs/' + RUN + '.txt';
 const WANT = 'pr watch e2e ' + RUN;
 
@@ -105,7 +109,7 @@ async function stepCase(name, fn) {
   } catch (e) {
     console.error('  ✖ ' + name);
     console.error(e && e.stack ? e.stack : e);
-    console.error('--- worker pane tail ---\n' + capture(SESSION).split('\n').slice(-60).join('\n'));
+    console.error('--- worker pane tail ---\n' + capture(TARGET).split('\n').slice(-60).join('\n'));
     process.exitCode = 1;
     throw e;
   }
@@ -208,8 +212,12 @@ async function stepCase(name, fn) {
       assert.ok(landed && landed.level === 1, 'landed level-1 event');
       // worktree released (worker committed everything — clean)
       await until('worktree released', async () => !fs.existsSync(worktree), 30000);
-      // the lingering done-worker session was killed (harness.kill)
-      await until('worker session killed', async () => tryTmux('has-session', '-t', '=' + SESSION + ':') === null, 30000);
+      // the lingering done-worker WINDOW was killed (harness.kill is
+      // window-granular; list-windows is the strict existence check)
+      await until('worker window killed', async () => {
+        const wins = tryTmux('list-windows', '-t', '=' + SESSION + ':', '-F', '#{window_name}');
+        return wins === null || !wins.split('\n').includes(WINDOW);
+      }, 30000);
       // the owner got the pr-merged QueueItem
       const items = (await api('GET', '/api/feed?lieutenant=ada')).body.items;
       assert.ok(items.some((i) => i.kind === 'pr-merged' && i.card === CARD && i.text === prUrl), 'pr-merged QueueItem');

@@ -939,9 +939,24 @@ async function addProject(body) {
 }
 
 // ---------- workers (F5: card.start, worker.signal, worker done) ----------
-// Session names carry the workspace discriminator (names.js) — refs are data,
-// so workers recorded under older name schemes keep working via ref.session.
-function workerSession(cardId) { return names.workerSession(WORKSPACE, cardId); }
+// A worker lives as a tmux WINDOW inside its owning lieutenant's session
+// (papercut #8): ref = { session: <lieutenant session>, window: 'w-<card-id>' }.
+// The 'w-' prefix keeps tmux from ever parsing the window name as an index.
+// Lifecycle coupling is accepted design — the lieutenant's session dying takes
+// its worker windows with it (supervision then flags them as died). Refs are
+// data, so workers recorded under the old one-session-per-worker scheme keep
+// working via their session-only ref.
+function ownerSession(card) {
+  const lt = board.lieutenants.find((l) => l.id === card.owner);
+  // Mirror the supervision respawn rule: a founder's foreign session name is
+  // not spawnable — those workers get the workspace-scoped lieutenant name.
+  return lt && isHarnessRef(lt.ref) && /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
+    ? lt.ref.session
+    : names.lieutenantSession(WORKSPACE, card.owner);
+}
+// workerName(ref) — the attach-facing address of a worker's pane:
+// `session:window` for window-granular refs, the bare session for legacy ones.
+function workerName(ref) { return ref.window ? ref.session + ':' + ref.window : ref.session; }
 function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
 
 // The system move into Working — card.start is the ONE way in (invariant:
@@ -1012,13 +1027,13 @@ async function doStartCard(card, body) {
     delete existing.flagged;
     delete existing.stopNotified;
     delete existing.paused; // a revived worker is watched again
-    enterWorking(card, 'worker ' + ref.session + ' resumed in ' + existing.worktree.path);
+    enterWorking(card, 'worker ' + workerName(ref) + ' resumed in ' + existing.worktree.path);
     return { worker: existing, resumed: true };
   }
 
   if (card.column === 'working') return { error: 'card is already Working', code: 409 };
   if (existing && !existing.done) {
-    return { error: 'card already has a worker (' + existing.ref.session + ') — resume it (card start --resume) or archive first', code: 409 };
+    return { error: 'card already has a worker (' + workerName(existing.ref) + ') — resume it (card start --resume) or archive first', code: 409 };
   }
   const repoAttr = card.attributes && card.attributes.repo;
   if (!repoAttr) return { error: 'card has no repo attribute — set it first: card patch ' + card.id + ' --attr repo=<project>' };
@@ -1037,7 +1052,7 @@ async function doStartCard(card, body) {
     let up = false;
     try { up = await harnessFor(existing.ref).alive(existing.ref); } catch (e) { up = false; }
     if (up) {
-      return { error: 'previous worker session ' + existing.ref.session + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it', code: 409 };
+      return { error: 'previous worker session ' + workerName(existing.ref) + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it', code: 409 };
     }
     const prevProject = findProject(existing.project) || project;
     const rel = await releaseWorktree(existing.worktree, prevProject.path);
@@ -1052,14 +1067,15 @@ async function doStartCard(card, body) {
   try { wt = await createWorktree(project.path, card.id, WORKSPACE); }
   catch (e) { return { error: 'worktree provisioning failed: ' + String((e && e.message) || e), code: 502 }; }
 
-  const session = workerSession(card.id);
+  const session = ownerSession(card);
+  const window = names.workerWindow(card.id);
   const branch = card.type === 'investigation' ? null : 'bc/' + card.id;
   const prompt = workerBrief({
     card, task: body && body.brief, thread: card.thread || [],
     project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
     cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
   });
-  const spawnOpts = { session, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
+  const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
   if (body && body.model) spawnOpts.extraArgs = ['--model', String(body.model)];
   let ref;
   try {
@@ -1074,13 +1090,13 @@ async function doStartCard(card, body) {
     return { error: 'card left the board during start: ' + card.id, code: 409 };
   }
 
-  card.attributes.session = session;
+  card.attributes.session = workerName(ref);
   card.attributes.worktree = wt.path;
   if (branch) card.attributes.branch = branch;
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
   if (branch) worker.branch = branch;
   board.workers.push(worker);
-  enterWorking(card, 'worker ' + session + ' started in ' + wt.path);
+  enterWorking(card, 'worker ' + workerName(ref) + ' started in ' + wt.path);
   return { worker };
 }
 
@@ -1151,17 +1167,17 @@ async function workerSend(card, body) {
   let up = false;
   try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
   if (!up) {
-    return { error: 'worker session ' + w.ref.session + ' is not alive — resume it first (card start ' + card.id + ' --resume), then send', code: 409 };
+    return { error: 'worker session ' + workerName(w.ref) + ' is not alive — resume it first (card start ' + card.id + ' --resume), then send', code: 409 };
   }
   try {
     await harnessFor(w.ref).send(w.ref, text);
   } catch (e) {
-    return { error: 'delivery to ' + w.ref.session + ' failed: ' + String((e && e.message) || e), code: 502 };
+    return { error: 'delivery to ' + workerName(w.ref) + ' failed: ' + String((e && e.message) || e), code: 502 };
   }
   const ev = mkEvent({ text: 'sent to worker: ' + text.slice(0, 1900), actor: (body && body.actor) || 'agent' }, { kind: 'worker-send' });
   card.events.push(ev);
   card.updated = now();
-  return { ok: true, event: ev, session: w.ref.session };
+  return { ok: true, event: ev, session: workerName(w.ref) };
 }
 
 // worker.pause — a DELIBERATE stop: kill the worker's session but record the
@@ -1186,16 +1202,16 @@ async function pauseWorker(card, body) {
     await harnessFor(w.ref).kill(w.ref);
   } catch (e) {
     delete w.paused; // the session may still be alive — stay honest, let supervision judge
-    return { error: 'pause failed killing session ' + w.ref.session + ': ' + String((e && e.message) || e), code: 502 };
+    return { error: 'pause failed killing session ' + workerName(w.ref) + ': ' + String((e && e.message) || e), code: 502 };
   }
   const actor = String((body && body.actor) || 'agent').slice(0, 60);
   const ev = mkEvent({
-    text: 'worker ' + w.ref.session + ' paused (deliberate) — resume: card start ' + card.id + ' --resume',
+    text: 'worker ' + workerName(w.ref) + ' paused (deliberate) — resume: card start ' + card.id + ' --resume',
     actor,
   }, { kind: 'worker-paused' });
   card.events.push(ev);
   card.updated = now();
-  const out = { ok: true, event: ev, session: w.ref.session };
+  const out = { ok: true, event: ev, session: workerName(w.ref) };
   if (body && body.park) {
     const p = await parkCard(card, body);
     if (p.error) { out.parked = false; out.parkError = p.error; }
@@ -1219,9 +1235,9 @@ async function parkCard(card, body) {
     try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
     if (up) {
       return w.done
-        ? { error: 'refusing to park ' + card.id + ': its worker reported done and session ' + w.ref.session
+        ? { error: 'refusing to park ' + card.id + ': its worker reported done and session ' + workerName(w.ref)
             + ' is still alive — verify the work and hand off (card move ' + card.id + ' review), or archive', code: 409 }
-        : { error: 'refusing to park ' + card.id + ': worker session ' + w.ref.session
+        : { error: 'refusing to park ' + card.id + ': worker session ' + workerName(w.ref)
             + ' is ALIVE — pause it first (worker pause ' + card.id + ' [--park]) or let it finish', code: 409 };
     }
   }
@@ -1232,7 +1248,7 @@ async function parkCard(card, body) {
   if (w) delete w.stopNotified; // leaving Working ends the stop-state
   const ev = mkEvent({
     actor: (body && body.actor) || 'agent',
-    text: 'parked (worker ' + (w ? w.ref.session + (w.paused ? ', paused' : ', dead') : 'absent') + '): '
+    text: 'parked (worker ' + (w ? workerName(w.ref) + (w.paused ? ', paused' : ', dead') : 'absent') + '): '
       + columnTitle(from) + ' → ' + columnTitle('backlog'),
   }, { kind: 'parked' });
   card.events.push(ev);
@@ -1323,13 +1339,13 @@ async function superviseTick() {
       const card = findCard(w.card);
       if (card) {
         card.events.push(mkEvent({
-          text: 'worker session ' + w.ref.session + ' died without reporting done',
+          text: 'worker session ' + workerName(w.ref) + ' died without reporting done',
           actor: 'server',
         }, { kind: 'worker-died' }));
         card.updated = now();
         queuePush(card.owner, {
           kind: 'worker-died', card: card.id,
-          text: 'worker session ' + w.ref.session + ' died without reporting done',
+          text: 'worker session ' + workerName(w.ref) + ' died without reporting done',
         });
       }
     }
@@ -1534,7 +1550,9 @@ const server = http.createServer(async (req, res) => {
       if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === sname);
       if (!lt) {
         let w = sid ? board.workers.find((x) => x.ref.resumeId === sid) : null;
-        if (!w && sname) w = board.workers.find((x) => x.ref.session === sname);
+        // A window-granular worker's hook posts the `session:window` key —
+        // never the bare session name it shares with its lieutenant.
+        if (!w && sname) w = board.workers.find((x) => workerName(x.ref) === sname);
         if (w) {
           if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
           w.lastTurnEnd = now();
@@ -1548,7 +1566,7 @@ const server = http.createServer(async (req, res) => {
           if (card && card.column === 'working' && !w.done && !w.stopNotified) {
             w.stopNotified = true;
             stopped = true;
-            const text = 'worker ' + w.ref.session + ' stopped without reporting done';
+            const text = 'worker ' + workerName(w.ref) + ' stopped without reporting done';
             card.events.push(mkEvent({ text, actor: 'server' }, { kind: 'worker-stopped' }));
             card.updated = now();
             queuePush(card.owner, { kind: 'worker-stopped', card: card.id, text });
@@ -1558,7 +1576,12 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
         }
       }
-      if (!lt && tmux) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
+      // Window-granular worker hooks are excluded from tmux attribution: their
+      // `session:window` key carries a ':' no session name can (names.js emits
+      // [A-Za-z0-9-] only), and their pane's tmux_session IS the lieutenant
+      // session they cohabit — without this guard a stale worker POST (its
+      // record already gone) would corrupt that lieutenant's resumeId.
+      if (!lt && tmux && !sname.includes(':')) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
       if (!lt && tmux === null && sid) {
         const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
         if (cands.length === 1 && body.cwd && path.resolve(String(body.cwd)) === cands[0].ref.cwd) lt = cands[0];

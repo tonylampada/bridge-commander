@@ -539,6 +539,7 @@ async function cmdStart() {
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/start', body, 180000);
   const w = r.worker;
   console.log((r.resumed ? 'resumed' : 'started') + ' worker ' + w.ref.harness + ':' + w.ref.session
+    + (w.ref.window ? ':' + w.ref.window : '')
     + '\n  worktree: ' + w.worktree.path + (w.branch ? '\n  branch:   ' + w.branch : '')
     + '\n  card ' + id + ' -> working');
 }

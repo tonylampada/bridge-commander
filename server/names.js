@@ -32,8 +32,13 @@ function lieutenantSession(workspace, id) {
   return 'bc-' + workspaceDisc(workspace) + '-lt-' + safe(id);
 }
 
-function workerSession(workspace, cardId) {
-  return 'bc-' + workspaceDisc(workspace) + '-w-' + safe(cardId);
+// workerWindow(cardId) -> tmux window name for a card's worker inside its
+// owning lieutenant's session (papercut #8). The 'w-' prefix guarantees the
+// name can never read as a bare number, which tmux would parse as a window
+// INDEX instead of a name. No workspace discriminator: the enclosing
+// lieutenant session already carries it, and card ids are unique per board.
+function workerWindow(cardId) {
+  return 'w-' + safe(cardId);
 }
 
-module.exports = { workspaceDisc, lieutenantSession, workerSession };
+module.exports = { workspaceDisc, lieutenantSession, workerWindow };

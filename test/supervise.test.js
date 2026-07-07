@@ -164,31 +164,33 @@ test('dead worker without done: worker-died QueueItem + card event, card stays W
       lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso }],
       cards: [{
         id: 'doomed', title: 'Doomed', type: 'implementation', owner: 'ada', column: 'working',
-        labels: [], attributes: { repo: 'proj', session: 'bc-w-doomed' }, body: '',
+        labels: [], attributes: { repo: 'proj', session: 'bc-lt-ada:w-doomed' }, body: '',
         created: nowIso, updated: nowIso, threadStart: null, pendingOrder: null, events: [], thread: [],
       }, {
         id: 'fine', title: 'Fine', type: 'implementation', owner: 'ada', column: 'working',
-        labels: [], attributes: { repo: 'proj', session: 'bc-w-fine' }, body: '',
+        labels: [], attributes: { repo: 'proj', session: 'bc-lt-ada:w-fine' }, body: '',
         created: nowIso, updated: nowIso, threadStart: null, pendingOrder: null, events: [], thread: [],
       }, {
         id: 'finished', title: 'Finished', type: 'implementation', owner: 'ada', column: 'working',
         labels: [], attributes: {}, body: '',
         created: nowIso, updated: nowIso, threadStart: null, pendingOrder: null, events: [], thread: [],
       }],
+      // workers live as windows inside their lieutenant's session — liveness
+      // and kill are window-granular (the session:window key)
       workers: [
-        { card: 'doomed', ref: { harness: 'fake', session: 'bc-w-doomed', cwd: '/tmp', resumeId: 'a' },
+        { card: 'doomed', ref: { harness: 'fake', session: 'bc-lt-ada', window: 'w-doomed', cwd: '/tmp', resumeId: 'a' },
           worktree: { path: '/tmp/none', tool: 'git' }, branch: 'bc/doomed', project: 'proj', spawnedAt: nowIso, done: false },
-        { card: 'fine', ref: { harness: 'fake', session: 'bc-w-fine', cwd: '/tmp', resumeId: 'b' },
+        { card: 'fine', ref: { harness: 'fake', session: 'bc-lt-ada', window: 'w-fine', cwd: '/tmp', resumeId: 'b' },
           worktree: { path: '/tmp/none2', tool: 'git' }, branch: 'bc/fine', project: 'proj', spawnedAt: nowIso, done: false },
-        // done long ago and its session gone — supervision must NOT nag about it
-        { card: 'finished', ref: { harness: 'fake', session: 'bc-w-finished', cwd: '/tmp', resumeId: 'c' },
+        // done long ago and its window gone — supervision must NOT nag about it
+        { card: 'finished', ref: { harness: 'fake', session: 'bc-lt-ada', window: 'w-finished', cwd: '/tmp', resumeId: 'c' },
           worktree: { path: '/tmp/none3', tool: 'git' }, branch: 'bc/finished', project: 'proj', spawnedAt: nowIso,
           done: true, outcome: 'shipped' },
       ],
     }),
   });
   try {
-    fakeSession(fdir, 'bc-w-fine'); // alive via marker; bc-w-doomed and bc-w-finished are dead
+    fakeSession(fdir, 'bc-lt-ada:w-fine'); // alive via marker; w-doomed and w-finished windows are dead
     await until('worker-died queue item', async () => {
       const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
       return items.some((i) => i.kind === 'worker-died' && i.card === 'doomed');
