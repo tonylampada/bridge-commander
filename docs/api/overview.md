@@ -59,7 +59,7 @@ Callers · mechanisms: 🤠 captain (UI click/drag) · ⚓ lieutenant (CLI) · �
 | `workspace.init` | `dir → workspace` | ⚓ (the founding agent) | skill invoked in a fresh dir, **inside tmux** (refuses outside, with instruction); creates `.bridge-command/`, boots the server, registers the caller as the first lieutenant — the "teleport" |
 | `workspace.addProject` | `url \| path, mode → project` | ⚓ | captain asks to bring a repo into the workspace |
 | `lieutenant.create` | `charter → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + charter as launch prompt |
-| `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; cards must be archived or reassigned first |
+| `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards; kills its session, removes it and its queue, loud level-1 event |
 
 ### card
 
@@ -96,10 +96,11 @@ Callers · mechanisms: 🤠 captain (UI click/drag) · ⚓ lieutenant (CLI) · �
 | `harness.send` | `ref, text` | ⚙️ | type into a session (the wake half of delivery) |
 | `harness.alive` | `ref → bool` | ⚙️ | liveness check for supervision |
 | `harness.resume` | `ref → HarnessRef` | ⚙️ | reincarnate a dead session with memory when possible |
+| `harness.kill` | `ref` | ⚙️ | end a session for good (idempotent): merged-PR cleanup, card archive, lieutenant.retire |
 | `harness.onTurnEnd` | `ref, hook` | ⚙️ | turn-boundary detection |
 
 The server speaks ONLY this port. v0 ships the `claude` implementation; adding a harness is
-implementing these five verbs, nothing else.
+implementing these six verbs, nothing else.
 
 ## Invariants
 
@@ -123,7 +124,8 @@ implementing these five verbs, nothing else.
 | `chat.say` by captain | QueueItem (write-ahead) + `harness.send` wake to the owning lieutenant |
 | worker signal / turn-end | level-2 event on card + QueueItem to the owning lieutenant |
 | worker done + lieutenant review | lieutenant rewrites body, moves → Your review — the level-1 handoff |
-| PR merged (server watch) | card archived (`merged`), worktree released (only when clean), level-1 event, `pr-merged` QueueItem to the owner |
+| PR merged (server watch) | card archived (`merged`), worktree released (only when clean), lingering worker session killed, level-1 event, `pr-merged` QueueItem to the owner |
+| card archived (any reason) | any worker session still bound to the card is killed (Working ⇔ live worker: an archived card has neither) |
 | worker session dies without `done` | `worker-died` QueueItem to the owner + level-2 event; card stays Working, flagged |
 | lieutenant session dies | server auto-respawn (resume when possible; else charter + cards + queue), level-1 event, drain nudge; 3 failed attempts → level-1 needs-captain |
 | level-1 event / owed reply | captain's bell (derived unseen set, cleared by reading — bridge semantics) |

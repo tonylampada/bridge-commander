@@ -71,7 +71,7 @@ async function boot() {
 const PR = 'https://github.com/acme/proj/pull/42';
 
 test('merged PR: worktree released, card archived (landed, level 1), owner queued', async () => {
-  const { s, gh, teardown } = await boot();
+  const { s, root, gh, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Merge me', id: 'merge-me', attributes: { repo: 'proj' } }));
     const w = (await s.api('POST', '/api/cards/merge-me/start', { harness: 'fake' })).body.worker;
@@ -102,6 +102,11 @@ test('merged PR: worktree released, card archived (landed, level 1), owner queue
     // worktree released (clean) + registry entry gone
     assert.ok(!fs.existsSync(w.worktree.path), 'worktree removed');
     assert.strictEqual((await s.api('GET', '/api/status')).body.workers, 0);
+
+    // the lingering done-worker session was killed (harness.kill on archive):
+    // in file-backed fake mode the kill removes the session marker
+    await until('worker session killed', async () =>
+      !fs.existsSync(path.join(root, 'fake', w.ref.session + '.json')));
 
     // the owner got the pr-merged QueueItem
     const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;

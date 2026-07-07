@@ -1,7 +1,7 @@
 # harness — the multi-harness port
 
 The server speaks ONLY this port ([docs/api/overview.md](../docs/api/overview.md), "harness port").
-Five verbs, nothing else:
+Six verbs, nothing else:
 
 | Verb | Signature | Purpose |
 |---|---|---|
@@ -9,6 +9,7 @@ Five verbs, nothing else:
 | `send` | `(ref, text)` | type into a session, with **verified** submission |
 | `alive` | `(ref) → bool` | liveness |
 | `resume` | `(ref) → HarnessRef` | reincarnate a dead session with memory when possible |
+| `kill` | `(ref)` | end a session for good — idempotent, dead ref is a no-op |
 | `onTurnEnd` | `(ref, hook) → unsubscribe()` | turn-boundary detection, push not poll |
 
 All verbs may be async. Zero dependencies — plain Node (>= 18; uses `node:test`, `fetch`).
@@ -59,6 +60,9 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
   A positively-confirmed swallow throws.
 - **alive** — tmux session exists AND the pane is not sitting back at a bare
   shell (claude exiting returns the pane to bash).
+- **kill** — `tmux kill-session` on the ref's session (missing session = no-op).
+  Harness state files stay behind on purpose: a later `resume(ref)` can still
+  reincarnate the conversation if the kill was premature.
 - **resume** — kills the dead session's leftovers and relaunches
   `claude --resume <resumeId>` in a fresh tmux session under the same name.
   `--resume` keeps the SAME session id (no fork by default), so refs stay valid
@@ -78,7 +82,7 @@ State lives in `~/.bridge-command/harness/` (`BC_HARNESS_STATE` or
 
 ## Adding a new harness
 
-Implement the five verbs in one module and register it:
+Implement the six verbs in one module and register it:
 
 ```js
 const { registerHarness } = require('./port.js');

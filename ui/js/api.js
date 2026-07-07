@@ -15,6 +15,7 @@ async function j(method, url, body) {
 
 export const api = {
   createLieutenant: (lt) => j('POST', '/api/lieutenants', Object.assign({ actor: 'user' }, lt)),
+  retireLieutenant: (id) => j('DELETE', '/api/lieutenants/' + encodeURIComponent(id), { actor: 'user' }),
   createCard: (card) => j('POST', '/api/cards', Object.assign({ actor: 'user' }, card)),
   // A captain move may come back as {ordered: 'start-order'|'rework-order'}
   // instead of an applied move — backlog→working and review→backlog are orders.

@@ -299,6 +299,13 @@ async function cmdLtCreate() {
     + (ref ? ' — live session ' + ref.harness + ':' + ref.session : ''));
 }
 
+async function cmdLtRetire() {
+  const id = positional[0];
+  if (!id) die('usage: bc-axi lieutenant retire <id>\n  Refuses while the lieutenant owns non-archived cards; kills its live session.');
+  const r = await request('DELETE', '/api/lieutenants/' + encodeURIComponent(id), { actor: opts.actor || 'user' }, 30000);
+  console.log('retired ' + id + (r.event ? ' (event #' + r.event.seq + ')' : ''));
+}
+
 async function cmdLtList() {
   const r = await request('GET', '/api/lieutenants');
   if (opts.json) return console.log(JSON.stringify(r.lieutenants, null, 2));
@@ -692,7 +699,7 @@ const commands = {
   init: cmdInit,
   open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
   board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
-  'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList,
+  'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList, 'lieutenant retire': cmdLtRetire,
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
@@ -721,6 +728,9 @@ if (!commands[cmd]) {
     '                                         --spawn births a REAL agent session in the workspace root\n' +
     '                                         (doctrine + charter as launch prompt, ref persisted)\n' +
     '  lieutenant list [--json]               id, name, color, charter first line\n' +
+    '  lieutenant retire <id>                 lieutenant.retire: refuses while the lieutenant owns\n' +
+    '                                         non-archived cards; else kills its session, removes it\n' +
+    '                                         and its queue, level-1 event\n' +
     '\nproject (delivery modes):\n' +
     '  project add <git-url|path> --mode no-mistakes|direct-PR|local-only [--name n]\n' +
     '                                         clone into <workspace>/projects/<name> and register it;\n' +

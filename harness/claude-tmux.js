@@ -238,6 +238,15 @@ async function resume(ref, opts = {}) {
   return { harness: 'claude', session: ref.session, cwd: ref.cwd, resumeId };
 }
 
+// kill(ref) — end the session for good. Idempotent: killing a dead or missing
+// session is a no-op. The tmux session goes away (claude inside dies with its
+// pane); harness state files are left behind on purpose — resumeId and the
+// turn-end log are cheap, and a later resume(ref) can still reincarnate the
+// conversation if the kill turns out to have been premature.
+async function kill(ref) {
+  if (hasSession(ref.session)) t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+}
+
 // onTurnEnd(ref, hook) -> unsubscribe()
 // hook(event, ref) fires once per turn boundary; event is the JSON line the
 // Stop hook appended ({ ts, session, event, session_id, cwd }). Only events
@@ -306,7 +315,7 @@ function onTurnEnd(ref, hook, opts = {}) {
   };
 }
 
-// installHooks is exported beyond the five port verbs so `bc-axi init` can
+// installHooks is exported beyond the six port verbs so `bc-axi init` can
 // install the workspace-level Stop hook (session-agnostic; the server dedupes
 // turn-end POSTs by session_id).
-module.exports = { spawn, send, alive, resume, onTurnEnd, installHooks };
+module.exports = { spawn, send, alive, resume, kill, onTurnEnd, installHooks };

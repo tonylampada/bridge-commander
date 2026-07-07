@@ -2,22 +2,23 @@
 // harness port — the multi-harness contract (docs/api/overview.md, "harness port").
 //
 // The server speaks ONLY this port. An implementation is a module exposing
-// exactly these five verbs (all may be async):
+// exactly these six verbs (all may be async):
 //
 //   spawn(cwd, prompt, opts?) -> HarnessRef   birth an agent session
 //   send(ref, text)                           type a message into a session (verified submit)
 //   alive(ref) -> bool                        liveness
 //   resume(ref) -> HarnessRef                 reincarnate a dead session with memory when possible
+//   kill(ref)                                 end a session for good (idempotent; dead ref is a no-op)
 //   onTurnEnd(ref, hook) -> unsubscribe()     turn-boundary detection
 //
 // A HarnessRef is a plain, JSON-serializable object; `harness` names the
 // implementation and the rest is that implementation's opaque address:
 //   { harness: 'claude', session: 'bc-<id>', cwd: '/abs/path', resumeId?: '<uuid>' }
 //
-// Adding a harness = implementing the five verbs and registering it here
+// Adding a harness = implementing the six verbs and registering it here
 // (or shipping it as a builtin module). Nothing else.
 
-const VERBS = ['spawn', 'send', 'alive', 'resume', 'onTurnEnd'];
+const VERBS = ['spawn', 'send', 'alive', 'resume', 'kill', 'onTurnEnd'];
 
 // Builtins are lazy-required so requiring port.js never drags in tmux/claude
 // machinery for callers that only use the fake.

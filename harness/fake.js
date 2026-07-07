@@ -11,11 +11,12 @@
 //   alive   — session exists and is not killed.
 //   resume  — revives a dead session; transcript (memory) survives iff the
 //             resumeId matches the recorded one.
+//   kill    — ends a session for good (idempotent); in file-backed mode also
+//             removes the marker, so cross-process alive() flips false.
 //   onTurnEnd — hooks fire once per emitted turn, in registration order,
 //             only for events after registration. Returns unsubscribe().
 //
-// Test helpers (not part of the port contract): kill(ref), transcript(ref),
-// reset().
+// Test helpers (not part of the port contract): transcript(ref), reset().
 //
 // File-backed mode (cross-process observability): when BC_FAKE_STATE names a
 // directory, spawn/send also persist there —
@@ -150,12 +151,17 @@ function onTurnEnd(ref, hook) {
   };
 }
 
-// --- test helpers ---
-
+// kill(ref) — port verb: end the session for good. Idempotent (unknown or
+// already-dead sessions are a no-op). File-backed mode also removes the
+// marker so a WATCHING process sees alive() flip false.
 function kill(ref) {
   const s = sessions.get(ref.session);
   if (s) s.alive = false;
+  const marker = markerFile(ref.session);
+  if (marker) { try { fs.unlinkSync(marker); } catch { /* already gone */ } }
 }
+
+// --- test helpers ---
 
 function transcript(ref) {
   return [...get(ref).transcript];

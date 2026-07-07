@@ -37,6 +37,7 @@ function ltCardHtml(l) {
     '<span class="lt-name">' + esc(l.name || l.id) + '</span>' +
     ind +
     '<span class="lt-counts">' + mine.length + (working ? ' · 🔨' + working : '') + '</span>' +
+    '<button class="lt-menu" title="lieutenant actions">⋯</button>' +
     (unread ? '<span class="badge-n">' + (unread > 99 ? '99+' : unread) + '</span>' : '') +
     '</div>';
 }
@@ -45,10 +46,39 @@ function renderLane() {
   laneEl.innerHTML = lieutenants().map(ltCardHtml).join('') +
     '<button class="lt-add" title="new lieutenant">＋ lieutenant</button>';
   laneEl.querySelectorAll('.lt-card').forEach((el) => {
-    el.onclick = () => openLieutenantChat(el.dataset.id);
+    el.onclick = (e) => {
+      if (e.target.closest('.lt-menu')) { e.stopPropagation(); openLtMenu(el.dataset.id, e.clientX, e.clientY); return; }
+      openLieutenantChat(el.dataset.id);
+    };
     el.oncontextmenu = (e) => { e.preventDefault(); toggleFilter('owner', el.dataset.id); };
   });
   laneEl.querySelector('.lt-add').onclick = openNewLieutenant;
+}
+
+// lieutenant ⋯ menu — lieutenant.retire lives here (explicit only, per the DNA:
+// the server refuses while the lieutenant still owns non-archived cards).
+function openLtMenu(ltId, x, y) {
+  const l = lieutenant(ltId);
+  if (!l) return;
+  menuEl.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'mm-head';
+  head.textContent = l.name || ltId;
+  menuEl.appendChild(head);
+  const owned = cards().filter((c) => c.owner === ltId).length;
+  const retire = document.createElement('button');
+  retire.className = 'danger';
+  retire.textContent = '⚓ retire' + (owned ? ' (' + owned + ' card' + (owned > 1 ? 's' : '') + ' in the way)' : '');
+  retire.onclick = async () => {
+    closeMoveMenu();
+    if (!confirm('Retire ' + (l.name || ltId) + '? Its live session is killed and its queue removed.')) return;
+    try { await api.retireLieutenant(ltId); } catch (e) { alert(e.message); }
+  };
+  menuEl.appendChild(retire);
+  menuEl.hidden = false;
+  const r = menuEl.getBoundingClientRect();
+  menuEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+  menuEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
 
 // ---------- tiles ----------

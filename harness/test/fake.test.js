@@ -70,3 +70,24 @@ test('refs are JSON-serializable', async () => {
   const ref = await fake.spawn('/tmp/x', 'p');
   assert.deepStrictEqual(JSON.parse(JSON.stringify(ref)), ref);
 });
+
+test('kill ends a session for good; idempotent; file-backed marker removed', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-kill-'));
+  process.env.BC_FAKE_STATE = dir;
+  try {
+    const ref = await fake.spawn('/tmp/x', 'hi', { session: 'bc-kill-me' });
+    const marker = path.join(dir, 'bc-kill-me.json');
+    assert.ok(fs.existsSync(marker), 'spawn wrote the marker');
+    fake.kill(ref);
+    assert.strictEqual(await fake.alive(ref), false);
+    assert.ok(!fs.existsSync(marker), 'kill removed the marker (cross-process alive flips false)');
+    fake.kill(ref); // idempotent — dead ref is a no-op
+    await assert.rejects(() => fake.send(ref, 'nope'), /not alive/);
+  } finally {
+    delete process.env.BC_FAKE_STATE;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

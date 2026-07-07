@@ -96,6 +96,63 @@ test('harness ref: persisted with the lieutenant, survives restart, PATCH update
   }
 });
 
+test('lieutenant.retire: refuses with owned cards; else kills session, removes queue, level-1 event', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-retire-'));
+  const fakeDir = path.join(root, 'fake');
+  fs.mkdirSync(fakeDir, { recursive: true });
+  // pre-register a "live" fake session for the lieutenant (file-backed mode:
+  // a marker on disk counts as alive; kill removes it)
+  const marker = path.join(fakeDir, 'bc-lt-ret.json');
+  fs.writeFileSync(marker, '{}');
+  const s = await startServer({ env: { BC_FAKE_STATE: fakeDir, BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0' } });
+  try {
+    await s.api('POST', '/api/lieutenants', {
+      name: 'Retiree', id: 'ret', ref: { harness: 'fake', session: 'bc-lt-ret', cwd: '/tmp' },
+    });
+    await s.api('POST', '/api/cards', { title: 'Held', id: 'held', owner: 'ret' });
+    await s.api('POST', '/api/feedback', { target: 'lieutenant:ret', text: 'note' });
+    const queueFile = path.join(s.dir, '.bridge-command', 'queue', 'ret.jsonl');
+    assert.ok(fs.existsSync(queueFile), 'queue file exists before retire');
+
+    // refused while the lieutenant owns non-archived cards
+    let r = await s.api('DELETE', '/api/lieutenants/ret');
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /still owns 1 card.*held/);
+
+    // archive the card, retire goes through
+    await s.api('POST', '/api/cards/held/archive', { reason: 'killed' });
+    r = await s.api('DELETE', '/api/lieutenants/ret', { actor: 'user' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual((await s.api('GET', '/api/lieutenants')).body.lieutenants.length, 0);
+    assert.ok(!fs.existsSync(marker), 'live session killed (fake marker removed)');
+    assert.ok(!fs.existsSync(queueFile), 'delivery queue removed');
+    const b = (await s.api('GET', '/api/board')).body;
+    const ev = b.events.find((e) => /Retiree retired/.test(e.text));
+    assert.ok(ev, 'retired event on the board stream');
+    assert.strictEqual(ev.level, 1, 'retirement is loud');
+
+    // unknown lieutenant 404s
+    assert.strictEqual((await s.api('DELETE', '/api/lieutenants/nobody')).status, 404);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('cli: lieutenant retire', async () => {
+  const s = await startServer();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Gone', id: 'gone' });
+    const r = await runCli(['lieutenant', 'retire', 'gone', ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /retired gone/);
+    assert.strictEqual((await s.api('GET', '/api/lieutenants')).body.lieutenants.length, 0);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('cli: lieutenant create (charter via stdin file) and list', async () => {
   const s = await startServer();
   const args = ['--workspace', s.dir, '--port', String(s.port)];

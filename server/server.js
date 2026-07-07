@@ -353,6 +353,34 @@ async function spawnLieutenant(body) {
   return createLieutenant(Object.assign({}, body, { id, ref }));
 }
 
+// lieutenant.retire — explicit only (the DNA). Refuses while the lieutenant
+// still owns non-archived cards (archive or reassign them first); otherwise
+// kills its live session via the harness port, removes the lieutenant (ref
+// included) and its delivery queue, and lands a loud level-1 event.
+async function retireLieutenant(id, body) {
+  const lt = findLieutenant(id);
+  if (!lt) return { error: 'unknown lieutenant: ' + id, code: 404 };
+  const owned = board.cards.filter((c) => c.owner === id);
+  if (owned.length) {
+    return { error: 'lieutenant ' + id + ' still owns ' + owned.length + ' card(s): '
+      + owned.map((c) => c.id).join(', ') + ' — archive or reassign them first', code: 409 };
+  }
+  if (isHarnessRef(lt.ref)) {
+    try { await harnessFor(lt.ref).kill(lt.ref); }
+    catch (e) { console.error(now() + ' kill failed retiring ' + id + ': ' + String((e && e.message) || e)); }
+  }
+  board.lieutenants = board.lieutenants.filter((l) => l.id !== id);
+  respawnAttempts.delete(id);
+  nudged.delete(id);
+  // A retired lieutenant can never drain again: its queue files go too.
+  try { fs.unlinkSync(queueFile(id)); } catch (e) { /* none */ }
+  try { fs.unlinkSync(ackFile(id)); } catch (e) { /* none */ }
+  const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' retired',
+    actor: (body && body.actor) || 'user', level: 1 }, {});
+  board.events.push(ev);
+  return { ok: true, event: ev };
+}
+
 // ---------- delivery queues (per-lieutenant durable jsonl, GLOBAL seq) ----------
 // One QueueItem = one durable delivery to a lieutenant: captain message,
 // drag-order, or (future) worker event. At-least-once: drain serves everything
@@ -733,8 +761,15 @@ function archiveCard(card, body, actorDefault) {
   if (note) rec.note = note;
   fs.appendFileSync(ARCHIVE_FILE, JSON.stringify(rec) + '\n');
   board.cards = board.cards.filter((c) => c.id !== card.id);
-  // An archived card has no worker: drop its registry entry so supervision
-  // stops watching a session that no longer represents live work.
+  // An archived card has no worker (invariant: Working ⇔ live worker): kill any
+  // lingering worker session (best-effort, fire-and-forget — a done worker's
+  // session otherwise outlives its card) and drop the registry entry so
+  // supervision stops watching a session that no longer represents live work.
+  for (const w of board.workers) {
+    if (w.card !== card.id) continue;
+    const ref = w.ref;
+    Promise.resolve().then(() => harnessFor(ref).kill(ref)).catch(() => {});
+  }
   board.workers = board.workers.filter((w) => w.card !== card.id);
   // The kill lands on the board-level stream (the card is gone) with a card
   // reference. Typed by reason: merged = landed (level 1 — worth a bell),
@@ -1192,6 +1227,13 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, lieutenant: r.lieutenant });
     }
     const ltRoute = /^\/api\/lieutenants\/([^/]+)$/.exec(p);
+    if (ltRoute && req.method === 'DELETE') { // lieutenant.retire — explicit only
+      const body = JSON.parse(await readBody(req) || '{}');
+      const r = await retireLieutenant(decodeURIComponent(ltRoute[1]), body);
+      if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, event: r.event });
+    }
     if (ltRoute && req.method === 'PATCH') { // update name/color/charter/ref (init idempotency)
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
       if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
