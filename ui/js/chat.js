@@ -6,7 +6,7 @@ import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, card
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji } from './util.js';
 import { md } from './md.js';
-import { speakMessage } from './voice.js';
+import { speakMessage, trackMessages } from './voice.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -233,17 +233,69 @@ function maybeMarkRead(c, target) {
 }
 
 // ---------- composer ----------
+// The input clears ONLY once the message is confirmed delivered AND visible in
+// the chat timeline; until then the text is the captain's only copy. On failure
+// it stays in the composer with an error indication — never silently eaten.
+const sendBtn = document.querySelector('#chat-form button[type=submit]');
+const sendErrEl = document.getElementById('chat-send-err');
+
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
+
+// The POST already triggered a broadcast, so the echo normally arrives over SSE
+// within a beat; poll the local state for it, with one direct refetch as a
+// fallback (e.g. the SSE stream is stale and hasn't been reaped yet).
+function threadMsgs(target) {
+  const m = /^card:(.+)$/.exec(target);
+  if (m) { const c = card(m[1]); return (c && c.thread) || []; }
+  const l = lieutenant(target.replace(/^lieutenant:/, ''));
+  return (l && l.chat) || [];
+}
+async function waitForEcho(target, text) {
+  const seen = () => threadMsgs(target).some((m) => m.author === USER && m.text === text);
+  for (let i = 0; i < 20; i++) {
+    if (seen()) return true;
+    if (i === 10) api.board().then((doc) => { S.doc = doc; trackMessages(doc); render(); }).catch(() => {});
+    await new Promise((r) => setTimeout(r, 150));
+  }
+  return seen();
+}
+function setSendError(msg) {
+  inputEl.classList.add('send-fail');
+  sendErrEl.textContent = '⚠ not delivered — ' + msg + '. Your message is still below; try again.';
+  sendErrEl.hidden = false;
+}
+function clearSendError() {
+  inputEl.classList.remove('send-fail');
+  sendErrEl.hidden = true;
+}
+
+let sending = false;
 async function send() {
+  if (sending) return;
   const target = currentTarget();
   if (!target) return;
   const text = inputEl.value.trim();
   if (!text) return;
-  inputEl.value = '';
-  autoGrow(inputEl);
-  try { await api.feedback(target, text); } catch (e) { alert(e.message); }
+  sending = true;
+  clearSendError();
+  sendBtn.disabled = true;
+  sendBtn.classList.add('sending');
+  inputEl.readOnly = true; // the pending text must stay exactly what was sent
+  try {
+    await api.feedback(target, text);
+    if (!(await waitForEcho(target, text))) throw new Error('sent, but no echo from the server');
+    inputEl.value = '';
+  } catch (e) {
+    setSendError(e.message);
+  } finally {
+    sending = false;
+    sendBtn.disabled = false;
+    sendBtn.classList.remove('sending');
+    inputEl.readOnly = false;
+    autoGrow(inputEl);
+  }
 }
-inputEl.oninput = () => autoGrow(inputEl);
+inputEl.oninput = () => { autoGrow(inputEl); clearSendError(); };
 // Enter inserts a newline; Cmd+Enter (mac) or Ctrl+Enter sends.
 inputEl.onkeydown = (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }

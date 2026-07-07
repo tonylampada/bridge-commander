@@ -1,5 +1,6 @@
 // boot: SSE, header controls, mobile tabs, render orchestration
 import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, notifUnreadCount, owedTargets, clearFilters, filtersActive } from './state.js';
+import { api } from './api.js';
 import { trackMessages } from './voice.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
@@ -125,16 +126,54 @@ onRender(() => {
 });
 
 // ---------- SSE ----------
+// A half-open connection after a server restart can sit silent forever without
+// ever firing onerror, leaving a zombie tab. Two defenses:
+//  - staleness watchdog: the server emits a named `ping` every 25s, so >STALE_MS
+//    of total silence means the stream is dead — tear it down and reconnect;
+//  - boot-id: the board payload carries the server instance id, so a restart is
+//    detected even on a fast auto-retry reconnect.
+// Every (re)open also refetches the full board: events missed while stale are
+// gone for good, and the refetch is what heals the tab.
+const STALE_MS = 40000;
+let es = null;
+let lastEventAt = Date.now();
+let serverBoot = null;
+
+function applyBoard(doc) {
+  serverBoot = doc.boot || serverBoot;
+  S.doc = doc;
+  trackMessages(S.doc);
+  render();
+}
+function refetchBoard() {
+  api.board().then(applyBoard).catch(() => {}); // still down — the watchdog retries
+}
 function connect() {
-  const es = new EventSource('/api/events');
+  if (es) es.close();
+  es = new EventSource('/api/events');
   es.addEventListener('board', (e) => {
-    S.doc = JSON.parse(e.data);
-    trackMessages(S.doc);
-    render();
+    lastEventAt = Date.now();
+    const doc = JSON.parse(e.data);
+    const restarted = serverBoot && doc.boot && doc.boot !== serverBoot;
+    applyBoard(doc);
+    if (restarted) refetchBoard(); // new server instance — make sure we hold its current state
   });
-  es.onopen = () => { S.connected = true; renderStatusDot(); };
+  es.addEventListener('ping', () => { lastEventAt = Date.now(); });
+  es.onopen = () => {
+    lastEventAt = Date.now();
+    S.connected = true;
+    renderStatusDot();
+    refetchBoard(); // anything pushed while we were away is unrecoverable — resync
+  };
   es.onerror = () => { S.connected = false; renderStatusDot(); };
 }
 connect();
+setInterval(() => {
+  if (Date.now() - lastEventAt <= STALE_MS) return;
+  lastEventAt = Date.now(); // one reconnect per stale window
+  S.connected = false;
+  renderStatusDot();
+  connect();
+}, 5000);
 renderStatusDot();
 setInterval(render, 60000); // refresh "ago" labels

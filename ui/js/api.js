@@ -30,5 +30,6 @@ export const api = {
   markThreadRead: (target) => j('POST', '/api/read', { user: 'user', target }),
   labels: (body) => j('POST', '/api/labels', body),
   artifact: (uri) => j('GET', '/api/artifact?uri=' + encodeURIComponent(uri)),
+  board: () => j('GET', '/api/board'),
   config: () => j('GET', '/api/config'),
 };

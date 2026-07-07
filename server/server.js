@@ -543,8 +543,12 @@ function publicCard(card, user) {
 }
 // The served board carries the EFFECTIVE kinds map (built-ins merged under the
 // registered entries); the stored board keeps only the registered map.
+// `boot` identifies this server instance: a client seeing it change knows the
+// server restarted and any SSE events in between are gone — refetch, don't trust
+// the old stream.
+const BOOT_ID = process.pid + '-' + Date.now();
 function publicBoard(user) {
-  return Object.assign({}, board, { kinds: effectiveKinds(), cards: board.cards.map((c) => publicCard(c, user)) });
+  return Object.assign({}, board, { boot: BOOT_ID, kinds: effectiveKinds(), cards: board.cards.map((c) => publicCard(c, user)) });
 }
 
 // status.set — the ONLY writer of card.status.worker.
@@ -575,7 +579,9 @@ function broadcast() {
   const payload = 'event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n';
   for (const res of sseClients) res.write(payload);
 }
-setInterval(() => { for (const res of sseClients) res.write(': ping\n\n'); }, 25000).unref();
+// Named ping (not an SSE comment): comments are invisible to EventSource, so
+// the client's staleness watchdog couldn't see the stream is alive.
+setInterval(() => { for (const res of sseClients) res.write('event: ping\ndata: {}\n\n'); }, 25000).unref();
 
 // ---------- helpers ----------
 function sendJson(res, code, obj) {
