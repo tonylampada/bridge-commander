@@ -609,7 +609,7 @@ async function cmdDrain() {
       hint = 'note it; act only if it changes your plan';
     } else if (it.kind === 'worker-done') {
       head = 'WORKER DONE — ' + cardBit(it.card);
-      hint = 'verify the work in its worktree, rewrite the card body to current state, then hand off: bc-axi card move ' + it.card + ' review';
+      hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text), rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
     } else if (it.kind === 'worker-died') {
       head = 'WORKER DIED — ' + cardBit(it.card);
       hint = 'the worker session died without done: resume it (bc-axi card start ' + it.card + ' --resume) or move the card back to backlog';

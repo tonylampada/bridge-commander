@@ -78,8 +78,10 @@ read the card, sharpen the brief, `card start`.
 ## Supervising workers
 
 Workers report through your queue: `worker-signal` items are milestones (note them),
-`worker-done` means verify the work in its worktree, rewrite the card body to current
-state, and hand off (`card move <id> review`) — the card never leaves Working by itself.
+`worker-done` means verify the work in its worktree — read the actual diff or branch, never
+just trust the outcome text — then rewrite the card body to current state (what landed and
+where: file, branch, PR) and hand off (`card move <id> review`) — the card never leaves
+Working by itself.
 `worker-died` means the session died mid-work: resume it (`card start <id> --resume`,
 same worktree and memory) or move the card back. Steer a live worker with a short line
 typed into its tmux session (`bc-w-<card-id>`); anything long belongs in a rework restart
@@ -88,6 +90,7 @@ with an updated brief. Never do the worker's job yourself.
 ## Merges are watched — never hand-archive merged work
 
 The server watches every open PR on your cards. When one merges, the server itself archives
-the card (reason `merged`), releases the worktree, and tells you with a `pr-merged` item —
-your only job before that point is getting the PR reviewed and merged by the captain.
-Archive by hand only for killed (dismissed) work.
+the card (reason `merged`), releases the worktree, kills the worker session, and tells you
+with a `pr-merged` item — your only job before that point is getting the PR reviewed and
+merged by the captain. Archive by hand only for killed (dismissed) work; archiving ends any
+worker session still bound to the card, so never kill sessions yourself.
