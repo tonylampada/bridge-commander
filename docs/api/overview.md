@@ -50,34 +50,52 @@ its cards carry that color stripe.
 
 ## Operations
 
-### workspace
-- `workspace.init(dir) → workspace` — must run inside tmux (refuses outside, with instruction); creates `.bridge-command/`, boots the server, registers the calling agent as the first lieutenant (the "teleport")
-- `workspace.addProject(url | path, mode) → project`
+Callers · mechanisms: 🧑‍✈️ captain (UI click/drag) · ⚓ lieutenant (CLI) · 🛠️ worker (CLI/hook) · ⚙️ server (automatic — no agent turn involved)
 
-### lieutenant
-- `lieutenant.create(charter) → lieutenant` — server spawns its tmux session (harness port) with the doctrine + charter as launch prompt
-- `lieutenant.retire(lieutenant)` — explicit only; cards must be archived or reassigned first
+### workspace & lieutenant
+
+| Operation | Signature | Who | When |
+|---|---|---|---|
+| `workspace.init` | `dir → workspace` | ⚓ (the founding agent) | skill invoked in a fresh dir, **inside tmux** (refuses outside, with instruction); creates `.bridge-command/`, boots the server, registers the caller as the first lieutenant — the "teleport" |
+| `workspace.addProject` | `url \| path, mode → project` | ⚓ | captain asks to bring a repo into the workspace |
+| `lieutenant.create` | `charter → lieutenant` | 🧑‍✈️ lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + charter as launch prompt |
+| `lieutenant.retire` | `lieutenant` | 🧑‍✈️ | explicit only; cards must be archived or reassigned first |
 
 ### card
-- `card.create(lieutenant, title, type, attrs) → card` — captain (via UI) or lieutenant (proactive); born in Backlog
-- `card.start(card) → worker` — lieutenant act, or execution of a captain drag-order. ONE atomic operation: spawn worker session + worktree, bind to card, card → Working. `plan` cards can never start
-- `card.move(card, column)` — captain drags are **orders** (see side effects); lieutenants move only → Your review (the handoff); the system moves only on objective facts (start, merge)
-- `card.patch(card, {title?, body?, attrs?})`
-- `card.archive(card, reason)` / `card.restore(card)`
 
-### chat
-- `chat.say(target: lieutenant-main | card, text)` — both directions; captain → always write-ahead to the queue, then wake
+| Operation | Signature | Who | When |
+|---|---|---|---|
+| `card.create` | `lieutenant, title, type, attrs → card` | 🧑‍✈️ · ⚓ (proactive) | an idea/task is worth tracking; born in Backlog |
+| `card.start` | `card → worker` | ⚓ (own judgment, or executing a captain drag-order) | ready to work: ONE atomic op — spawn worker session + worktree, bind to card, card → Working. `plan` cards never start |
+| `card.move` | `card, column` | 🧑‍✈️ drag = **order** · ⚓ only → Your review (the handoff) · ⚙️ only on objective facts (start, merge) | see side effects for drag semantics |
+| `card.patch` | `card, {title?, body?, attrs?}` | ⚓ · ⚙️ (mechanical attrs: prs, session) | body rewritten to current state before every handoff |
+| `card.archive` | `card, reason` | ⚙️ on merge · ⚓/🧑‍✈️ otherwise | work landed, died, or was dismissed |
+| `card.restore` | `card` | ⚓ · ⚙️ (live evidence for an archived card) | a kill was a mistake; full frozen state + loud level-1 event |
 
-### feed (lieutenant side)
-- `feed.drain(lieutenant) → QueueItem[]` — first act of every lieutenant turn
-- `feed.ack(seq)` — an item leaves the queue only on ack; unacked re-offers
+### conversation & delivery
 
-### worker (server ↔ worker, mechanical)
-- `worker.signal(card, text)` — status milestones from the worker, become card events + queue items
-- `worker.end(card, outcome)` — turn-end/exit detected by the server via harness hooks
+| Operation | Signature | Who | When |
+|---|---|---|---|
+| `chat.say` | `target: lieutenant-main \| card, text` | 🧑‍✈️ ↔ ⚓ | any time; captain-side is write-ahead: queue first, then `harness.send` wake |
+| `feed.drain` | `lieutenant → QueueItem[]` | ⚓ | first act of every lieutenant turn |
+| `feed.ack` | `seq` | ⚓ | after handling; only ack removes — unacked re-offers |
+
+### worker plumbing
+
+| Operation | Signature | Who | When |
+|---|---|---|---|
+| `worker.signal` | `card, text` | 🛠️ | real milestones (branch, tests green, PR open) → level-2 event + QueueItem to the owner |
+| `worker.end` | `card, outcome` | ⚙️ via harness turn-end/exit hooks | worker finished or died; wakes the owning lieutenant |
 
 ### harness port (internal seam — the multi-harness contract)
-- `harness.spawn(cwd, prompt) → HarnessRef` · `harness.send(ref, text)` · `harness.alive(ref)` · `harness.resume(ref) → HarnessRef` · `harness.onTurnEnd(ref, hook)`
+
+| Verb | Signature | Called by | Purpose |
+|---|---|---|---|
+| `harness.spawn` | `cwd, prompt → HarnessRef` | ⚙️ | birth a lieutenant or worker session |
+| `harness.send` | `ref, text` | ⚙️ | type into a session (the wake half of delivery) |
+| `harness.alive` | `ref → bool` | ⚙️ | liveness check for supervision |
+| `harness.resume` | `ref → HarnessRef` | ⚙️ | reincarnate a dead session with memory when possible |
+| `harness.onTurnEnd` | `ref, hook` | ⚙️ | turn-boundary detection |
 
 The server speaks ONLY this port. v0 ships the `claude` implementation; adding a harness is
 implementing these five verbs, nothing else.
