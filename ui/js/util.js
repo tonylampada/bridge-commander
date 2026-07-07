@@ -11,6 +11,30 @@ export function ago(iso) {
   if (s < 86400) return Math.floor(s / 3600) + 'h';
   return Math.floor(s / 86400) + 'd';
 }
+// "ago" labels are rendered as EMPTY spans carrying the timestamp, then filled
+// in by refreshAgoLabels after every render pass (and on the periodic tick).
+// Keeping the time-dependent text OUT of the markup keeps panel html strings
+// stable, so the skip-identical render guards don't rebuild the DOM just
+// because a minute passed.
+export function agoSpanHtml(iso, cls) {
+  return '<span' + (cls ? ' class="' + cls + '"' : '') + ' data-ago="' + esc(iso || '') + '"></span>';
+}
+export function refreshAgoLabels(root) {
+  for (const el of (root || document).querySelectorAll('[data-ago]')) {
+    const t = ago(el.dataset.ago);
+    if (el.textContent !== t) el.textContent = t;
+  }
+}
+// Assign innerHTML only when the markup actually changed since the LAST
+// assignment through this helper (cached on the element — never read back from
+// the live DOM, which post-passes like refreshAgoLabels mutate). Returns true
+// when the DOM was rebuilt, so callers re-wire handlers only then.
+export function setHtmlIfChanged(el, html) {
+  if (el.__bcHtml === html) return false;
+  el.__bcHtml = html;
+  el.innerHTML = html;
+  return true;
+}
 export function hhmm(iso) {
   try { return new Date(iso).toTimeString().slice(0, 5); } catch (e) { return ''; }
 }

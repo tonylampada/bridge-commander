@@ -1,6 +1,7 @@
 // boot: SSE, header controls, mobile tabs, render orchestration
 import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, notifUnreadCount, owedTargets, clearFilters, filtersActive } from './state.js';
 import { api } from './api.js';
+import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
@@ -24,6 +25,11 @@ function syncFilterInputs() {
   if (filterInput.value !== S.filters.text) filterInput.value = S.filters.text;
   if (filterAge.value !== S.filters.age) filterAge.value = S.filters.age;
   filterClear.style.display = filtersActive() ? 'inline' : 'none';
+  // rebuild the chips only when the selection actually changed (the chip
+  // handlers close over the f objects, so identity is per-selection anyway)
+  const sig = S.filters.sel.map((f) => f.kind + ':' + f.value).join('|');
+  if (chipsEl.__bcSig === sig) return;
+  chipsEl.__bcSig = sig;
   chipsEl.textContent = '';
   for (const f of S.filters.sel) {
     const chip = document.createElement('span');
@@ -123,6 +129,9 @@ onRender(() => {
   renderTabs();
   if (pickerIsOpen()) renderPicker();
   if (!spEl.hidden) renderLabelManager();
+  // fill the [data-ago] spans the panels above left empty (see util.js: time
+  // text stays out of the compared markup so it never forces a rebuild)
+  refreshAgoLabels();
 });
 
 // ---------- SSE ----------
@@ -176,4 +185,8 @@ setInterval(() => {
   connect();
 }, 5000);
 renderStatusDot();
-setInterval(render, 60000); // refresh "ago" labels
+// the minute tick: one guarded render pass — the [data-ago] labels are updated
+// in place by the refreshAgoLabels post-pass, and time-derived STATE (the
+// stale-owed ⚠ flip) still surfaces; panels whose markup didn't change leave
+// their DOM untouched
+setInterval(render, 60000);

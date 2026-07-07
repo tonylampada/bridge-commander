@@ -4,7 +4,7 @@
 // premium composer.
 import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, cardStatus, cardActivityTs, render, threadUnread, targetOwed, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
-import { esc, hhmm, dayLabel, cardEmoji } from './util.js';
+import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged } from './util.js';
 import { md } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 
@@ -78,10 +78,6 @@ backBtn.onclick = backToMain;
 openBtn.onclick = () => { if (S.chatMode && S.chatMode.mode === 'card' && detailOpener) detailOpener(S.chatMode.id); };
 
 // ---------- feed rendering ----------
-// lieutenant messages rendered this pass, in DOM order, so a post-render pass can
-// wire each .msg.agent[data-speak] button to the right message's text without ever
-// interpolating message text into markup (XSS-safe).
-let speakMsgs = [];
 function msgHtml(m) {
   const mine = m.author === USER;
   const body = mine
@@ -91,7 +87,6 @@ function msgHtml(m) {
   // speak button only on lieutenant bubbles; 🔊 icon, no message text in markup
   const speakBtn = mine ? '' :
     '<button class="msg-speak" type="button" data-speak title="read this message aloud" aria-label="read this message aloud">🔊</button>';
-  if (!mine) speakMsgs.push(m);
   return '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body +
     '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
 }
@@ -117,9 +112,20 @@ function mainFeedMsgs() {
 }
 
 // a main chat collapses older history behind one expander; expansion is
-// client-side only and resets on page load
+// client-side only and resets on page load. The cutoff is ANCHORED when the
+// conversation is first shown (not "always the last 30"): new arrivals extend
+// the visible window downward without shifting it, which keeps the earlier
+// blocks' markup stable so the append fast-path below can run.
 const COLLAPSE_KEEP = 30;
 let mainExpanded = false;
+let collapsedHidden = -1; // -1 = recompute on next render (conversation switch)
+
+// What the feed currently shows: per-block html (a block = one message with
+// its day divider merged in, or the history expander) plus the trailing typing
+// indicator. Diffed on every render: identical = leave the DOM alone; new
+// blocks at the end only = append them without touching the earlier DOM (no
+// flicker, no scroll/selection reset); anything else = full rebuild.
+let feed = { key: null, blocks: [], tail: '' };
 
 // the conversation currently shown; a change means "jump to the newest message"
 let lastViewKey = null;
@@ -130,15 +136,35 @@ function scrollFeedToBottom() {
   requestAnimationFrame(() => { jump(); requestAnimationFrame(jump); });
 }
 
+// Wire the speak buttons of freshly (re)built blocks. Buttons not yet wired
+// appear in DOM order and map 1:1 to the given blocks' lieutenant messages, so
+// message text never needs to be interpolated into markup (XSS-safe).
+function wireSpeak(blocks, target) {
+  const msgs = blocks.filter((b) => b.msg).map((b) => b.msg);
+  const btns = feedEl.querySelectorAll('.msg.agent [data-speak]:not([data-wired])');
+  btns.forEach((btn, i) => {
+    const m = msgs[i];
+    if (!m) return;
+    btn.setAttribute('data-wired', '');
+    const key = target + '|' + m.ts + '|' + m.author; // stable per message, for toggle-off
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      const spoke = speakMessage(m.text, key);
+      btn.classList.toggle('speaking', spoke);
+    };
+  });
+}
+
 export function renderChat() {
   const target = currentTarget();
   if (!target) {
     backBtn.hidden = true;
     openBtn.hidden = true;
-    titleEl.textContent = '💬 chat';
+    setHtmlIfChanged(titleEl, '💬 chat');
     inputEl.placeholder = 'create a lieutenant to start…';
     inputEl.disabled = true;
-    feedEl.innerHTML = '<div class="empty">no lieutenants yet — add one above the board to start commanding</div>';
+    if (feed.key !== '') feedEl.innerHTML = '<div class="empty">no lieutenants yet — add one above the board to start commanding</div>';
+    feed = { key: '', blocks: [], tail: '' };
     return;
   }
   inputEl.disabled = false;
@@ -149,11 +175,9 @@ export function renderChat() {
 
   backBtn.hidden = !isCard;
   openBtn.hidden = !isCard;
-  if (isCard) {
-    titleEl.textContent = cardEmoji(c) + ' ' + (c.title || c.id);
-  } else {
-    titleEl.innerHTML = '<span class="lt-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span> ' + esc(ltName);
-  }
+  setHtmlIfChanged(titleEl, isCard
+    ? esc(cardEmoji(c) + ' ' + (c.title || c.id))
+    : '<span class="lt-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span> ' + esc(ltName));
   inputEl.placeholder = isCard ? 'message ' + ltName + ' about this card…' : 'message ' + ltName + '…';
 
   // Land at the newest message when the visible conversation changes (first
@@ -161,54 +185,64 @@ export function renderChat() {
   // feed was already near the bottom; otherwise leave the reader's scroll be.
   const viewKey = target + '|' + (window.innerWidth <= 760 ? S.view : 'desktop');
   const switched = viewKey !== lastViewKey;
-  if (switched) mainExpanded = false; // each conversation starts collapsed
   lastViewKey = viewKey;
+  if (target !== feed.key) { mainExpanded = false; collapsedHidden = -1; } // each conversation starts collapsed
   const pinned = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
-  speakMsgs = [];
-  let html = '', lastDay = '';
-  const push = (ts, itemHtml) => {
-    const day = ts ? dayLabel(ts) : '';
-    if (day && day !== lastDay) { html += '<div class="feed-day">' + esc(day) + '</div>'; lastDay = day; }
-    html += itemHtml;
+
+  const blocks = []; // {html, msg?} — msg only on lieutenant bubbles, for speak wiring
+  let lastDay = '';
+  const push = (m) => {
+    const day = m.ts ? dayLabel(m.ts) : '';
+    let h = '';
+    if (day && day !== lastDay) { h += '<div class="feed-day">' + esc(day) + '</div>'; lastDay = day; }
+    blocks.push({ html: h + msgHtml(m), msg: m.author === USER ? null : m });
   };
   if (isCard) {
-    for (const m of c.thread || []) push(m.ts, msgHtml(m));
+    for (const m of c.thread || []) push(m);
   } else {
     // only the newest COLLAPSE_KEEP messages render by default; older history
-    // sits behind the expander. msgHtml runs only for visible messages so the
-    // speak-button ↔ speakMsgs DOM-order mapping stays 1:1.
+    // sits behind the expander (anchored cutoff — see collapsedHidden above)
     const msgs = mainFeedMsgs();
-    const hidden = mainExpanded ? 0 : Math.max(0, msgs.length - COLLAPSE_KEEP);
-    if (hidden) html += '<button class="feed-expand" type="button">show earlier messages (' + hidden + ')</button>';
-    for (const m of msgs.slice(hidden)) push(m.ts, msgHtml(m));
+    if (collapsedHidden < 0) collapsedHidden = Math.max(0, msgs.length - COLLAPSE_KEEP);
+    const hidden = mainExpanded ? 0 : Math.min(collapsedHidden, msgs.length);
+    if (hidden) blocks.push({ html: '<button class="feed-expand" type="button">show earlier messages (' + hidden + ')</button>' });
+    for (const m of msgs.slice(hidden)) push(m);
   }
-  if (targetOwed(target)) html += typingHtml(targetOwedStale(target), ltName);
-  feedEl.innerHTML = html || '<div class="empty">no messages yet</div>';
-  if (switched) scrollFeedToBottom(); // deferred: the feed may still be hidden this frame
-  else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
+  const tail = targetOwed(target) ? typingHtml(targetOwedStale(target), ltName) : '';
 
-  // expander: reveal the full history, keeping the reader's place (content is
-  // inserted above, so anchor scrollTop by the height delta)
-  const expandBtn = feedEl.querySelector('.feed-expand');
-  if (expandBtn) expandBtn.onclick = () => {
-    const prevH = feedEl.scrollHeight, prevTop = feedEl.scrollTop;
-    mainExpanded = true;
-    renderChat();
-    feedEl.scrollTop = prevTop + (feedEl.scrollHeight - prevH);
-  };
+  const prev = feed;
+  feed = { key: target, blocks, tail };
+  const prefixOk = target === prev.key && blocks.length >= prev.blocks.length &&
+    prev.blocks.every((b, i) => b.html === blocks[i].html);
+  if (prefixOk && blocks.length === prev.blocks.length && tail === prev.tail) {
+    // nothing visible changed — leave the DOM (and the reader) alone
+    if (switched) scrollFeedToBottom();
+  } else if (prefixOk && prev.blocks.length) {
+    // append-only delta: swap the typing indicator, add the new blocks at the
+    // end; the earlier DOM — scroll, selection, focus — is never touched
+    const typingEl = feedEl.querySelector('.msg.typing');
+    if (typingEl) typingEl.remove();
+    const fresh = blocks.slice(prev.blocks.length);
+    feedEl.insertAdjacentHTML('beforeend', fresh.map((b) => b.html).join('') + tail);
+    wireSpeak(fresh, target);
+    if (switched) scrollFeedToBottom();
+    else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
+  } else {
+    feedEl.innerHTML = blocks.map((b) => b.html).join('') + tail || '<div class="empty">no messages yet</div>';
+    wireSpeak(blocks, target);
+    if (switched) scrollFeedToBottom(); // deferred: the feed may still be hidden this frame
+    else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
 
-  // wire speak buttons: .msg.agent[data-speak] in DOM order maps 1:1 to speakMsgs
-  const speakBtns = feedEl.querySelectorAll('.msg.agent [data-speak]');
-  speakBtns.forEach((btn, i) => {
-    const m = speakMsgs[i];
-    if (!m) return;
-    const key = target + '|' + m.ts + '|' + m.author; // stable per message, for toggle-off
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      const spoke = speakMessage(m.text, key);
-      btn.classList.toggle('speaking', spoke);
+    // expander: reveal the full history, keeping the reader's place (content is
+    // inserted above, so anchor scrollTop by the height delta)
+    const expandBtn = feedEl.querySelector('.feed-expand');
+    if (expandBtn) expandBtn.onclick = () => {
+      const prevH = feedEl.scrollHeight, prevTop = feedEl.scrollTop;
+      mainExpanded = true;
+      renderChat();
+      feedEl.scrollTop = prevTop + (feedEl.scrollHeight - prevH);
     };
-  });
+  }
 
   maybeMarkRead(isCard ? c : null, target);
 }

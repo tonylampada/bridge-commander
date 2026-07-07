@@ -2,7 +2,6 @@
 // expandable "· N events ·" dividers revealing the suppressed level-2 events.
 import { S, allEvents, notifItems, notifUnreadCount, card, kindEmoji, render } from './state.js';
 import { api } from './api.js';
-import { ago } from './util.js';
 
 const bellBtn = document.getElementById('bell');
 const bellN = document.getElementById('bell-n');
@@ -41,7 +40,12 @@ function itemNode(e, lvl2) {
   tx.textContent = e.text;
   const sub = document.createElement('div');
   sub.className = 'sub';
-  sub.textContent = [e.cardTitle || (e.card ? e.card : ''), e.actor, ago(e.ts) + ' ago'].filter(Boolean).join(' · ');
+  // the "ago" text lives in a [data-ago] span filled post-render (util.js), so
+  // the passage of time alone never changes the list's markup
+  sub.textContent = [e.cardTitle || (e.card ? e.card : ''), e.actor].filter(Boolean).map((p) => p + ' · ').join('');
+  const agoEl = document.createElement('span');
+  agoEl.dataset.ago = e.ts || '';
+  sub.append(agoEl, ' ago');
   bd.append(tx, sub);
   row.append(em, bd);
   if (!lvl2) {
@@ -65,6 +69,46 @@ function gapNode(count, seq) {
   return g;
 }
 
+// The list rows are DOM-built (per-row click handlers), so the list is
+// assembled DETACHED and swapped into the live panel only when its markup
+// actually differs from what was last swapped in — otherwise the visible rows
+// (and the reader's scroll position) are left alone. Compared against a cached
+// string, never the live DOM, which the post-render ago pass mutates.
+let lastListHtml = null;
+function buildList(into) {
+  const all = allEvents(); // ascending seq
+  if (S.notifShowAll) {
+    if (!all.length) { into.innerHTML = '<div class="np-empty">no events yet</div>'; return; }
+    const items = notifItems(); // for read flags on level-1
+    const readOf = new Map(items.map((i) => [i.seq, i.read]));
+    for (const e of all.slice().reverse()) {
+      const node = itemNode(Object.assign({}, e, { read: readOf.get(e.seq) !== false }), e.level === 2);
+      into.appendChild(node);
+    }
+    return;
+  }
+  const lvl1 = notifItems(); // newest first
+  if (!lvl1.length) { into.innerHTML = '<div class="np-empty">nothing yet — level-1 signals land here</div>'; return; }
+  // Between consecutive level-1 items sit suppressed level-2 events (by seq gap):
+  // collapsed to a "· N events ·" divider, expandable inline. Newer-than-newest
+  // level-2 events get a leading divider on top.
+  const top = all.filter((x) => x.level === 2 && x.seq > lvl1[0].seq).reverse();
+  if (top.length) {
+    if (S.notifExpanded.has('top')) for (const g of top) into.appendChild(itemNode(g, true));
+    else into.appendChild(gapNode(top.length, 'top'));
+  }
+  for (let i = 0; i < lvl1.length; i++) {
+    const e = lvl1[i];
+    into.appendChild(itemNode(e, false));
+    const lower = i + 1 < lvl1.length ? lvl1[i + 1].seq : 0;
+    const gap = all.filter((x) => x.level === 2 && x.seq > lower && x.seq < e.seq).reverse();
+    if (gap.length) {
+      if (S.notifExpanded.has(e.seq)) for (const g of gap) into.appendChild(itemNode(g, true));
+      else into.appendChild(gapNode(gap.length, e.seq));
+    }
+  }
+}
+
 export function renderNotifications() {
   const unread = notifUnreadCount();
   bellN.hidden = !unread;
@@ -75,36 +119,10 @@ export function renderNotifications() {
   if (!S.notifOpen) return;
   showAllCb.checked = S.notifShowAll;
 
+  const tmp = document.createElement('div');
+  buildList(tmp);
+  if (lastListHtml === tmp.innerHTML) return; // same markup — keep the live rows
+  lastListHtml = tmp.innerHTML;
   listEl.textContent = '';
-  const all = allEvents(); // ascending seq
-  if (S.notifShowAll) {
-    if (!all.length) { listEl.innerHTML = '<div class="np-empty">no events yet</div>'; return; }
-    const items = notifItems(); // for read flags on level-1
-    const readOf = new Map(items.map((i) => [i.seq, i.read]));
-    for (const e of all.slice().reverse()) {
-      const node = itemNode(Object.assign({}, e, { read: readOf.get(e.seq) !== false }), e.level === 2);
-      listEl.appendChild(node);
-    }
-    return;
-  }
-  const lvl1 = notifItems(); // newest first
-  if (!lvl1.length) { listEl.innerHTML = '<div class="np-empty">nothing yet — level-1 signals land here</div>'; return; }
-  // Between consecutive level-1 items sit suppressed level-2 events (by seq gap):
-  // collapsed to a "· N events ·" divider, expandable inline. Newer-than-newest
-  // level-2 events get a leading divider on top.
-  const top = all.filter((x) => x.level === 2 && x.seq > lvl1[0].seq).reverse();
-  if (top.length) {
-    if (S.notifExpanded.has('top')) for (const g of top) listEl.appendChild(itemNode(g, true));
-    else listEl.appendChild(gapNode(top.length, 'top'));
-  }
-  for (let i = 0; i < lvl1.length; i++) {
-    const e = lvl1[i];
-    listEl.appendChild(itemNode(e, false));
-    const lower = i + 1 < lvl1.length ? lvl1[i + 1].seq : 0;
-    const gap = all.filter((x) => x.level === 2 && x.seq > lower && x.seq < e.seq).reverse();
-    if (gap.length) {
-      if (S.notifExpanded.has(e.seq)) for (const g of gap) listEl.appendChild(itemNode(g, true));
-      else listEl.appendChild(gapNode(gap.length, e.seq));
-    }
-  }
+  while (tmp.firstChild) listEl.appendChild(tmp.firstChild);
 }
