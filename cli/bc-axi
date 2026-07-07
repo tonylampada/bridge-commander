@@ -202,6 +202,17 @@ async function cmdInit() {
   } catch (e) { die('could not read the current tmux session: ' + e.message); }
   if (!tmuxSession) die('could not resolve the current tmux session name');
 
+  // Loud target-dir echo: the #1 init foot-gun is initializing the WRONG directory
+  // because the agent's cwd drifted from the intended workspace. Announce the resolved
+  // target and how it was chosen, so a wrong dir is caught before any state is written.
+  const fresh = !fs.existsSync(STATE_DIR);
+  const how = opts.workspace ? '--workspace flag' : (fresh ? 'current directory (cwd)' : 'existing .bridge-command/ found from cwd upward');
+  console.error('┌─ bridge-command init');
+  console.error('│  workspace : ' + WORKSPACE + (fresh ? '   (NEW)' : '   (existing)'));
+  console.error('│  resolved  : ' + how);
+  console.error('│  tmux      : ' + tmuxSession);
+  console.error('└─ if that workspace is wrong, stop now and re-run with --workspace <dir>');
+
   // 2. state dir + server (detached, idempotent)
   fs.mkdirSync(STATE_DIR, { recursive: true });
   excludeFromGit(WORKSPACE, '.bridge-command/');

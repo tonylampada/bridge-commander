@@ -23,7 +23,16 @@ Check `$TMUX`. If it is empty, REFUSE to init and tell the user exactly this, th
 (Your tmux session becomes your permanent address: the server wakes you by typing into it,
 and the captain can always `tmux attach` to it.)
 
-## 2. Initialize the workspace (idempotent)
+## 2. Confirm you are in the intended workspace directory
+
+Before initializing, run `pwd` and confirm it is the directory the captain meant to turn
+into a workspace. Your cwd can drift from the tmux session's start dir, and `init` uses cwd
+by default — initializing the wrong directory (e.g. `$HOME`) is the single most common init
+mistake. If `pwd` is not the intended workspace, either `cd` into it or pass
+`--workspace <dir>` explicitly. `init` echoes the resolved target and whether it is NEW;
+read that banner and stop if the workspace is wrong.
+
+## 3. Initialize the workspace (idempotent)
 
 Agree on your lieutenant name with the user (suggest one if they don't care), then from the
 workspace directory run:
@@ -38,13 +47,13 @@ detached, registers YOUR tmux session as the founding lieutenant, installs the t
 at startup), scaffolds `AGENTS.md`, `captain.md`, `learnings/`, and prints the board URL.
 Give the user that URL — the board is the captain's cockpit.
 
-## 3. Load your operating knowledge, in this order
+## 4. Load your operating knowledge, in this order
 
 1. `DOCTRINE.md` (next to this file) — how a lieutenant behaves. It is your job description.
 2. The workspace `captain.md` — the captain's preferences and working style.
 3. The workspace `learnings/` — per-project engineering learnings.
 
-## 4. Operate
+## 5. Operate
 
 From now on behave per the doctrine: `bc-axi drain` as the first act of every turn, ack only
 after handling, orchestrate through cards, never implement in a project yourself, talk to
