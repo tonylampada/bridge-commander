@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
 const t = require('./tmux.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
@@ -61,19 +61,19 @@ function paneTarget(session) {
   return `=${session}:`;
 }
 
-function paneCommand(session) {
-  const out = t.tryTmux('display-message', '-p', '-t', paneTarget(session), '#{pane_current_command}');
+async function paneCommand(session) {
+  const out = await t.tryTmux('display-message', '-p', '-t', paneTarget(session), '#{pane_current_command}');
   return out === null ? null : out.trim();
 }
 
-function hasSession(session) {
-  return t.tryTmux('has-session', '-t', paneTarget(session)) !== null;
+async function hasSession(session) {
+  return (await t.tryTmux('has-session', '-t', paneTarget(session))) !== null;
 }
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from
 // git (info/exclude) when cwd is a repo, so it never dirties a worktree.
-function installHooks(cwd, session, stateDir, callbackUrl) {
+async function installHooks(cwd, session, stateDir, callbackUrl) {
   const dir = path.join(cwd, '.claude');
   const file = path.join(dir, 'settings.local.json');
   fs.mkdirSync(dir, { recursive: true });
@@ -99,8 +99,10 @@ function installHooks(cwd, session, stateDir, callbackUrl) {
   }
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   try {
-    const gitDir = execFileSync('git', ['-C', cwd, 'rev-parse', '--git-path', 'info/exclude'],
-      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const gitDir = (await new Promise((resolve, reject) => {
+      execFile('git', ['-C', cwd, 'rev-parse', '--git-path', 'info/exclude'],
+        { encoding: 'utf8' }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+    })).trim();
     const excl = path.isAbsolute(gitDir) ? gitDir : path.join(cwd, gitDir);
     fs.mkdirSync(path.dirname(excl), { recursive: true });
     const cur = fs.existsSync(excl) ? fs.readFileSync(excl, 'utf8') : '';
@@ -121,25 +123,25 @@ function installHooks(cwd, session, stateDir, callbackUrl) {
 const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 
 async function launchAndSettle(session, launchCmd) {
-  t.sendLiteral(paneTarget(session), launchCmd);
+  await t.sendLiteral(paneTarget(session), launchCmd);
   await t.sleep(300);
-  t.sendKey(paneTarget(session), 'Enter');
+  await t.sendKey(paneTarget(session), 'Enter');
 
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
     await t.sleep(500);
-    const cmd = paneCommand(session);
+    const cmd = await paneCommand(session);
     if (cmd === null) throw new Error(`tmux session ${session} vanished during launch`);
     if (SHELLS.has(cmd)) continue; // claude not up yet (or it already exited — captured by timeout)
-    const pane = t.capture(paneTarget(session), 40);
+    const pane = await t.capture(paneTarget(session), 40);
     if (TRUST_RE.test(pane)) {
-      t.sendKey(paneTarget(session), 'Enter');
+      await t.sendKey(paneTarget(session), 'Enter');
       await t.sleep(1000);
       continue;
     }
     if (UI_READY_RE.test(pane)) return;
   }
-  const tail = t.capture(paneTarget(session), 20);
+  const tail = await t.capture(paneTarget(session), 20);
   throw new Error(`claude did not start in session ${session} within 45s; pane tail:\n${tail}`);
 }
 
@@ -155,18 +157,18 @@ async function spawn(cwd, prompt, opts = {}) {
   if (!/^bc-[A-Za-z0-9_-]+$/.test(session)) {
     throw new Error(`invalid session name "${session}" (must match bc-<id>)`);
   }
-  if (hasSession(session)) throw new Error(`tmux session ${session} already exists`);
+  if (await hasSession(session)) throw new Error(`tmux session ${session} already exists`);
   const stateDir = stateDirOf(opts);
   const resumeId = crypto.randomUUID();
 
   if (opts.installHooks !== false) {
-    installHooks(cwdAbs, session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+    await installHooks(cwdAbs, session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
   }
 
   const promptFile = path.join(stateDir, `${session}.prompt`);
   fs.writeFileSync(promptFile, prompt);
 
-  t.tmux('new-session', '-d', '-s', session, '-c', cwdAbs);
+  await t.tmux('new-session', '-d', '-s', session, '-c', cwdAbs);
   try {
     const extra = (opts.extraArgs || []).map(shellQuote).join(' ');
     const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
@@ -175,7 +177,7 @@ async function spawn(cwd, prompt, opts = {}) {
       + `"$(cat ${shellQuote(promptFile)})"`;
     await launchAndSettle(session, launchCmd);
   } catch (err) {
-    t.tryTmux('kill-session', '-t', paneTarget(session));
+    await t.tryTmux('kill-session', '-t', paneTarget(session));
     try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
     throw err;
   }
@@ -205,8 +207,8 @@ async function send(ref, text) {
 // alive(ref) — tmux session exists AND its pane is still running the agent
 // (a pane sitting back at a bare shell means claude exited).
 async function alive(ref) {
-  if (!hasSession(ref.session)) return false;
-  const cmd = paneCommand(ref.session);
+  if (!(await hasSession(ref.session))) return false;
+  const cmd = await paneCommand(ref.session);
   return cmd !== null && !SHELLS.has(cmd);
 }
 
@@ -237,19 +239,19 @@ async function resume(ref, opts = {}) {
   } catch {
     // no recorded id — fall back to the ref's
   }
-  if (hasSession(ref.session)) t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+  if (await hasSession(ref.session)) await t.tryTmux('kill-session', '-t', paneTarget(ref.session));
 
   if (opts.installHooks !== false) {
-    installHooks(ref.cwd, ref.session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+    await installHooks(ref.cwd, ref.session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
   }
-  t.tmux('new-session', '-d', '-s', ref.session, '-c', ref.cwd);
+  await t.tmux('new-session', '-d', '-s', ref.session, '-c', ref.cwd);
   try {
     const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
       + 'claude --dangerously-skip-permissions '
       + (resumeId ? `--resume ${resumeId}` : '');
     await launchAndSettle(ref.session, launchCmd.trim());
   } catch (err) {
-    t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+    await t.tryTmux('kill-session', '-t', paneTarget(ref.session));
     throw err;
   }
   return { harness: 'claude', session: ref.session, cwd: ref.cwd, resumeId };
@@ -261,7 +263,7 @@ async function resume(ref, opts = {}) {
 // turn-end log are cheap, and a later resume(ref) can still reincarnate the
 // conversation if the kill turns out to have been premature.
 async function kill(ref) {
-  if (hasSession(ref.session)) t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+  if (await hasSession(ref.session)) await t.tryTmux('kill-session', '-t', paneTarget(ref.session));
 }
 
 // onTurnEnd(ref, hook) -> unsubscribe()

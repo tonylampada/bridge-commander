@@ -256,7 +256,7 @@ async function cmdInit() {
   // Harness state is workspace-scoped (never the harness's global last-resort
   // dir); BC_HARNESS_STATE stays an explicit override, matching the server.
   const harnessState = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
-  installHooks(WORKSPACE, 'ws', harnessState, 'http://127.0.0.1:' + PORT + '/api/turn-end');
+  await installHooks(WORKSPACE, 'ws', harnessState, 'http://127.0.0.1:' + PORT + '/api/turn-end');
   console.log('turn-end hook installed (.claude/settings.local.json -> /api/turn-end)');
 
   // 5. shared memory scaffold (never overwrite what exists)

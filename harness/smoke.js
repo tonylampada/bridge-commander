@@ -72,7 +72,7 @@ async function main() {
     }
 
     // 2. the prompt was processed
-    assertContains(t.capture(`=${ref.session}:`, 80), 'BC_SMOKE_OK', 'first reply');
+    assertContains(await t.capture(`=${ref.session}:`, 80), 'BC_SMOKE_OK', 'first reply');
 
     // 3. alive while running
     if (!(await h.alive(ref))) throw new Error('alive() false while session is running');
@@ -83,12 +83,12 @@ async function main() {
     await h.send(ref, 'Now reply with exactly: BC_SMOKE_2');
     step('follow-up submitted');
     await secondTurn;
-    assertContains(t.capture(`=${ref.session}:`, 80), 'BC_SMOKE_2', 'second reply');
+    assertContains(await t.capture(`=${ref.session}:`, 80), 'BC_SMOKE_2', 'second reply');
 
     if (WITH_RESUME) {
       // 5. kill, resume with memory, verify recall
       step('killing session for the resume leg...');
-      t.tmux('kill-session', '-t', `=${ref.session}:`);
+      await t.tmux('kill-session', '-t', `=${ref.session}:`);
       if (await h.alive(ref)) throw new Error('alive() true after kill-session');
       step('alive() false after kill');
       ref = await h.resume(ref);
@@ -97,11 +97,11 @@ async function main() {
       const recallTurn = waitTurnEnd(h, ref, 'recall turn');
       await h.send(ref, 'What was the FIRST marker I asked you to reply with? Answer with just that marker.');
       await recallTurn;
-      assertContains(t.capture(`=${ref.session}:`, 80), 'BC_SMOKE_OK', 'resume memory recall');
+      assertContains(await t.capture(`=${ref.session}:`, 80), 'BC_SMOKE_OK', 'resume memory recall');
     }
 
     // 6. kill; alive flips false
-    t.tmux('kill-session', '-t', `=${ref.session}:`);
+    await t.tmux('kill-session', '-t', `=${ref.session}:`);
     if (await h.alive(ref)) throw new Error('alive() true after final kill-session');
     step('alive() false after kill');
 
@@ -110,15 +110,15 @@ async function main() {
   } finally {
     // cleanup: session, state files, workdir
     if (ref) {
-      t.tryTmux('kill-session', '-t', `=${ref.session}:`);
+      if (!ok) {
+        console.error(`[smoke] FAILED — pane tail of ${ref.session} (if still up):`);
+        console.error(await t.capture(`=${ref.session}:`, 40));
+      }
+      await t.tryTmux('kill-session', '-t', `=${ref.session}:`);
       const stateDir = process.env.BC_HARNESS_STATE
         || path.join(os.homedir(), '.bridge-command', 'harness');
       for (const suffix of ['.prompt', '.session-id', '.turnend.jsonl']) {
         try { fs.unlinkSync(path.join(stateDir, ref.session + suffix)); } catch { /* absent */ }
-      }
-      if (!ok) {
-        console.error(`[smoke] FAILED — pane tail of ${ref.session} (if still up):`);
-        console.error(t.capture(`=${ref.session}:`, 40));
       }
     }
     fs.rmSync(cwd, { recursive: true, force: true });
