@@ -187,7 +187,7 @@ function slugId(s) {
 }
 async function cmdInit() {
   if (!opts.name) {
-    die('usage: bc-axi init --name <founding-lieutenant-name> [--id id] [--charter-file f|-] [--port N]\n' +
+    die('usage: bc-axi init --name <founding-lieutenant-name> [--id id] [--charter-file f|-] [--port N] [--host H]\n' +
       '  Run from inside the tmux session that will BE the founding lieutenant.');
   }
   // 1. teleport precondition: the caller's tmux session becomes the lieutenant's address
@@ -723,13 +723,14 @@ const commands = {
 if (!commands[cmd]) {
   die('bc-axi — agent CLI for the bridge-command board.\n' +
     'Workspace: nearest .bridge-command/ from cwd upward, or --workspace DIR. Port: workspace config.json (default 4780), or --port N.\n' +
+    'Bind host: config.json "host" (default 127.0.0.1 loopback), or --host H on init/open. Never 0.0.0.0 — there is no app auth.\n' +
     '\nserver & workspace:\n' +
-    '  init --name N [--id id] [--charter-file f|-]\n' +
+    '  init --name N [--id id] [--charter-file f|-] [--port N] [--host H]\n' +
     '                                         workspace.init (the teleport): run INSIDE tmux; bootstraps\n' +
     '                                         .bridge-command/, boots the server, registers the caller\'s tmux\n' +
     '                                         session as the founding lieutenant, installs the turn-end hook,\n' +
     '                                         scaffolds AGENTS.md + captain.md + learnings/. Idempotent\n' +
-    '  open [--host H]                        start the workspace server if needed (idempotent), print URL.\n' +
+    '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +
     '                                         Bootstraps .bridge-command/ in cwd on first run.\n' +
     '  status                                 up/down, cards, lieutenants, pending queue items\n' +
     '  stop                                   stop the workspace server\n' +

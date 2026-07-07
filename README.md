@@ -125,6 +125,28 @@ authenticated `gh`.
 Server config per workspace lives in `.bridge-command/config.json`: `port` (default 4780),
 `host` (bind address, default loopback), `harness` (default `claude`), `voices` (UI TTS filter).
 
+### Network exposure
+
+The board server has **no application-level auth** — no token, no password. Whoever can
+reach the bind address has full control of the board, including starting workers, which
+means running code. Security is therefore the bind address plus whatever network boundary
+sits in front of it.
+
+- **Default (recommended): loopback only.** With no `host` set the server binds `127.0.0.1`,
+  reachable only from the same machine.
+- **Set the bind host** via either the CLI flag or config, in precedence order
+  `--host` > `config.json` "host" > `127.0.0.1`:
+  - `bc-axi init --host <addr>` / `bc-axi open --host <addr>` (also `--port N`), or
+  - `.bridge-command/config.json`: `{ "port": 4780, "host": "<addr>" }`.
+  Same for the port: `--port N` > `config.json` "port" > `4780`.
+- **Exposing over a private mesh (e.g. Tailscale):** set `host` to that interface's address
+  (your `100.x.y.z` Tailscale IP). When the bind host is non-loopback the server *also* keeps
+  a loopback listener, so the local CLI and browser keep working alongside the mesh address.
+  The mesh (WireGuard, device-authenticated) is your only auth boundary — only do this on a
+  tailnet you fully trust, since every device on it gets full board control.
+- **Never bind `0.0.0.0`.** That exposes the board on every interface with no auth, and it is
+  deliberately excluded from the loopback-companion behavior above.
+
 ## Development
 
 ```sh
