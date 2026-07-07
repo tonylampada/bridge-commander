@@ -430,10 +430,16 @@ function drainItems(lt) {
 // ack <seq>: commit the cursor of the lieutenant whose queue holds that seq.
 // Committing seq N acks every item <= N in that lieutenant's queue (items are
 // seq-ascending per queue). Acking an already-acked seq is a harmless no-op.
-function commitAck(seq) {
+// When ownerId is set (a session-identified caller), the seq MUST live in that
+// lieutenant's own queue — refuse otherwise, so one lieutenant can never commit
+// (and thereby silently discard) another lieutenant's pending items.
+function commitAck(seq, ownerId) {
   for (const lt of queueIds()) {
     const items = readQueue(lt);
     if (!items.some((it) => it.seq === seq)) continue;
+    if (ownerId && lt !== ownerId) {
+      return { error: 'seq ' + seq + ' is not in your queue (belongs to ' + lt + ')', code: 409 };
+    }
     const cur = readAck(lt);
     if (seq > cur) fs.writeFileSync(ackFile(lt), String(seq));
     return { ok: true, lieutenant: lt, ack: Math.max(cur, seq) };
@@ -1555,13 +1561,19 @@ const server = http.createServer(async (req, res) => {
       // registered lieutenant always resolves here; an unresolved session (a
       // non-lieutenant caller, or a stale ref) falls back to unscoped behavior
       // rather than erroring, so tooling and peeks keep working.
+      if (lt && !findLieutenant(lt)) return sendJson(res, 404, { error: 'unknown lieutenant: ' + lt });
       if (!lt && sess) {
         const owner = board.lieutenants.find((l) => l.ref && l.ref.session === sess);
-        if (owner) lt = owner.id;
+        // A session-identified caller drains ONLY its own queue. If the session
+        // resolves to no lieutenant (a worker, a stale ref, a non-lieutenant
+        // tmux), return nothing — draining every queue here is exactly what let
+        // a non-owner ack-wipe another lieutenant's items.
+        if (!owner) return sendJson(res, 200, { items: [], head: qseq });
+        lt = owner.id;
       }
-      if (lt && !findLieutenant(lt)) return sendJson(res, 404, { error: 'unknown lieutenant: ' + lt });
       // A drain clears the nudged flag: the next append (or a turn-end with
-      // still-unacked items) wakes again.
+      // still-unacked items) wakes again. Only a truly unidentified caller
+      // (no lieutenant, no session — raw tooling) drains all queues.
       if (lt) nudged.delete(lt); else nudged.clear();
       return sendJson(res, 200, { items: drainItems(lt), head: qseq });
     }
@@ -1571,7 +1583,13 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(await readBody(req) || '{}');
       const seq = parseInt(body.seq, 10);
       if (!Number.isInteger(seq) || seq < 0) return sendJson(res, 400, { error: 'seq required (integer)' });
-      const r = commitAck(seq);
+      // Identity-scoped ack: a lieutenant commits only within its own queue.
+      let ackOwner = body.lieutenant || '';
+      if (!ackOwner && body.session) {
+        const owner = board.lieutenants.find((l) => l.ref && l.ref.session === body.session);
+        if (owner) ackOwner = owner.id;
+      }
+      const r = commitAck(seq, ackOwner || null);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       nudged.delete(r.lieutenant); // handled: a fresh append nudges anew
       return sendJson(res, 200, r);

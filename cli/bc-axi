@@ -659,7 +659,10 @@ async function cmdDrain() {
 async function cmdAck() {
   const seq = parseInt(positional[0], 10);
   if (!Number.isInteger(seq) || seq < 0) die('usage: bc-axi ack <seq>   (highest queue seq you have HANDLED)');
-  const r = await request('POST', '/api/feed/ack', { seq });
+  const body = { seq };
+  const sess = currentTmuxSession();
+  if (opts.lieutenant) body.lieutenant = opts.lieutenant; else if (sess) body.session = sess;
+  const r = await request('POST', '/api/feed/ack', body);
   console.log('acked ' + seq + ' (lieutenant=' + r.lieutenant + ' committed=' + r.ack + ')');
 }
 

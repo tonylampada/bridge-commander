@@ -31,20 +31,34 @@ test('session-scoped drain isolates each lieutenant to its own queue', async () 
     assert.strictEqual(cmdDrain.body.items[0].text, 'Oi');
     assert.strictEqual(cmdDrain.body.items[0].lieutenant, 'commander');
 
-    // an unresolved session (non-lieutenant caller / stale ref) falls back to
-    // unscoped drain rather than erroring — a registered lieutenant always
-    // resolves, so this fallback never causes cross-lieutenant contamination
+    // an unresolved session (non-lieutenant caller / stale ref) drains NOTHING,
+    // never every queue — draining-all here is what enabled cross-lieutenant
+    // ack wipes
     const ghost = await s.api('GET', '/api/feed?session=bc-ghost');
     assert.strictEqual(ghost.status, 200);
-    assert.strictEqual(ghost.body.items.length, 1);
+    assert.strictEqual(ghost.body.items.length, 0);
 
     // explicit --lieutenant still scopes
     const byId = await s.api('GET', '/api/feed?lieutenant=monica');
     assert.strictEqual(byId.body.items.length, 0);
 
-    // raw API with no scoping keeps draining all queues (tooling/back-compat)
+    // raw API with no identity at all keeps draining all queues (tooling/back-compat)
     const all = await s.api('GET', '/api/feed');
     assert.strictEqual(all.body.items.length, 1);
+
+    // ack ownership: Monica (by session) must NOT be able to commit commander's seq
+    const seq = cmdDrain.body.items[0].seq;
+    const steal = await s.api('POST', '/api/feed/ack', { seq, session: 'bc-mon' });
+    assert.strictEqual(steal.status, 409, 'a lieutenant must not ack another\'s queue');
+    // commander's item is still pending — nothing was discarded
+    const stillThere = await s.api('GET', '/api/feed?session=bc-cmd');
+    assert.strictEqual(stillThere.body.items.length, 1);
+    // commander acks its own seq — that works
+    const own = await s.api('POST', '/api/feed/ack', { seq, session: 'bc-cmd' });
+    assert.strictEqual(own.status, 200);
+    assert.strictEqual(own.body.lieutenant, 'commander');
+    const drained = await s.api('GET', '/api/feed?session=bc-cmd');
+    assert.strictEqual(drained.body.items.length, 0);
   } finally {
     await s.stop();
   }
