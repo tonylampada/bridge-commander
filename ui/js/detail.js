@@ -1,9 +1,9 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
-import { S, card, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, ago, cardEmoji, ownerColor, cardPrs, prChipHtml, cardArtifacts, uriBasename } from './util.js';
+import { S, card, lieutenant, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
+import { esc, hhmm, ago, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename } from './util.js';
 import { md } from './md.js';
 import { api } from './api.js';
-import { labelChipHtml, labelColor, openLabelPicker, saveCardLabels } from './labels.js';
+import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
 import { openMoveMenu } from './board.js';
 
@@ -29,9 +29,9 @@ export function closeDetail() {
   if (editingTitle) stopTitleEdit();
   if (editingBody) stopBodyEdit();
   el.hidden = true;
-  // Desktop: closing a card-synced detail returns the left chat to the main
-  // conversation rather than stranding it on the just-closed card.
-  if (isDesktop() && wasId && S.chatMode.mode === 'card' && S.chatMode.id === wasId) {
+  // Desktop: closing a card-synced detail returns the left chat to the owning
+  // lieutenant's main conversation rather than stranding it on the closed card.
+  if (isDesktop() && wasId && S.chatMode && S.chatMode.mode === 'card' && S.chatMode.id === wasId) {
     syncChatToMain(); // renders
     return;
   }
@@ -44,15 +44,15 @@ document.getElementById('dt-close').onclick = closeDetail;
 // Click-outside dismiss (desktop side-panel only). On mobile the detail is
 // full-screen (100vw), so there is no "outside" — the ✕ and Escape stay the only
 // close affordances there. A click that lands outside #detail closes it, reusing
-// the one closeDetail path (which also returns the left chat to main on desktop).
-// Excluded from "outside": the left chat pane (#chat — on desktop it shows the
-// selected card's own thread, so it's part of the card context, not outside),
-// a .tile (its own handler switches to that card's detail — a switch, not a
-// close), the transient popovers (move menu, label picker, notif/settings
-// panels) so dismissing one of those never also closes the detail, and the
-// floating stop-speaking bubble (stopping TTS is not a navigation intent). Net
-// effect: only a click on the BOARD area (columns / empty space) closes via
-// click-outside.
+// the one closeDetail path (which also returns the left chat to the lieutenant on
+// desktop). Excluded from "outside": the left chat pane (#chat — on desktop it
+// shows the selected card's own thread, so it's part of the card context, not
+// outside), a .tile (its own handler switches to that card's detail — a switch,
+// not a close), a .lt-card (switches the chat to that lieutenant), the transient
+// popovers (move menu, label picker, notif/settings panels) so dismissing one of
+// those never also closes the detail, and the floating stop-speaking bubble
+// (stopping TTS is not a navigation intent). Net effect: only a click on the
+// BOARD area (columns / empty space) closes via click-outside.
 // If a rename is in progress, commit it (like Enter/blur) before
 // closing rather than discarding it: commitTitleEdit reads card(S.openCardId) so
 // it must run before closeDetail nulls it, and it clears editingTitle so
@@ -64,6 +64,8 @@ document.addEventListener('click', (e) => {
   if (t.closest && (
     t.closest('#chat') ||                     // left chat = the selected card's thread; part of its context
     t.closest('.tile') ||                     // another card — switch, handled by its onclick
+    t.closest('.lt-card') ||                  // a lane card — switches the chat, not a close
+    t.closest('#lt-overlay') ||               // new-lieutenant modal
     t.closest('#move-menu') ||                // transient popovers dismiss on their own
     t.closest('#notif-panel') ||
     t.closest('#settings-panel') ||
@@ -201,7 +203,7 @@ export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 avOverlay.onclick = (e) => { if (e.target === avOverlay) closeArtifact(); };
 
-// Opening the card clears its unread: level-1 events and agent replies both
+// Opening the card clears its unread: level-1 events and lieutenant replies both
 // derive from the same per-card read marker server-side, so one POST covers
 // both. The chat panel only marks the thread when IT is visible (and only on
 // unread messages), which misses the mobile detail view and event-only unread —
@@ -240,28 +242,27 @@ export function renderDetail() {
   const w = cardStatus(c).worker;
   const worker = w && w.id && WORKER_STATES[w.state] ? w : null;
   document.getElementById('dt-sub').innerHTML =
-    esc(c.id + ' · created ' + ago(c.created) + ' ago · updated ' + ago(cardRecency(c)) + ' ago') +
+    esc(c.id + ' · ' + c.type + ' · created ' + ago(c.created) + ' ago · updated ' + ago(cardRecency(c)) + ' ago') +
     (worker ? '<span class="dt-worker dt-worker-' + worker.state + '" title="worker: ' + esc(worker.state) + '">' + esc(worker.id) + '</span>' : '');
 
-  // attributes header (emoji shown up top already; owner gets its color).
-  // prs and artifacts are structured lists with dedicated renderers below,
-  // so they are excluded from the generic key:value chips.
+  // attributes header. The owner (the owning lieutenant) leads, in the
+  // lieutenant's color and clickable as a filter. prs and artifacts are
+  // structured lists with dedicated renderers below, so they are excluded from
+  // the generic key:value chips.
   const at = c.attributes || {};
   const attrsEl = document.getElementById('dt-attrs');
-  attrsEl.innerHTML = Object.entries(at)
-    .filter(([k]) => k !== 'emoji' && k !== 'prs' && k !== 'artifacts')
-    .map(([k, v]) => attrHtml(k, v)).join('') +
+  attrsEl.innerHTML =
+    '<span class="attr attr-owner" title="filter by lieutenant"><span class="k">lieutenant</span>' +
+    '<span class="v" style="color:' + esc(lieutenantColor(c.owner)) + '">' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span></span>' +
+    (c.pendingOrder ? '<span class="attr"><span class="k">pending</span><span class="v">⏳ ' + esc(c.pendingOrder.kind) + '</span></span>' : '') +
+    Object.entries(at)
+      .filter(([k]) => k !== 'emoji' && k !== 'prs' && k !== 'artifacts')
+      .map(([k, v]) => attrHtml(k, v)).join('') +
     cardPrs(c).map((pr) => prChipHtml(pr, true)).join('');
-  if (at.owner) {
-    for (const a of attrsEl.querySelectorAll('.attr')) {
-      if (a.querySelector('.k').textContent === 'owner') {
-        const v = a.querySelector('.v');
-        v.style.color = ownerColor(at.owner);
-        a.style.cursor = 'pointer';
-        a.title = 'filter by owner';
-        a.onclick = () => toggleFilter('owner', at.owner);
-      }
-    }
+  const ownerChip = attrsEl.querySelector('.attr-owner');
+  if (ownerChip) {
+    ownerChip.style.cursor = 'pointer';
+    ownerChip.onclick = () => toggleFilter('owner', c.owner);
   }
 
   // labels (user-owned)

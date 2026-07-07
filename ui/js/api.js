@@ -1,4 +1,4 @@
-// server API — every human-side write goes through here with actor "user"
+// server API — every captain-side write goes through here with actor "user"
 async function j(method, url, body) {
   const r = await fetch(url, {
     method,
@@ -14,7 +14,10 @@ async function j(method, url, body) {
 }
 
 export const api = {
+  createLieutenant: (lt) => j('POST', '/api/lieutenants', Object.assign({ actor: 'user' }, lt)),
   createCard: (card) => j('POST', '/api/cards', Object.assign({ actor: 'user' }, card)),
+  // A captain move may come back as {ordered: 'start-order'|'rework-order'}
+  // instead of an applied move — backlog→working and review→backlog are orders.
   moveCard: (id, column) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/move', { column, actor: 'user' }),
   patchCard: (id, patch) => j('PATCH', '/api/cards/' + encodeURIComponent(id), patch),
   archiveCard: (id, reason) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/archive', { actor: 'user', reason }),

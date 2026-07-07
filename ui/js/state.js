@@ -5,7 +5,10 @@ export const USER = 'user';
 export const S = {
   doc: null,               // full board doc from the server
   connected: false,
-  chatMode: { mode: 'main' },   // {mode:'main'} | {mode:'card', id}
+  // The chat panel always talks to a lieutenant: either its main chat or one of
+  // its card threads (the interlocutor of a card thread is the owning
+  // lieutenant). null until the first doc lands / a lieutenant exists.
+  chatMode: null,          // {mode:'lieutenant', id} | {mode:'card', id} | null
   openCardId: null,        // detail panel
   view: 'chat',            // mobile tab: 'chat' | 'board'
   filters: { text: '', age: '', sel: [] },  // sel: [{kind:'label'|'owner', value}]
@@ -22,6 +25,16 @@ export function render() { renderFn(); }
 export function cards() { return (S.doc && S.doc.cards) || []; }
 export function card(id) { return cards().find((c) => c.id === id); }
 export function columns() { return (S.doc && S.doc.columns) || []; }
+export function lieutenants() { return (S.doc && S.doc.lieutenants) || []; }
+export function lieutenant(id) { return lieutenants().find((l) => l.id === id); }
+export function lieutenantColor(id) {
+  const l = lieutenant(id);
+  return l && /^#[0-9a-fA-F]{6}$/.test(l.color || '') ? l.color : '#66788a';
+}
+export function lieutenantName(id) {
+  const l = lieutenant(id);
+  return l ? l.name || l.id : id;
+}
 
 export function reads() {
   const r = (S.doc && S.doc.reads && S.doc.reads[USER]) || {};
@@ -37,9 +50,10 @@ export function threadUnread(target, msgs) {
   return (msgs || []).filter((m) => m.author !== USER && (!ts || m.ts > ts)).length;
 }
 export function cardUnread(c) { return threadUnread('card:' + c.id, c.thread); }
-// newest unread-relevant ts on a card: agent thread messages + level-1 events —
-// the same inputs the server derives card unread from. Used as the read-marker
-// dedupe key so each new unread-relevant item allows exactly one POST.
+export function lieutenantUnread(l) { return threadUnread('lieutenant:' + l.id, l.chat); }
+// newest unread-relevant ts on a card: lieutenant thread messages + level-1
+// events — the same inputs the server derives card unread from. Used as the
+// read-marker dedupe key so each new unread-relevant item allows exactly one POST.
 export function cardActivityTs(c) {
   let ts = '';
   for (const m of (c && c.thread) || []) if (m.author !== USER && m.ts > ts) ts = m.ts;
@@ -49,27 +63,30 @@ export function cardActivityTs(c) {
 
 // A card's last-real-activity timestamp, for display and column sort. The server
 // derives `activity` (max of the card's real event/thread timestamps) so incidental
-// writes — a status-lease refresh/decay, a feeder attribute sync — no longer read as
-// "now". Fall back to the mutable `updated` for any older cached doc without it.
+// writes — a status-lease refresh/decay, an attribute sync — never read as "now".
+// Fall back to the mutable `updated` for any older cached doc without it.
 export function cardRecency(c) { return (c && (c.activity || c.updated)) || ''; }
 
 // ---------- status (card.status is the single source; no other status feed) ----------
 export function cardStatus(c) {
   return (c && c.status) || { worker: { id: null, state: 'absent' }, owed: false, unread: false };
 }
-// owed on a target: cards carry the server-derived status.owed; the main chat uses
-// the same latest-message rule, derived here from the doc.
+// owed on a target: cards carry the server-derived status.owed; a lieutenant's
+// main chat uses the same latest-message rule, derived here from the doc.
 export function targetOwed(target) {
-  if (target === 'chat') {
-    const ch = (S.doc && S.doc.chat) || [];
+  const lt = /^lieutenant:(.+)$/.exec(target || '');
+  if (lt) {
+    const l = lieutenant(lt[1]);
+    const ch = (l && l.chat) || [];
     const last = ch[ch.length - 1];
     return !!(last && last.author === USER);
   }
-  const c = card(target.slice(5));
+  const c = card((target || '').slice(5));
   return !!c && !!cardStatus(c).owed;
 }
-// "may be stuck": owed with no agent reply for longer than the stale threshold.
-// Purely client-derived from thread timestamps; the periodic re-render refreshes it.
+// "may be stuck": owed with no lieutenant reply for longer than the stale
+// threshold. Purely client-derived from thread timestamps; the periodic
+// re-render refreshes it.
 const OWED_STALE_MS = 180000;
 function owedSinceTs(msgs) {
   let since = null;
@@ -79,15 +96,19 @@ function owedSinceTs(msgs) {
   }
   return since;
 }
+export function targetMsgs(target) {
+  const lt = /^lieutenant:(.+)$/.exec(target || '');
+  if (lt) return (lieutenant(lt[1]) || {}).chat || [];
+  return (card((target || '').slice(5)) || {}).thread || [];
+}
 export function targetOwedStale(target) {
   if (!targetOwed(target)) return false;
-  const msgs = target === 'chat' ? ((S.doc && S.doc.chat) || []) : ((card(target.slice(5)) || {}).thread || []);
-  const since = owedSinceTs(msgs);
+  const since = owedSinceTs(targetMsgs(target));
   return !!since && Date.now() - new Date(since).getTime() >= OWED_STALE_MS;
 }
 export function owedTargets() {
   const out = [];
-  if (targetOwed('chat')) out.push('chat');
+  for (const l of lieutenants()) if (targetOwed('lieutenant:' + l.id)) out.push('lieutenant:' + l.id);
   for (const c of cards()) if (cardStatus(c).owed) out.push('card:' + c.id);
   return out;
 }
@@ -110,12 +131,12 @@ export function allEvents() {
   out.sort((a, b) => a.seq - b.seq);
   return out;
 }
-// the bell: level-1 events UNION agent card-thread replies, newest first, with
-// read flags. Mirrors the server's /api/notifications derivation: reply items
-// carry ts/text/actor/card/cardTitle/read + kind "reply" (no seq — their read
-// state is the thread read marker, so opening the card clears them). Main-chat
-// agent messages ride their own level-1 event, so chat is excluded (no double
-// count); level-2 never notifies.
+// the bell: level-1 events UNION lieutenant card-thread replies, newest first,
+// with read flags. Mirrors the server's /api/notifications derivation: reply
+// items carry ts/text/actor/card/cardTitle/read + kind "reply" (no seq — their
+// read state is the thread read marker, so opening the card clears them).
+// Lieutenant main-chat messages ride their own level-1 event, so those chats
+// are excluded (no double count); level-2 never notifies.
 export function notifItems() {
   const r = reads();
   const items = allEvents().filter((e) => e.level === 1)
@@ -156,7 +177,7 @@ function ageCutoff() {
 function haystack(c) {
   const col = columns().find((k) => k.id === c.column);
   const at = c.attributes || {};
-  return [c.title, c.id, c.body, (c.labels || []).join(' '),
+  return [c.title, c.id, c.body, c.type, c.owner, lieutenantName(c.owner), (c.labels || []).join(' '),
     Object.entries(at).map(([k, v]) => k + ' ' + v).join(' '),
     col ? col.title : c.column,
   ].filter(Boolean).join(' ').toLowerCase();
@@ -168,7 +189,7 @@ export function cardVisible(c) {
   const cutoff = ageCutoff();
   if (cutoff) { const t = cardRecency(c); if (!t || new Date(t).getTime() < cutoff) return false; }
   for (const f of S.filters.sel) {
-    if (f.kind === 'owner') { if (((c.attributes || {}).owner || '') !== f.value) return false; }
+    if (f.kind === 'owner') { if ((c.owner || '') !== f.value) return false; }
     else if (!(c.labels || []).includes(f.value)) return false;
   }
   return true;

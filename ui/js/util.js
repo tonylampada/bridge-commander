@@ -23,23 +23,17 @@ export function dayLabel(iso) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-// default emojis for the card `type` attribute; attributes.emoji overrides,
-// unknown types fall back to the neutral marker below
+// card `type` is first-class: plan | implementation | investigation.
+// attributes.emoji still overrides for one-off flavor; unknown falls back to
+// the neutral marker.
 const TYPE_EMOJI = {
-  plan: '🧠', implementation: '🔥', investigation: '🕵️‍♂️',
+  plan: '🧠', implementation: '🔥', investigation: '🕵️',
 };
 export function cardEmoji(card) {
   const at = (card && card.attributes) || {};
   if (at.emoji) return String(at.emoji);
-  if (at.type && TYPE_EMOJI[String(at.type).toLowerCase()]) return TYPE_EMOJI[String(at.type).toLowerCase()];
+  if (card && card.type && TYPE_EMOJI[String(card.type).toLowerCase()]) return TYPE_EMOJI[String(card.type).toLowerCase()];
   return '▫️';
-}
-
-const OWNER_PALETTE = ['#58b6ff', '#3ecf8e', '#e6c04a', '#c678dd', '#e2795b', '#56b6c2', '#98c379', '#e06c75'];
-export function ownerColor(name) {
-  let h = 5381;
-  for (let i = 0; i < name.length; i++) h = ((h * 33) ^ name.charCodeAt(i)) >>> 0;
-  return OWNER_PALETTE[h % OWNER_PALETTE.length];
 }
 
 // attributes.prs — [{url, state: open|merged|closed}] — the only PR source on a card

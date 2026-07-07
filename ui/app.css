@@ -1,4 +1,4 @@
-/* bridge — premium dark UI */
+/* bridge command — premium dark UI */
 :root {
   --bg: #0a0d12;
   --bg2: #0e131a;
@@ -172,6 +172,35 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .composer button:hover { background: var(--accent); color: #06222f; }
 
+/* ---------- lieutenant lane (above the columns) ---------- */
+#lane {
+  flex: none; display: flex; gap: 8px; align-items: stretch; padding: 10px 14px 0;
+  overflow-x: auto; overflow-y: hidden;
+}
+.lt-card {
+  position: relative; flex: none; display: inline-flex; align-items: center; gap: 7px;
+  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--faint);
+  border-radius: 9px; padding: 7px 11px; cursor: pointer; user-select: none; -webkit-user-select: none;
+  transition: border-color .15s, transform .12s, box-shadow .15s;
+}
+.lt-card:hover { border-top-color: var(--line2); border-right-color: var(--line2); border-bottom-color: var(--line2); transform: translateY(-1px); }
+.lt-card.on { border-top-color: var(--accent2); border-right-color: var(--accent2); border-bottom-color: var(--accent2); background: var(--accent-soft); }
+.lt-card.filtered { box-shadow: 0 0 0 1px var(--accent2) inset; }
+.lt-card .lt-dot, #chat-title .lt-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.lt-card .lt-name { font-size: 13px; font-weight: 620; white-space: nowrap; }
+.lt-card .lt-counts { color: var(--faint); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
+.lt-card .badge-n { top: -6px; right: -6px; }
+.lt-card .t-typing { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+.lt-card .t-typing .tdot { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: typing-blink 1.2s infinite; }
+.lt-card .t-typing .tdot:nth-child(2) { animation-delay: .2s; }
+.lt-card .t-typing .tdot:nth-child(3) { animation-delay: .4s; }
+.lt-card .t-typing.stale { color: var(--warn); font-size: 11px; line-height: 1; }
+.lt-add {
+  flex: none; color: var(--faint); font-size: 12px; border: 1px dashed var(--line2);
+  border-radius: 9px; padding: 7px 12px; white-space: nowrap; transition: color .15s, border-color .15s;
+}
+.lt-add:hover { color: var(--accent); border-color: var(--accent2); }
+
 /* ---------- board ---------- */
 #board { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 14px; overflow-x: auto; }
 .column {
@@ -202,14 +231,19 @@ body.resizing { user-select: none; cursor: col-resize; }
   transition: border-color .15s, transform .12s, box-shadow .15s;
 }
 .tile:hover { border-color: var(--line2); transform: translateY(-1px); box-shadow: 0 4px 14px rgba(0,0,0,.35); }
-/* worker-state stripe on the tile's LEFT edge (persistent status signal, separate
-   from the transient top-right corner). Pseudo-element so it never shoves content. */
-.tile.worker::before {
-  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 9px 0 0 9px;
+/* owner color stripe on the tile's LEFT edge: every card belongs to exactly one
+   lieutenant, and its tile carries that lieutenant's color. Absolute strip so it
+   never shoves content. */
+.tile .t-stripe { position: absolute; left: 0; top: 0; bottom: 0; width: 3px; border-radius: 9px 0 0 9px; }
+/* worker-state stripe on the tile's RIGHT edge (persistent status signal,
+   separate from the transient top-right corner — the left edge is the owner's
+   color). Pseudo-element so it never shoves content. */
+.tile.worker::after {
+  content: ''; position: absolute; right: 0; top: 0; bottom: 0; width: 3px; border-radius: 0 9px 9px 0;
 }
-.tile.worker-working::before { background: var(--ok); animation: worker-pulse 1.5s ease-in-out infinite; }
-.tile.worker-needs-you::before { background: var(--warn); } /* amber, solid */
-.tile.worker-idle::before { background: var(--faint); } /* dim slate, solid */
+.tile.worker-working::after { background: var(--ok); animation: worker-pulse 1.5s ease-in-out infinite; }
+.tile.worker-needs-you::after { background: var(--warn); } /* amber, solid */
+.tile.worker-idle::after { background: var(--faint); } /* dim slate, solid */
 @keyframes worker-pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 .tile.open { border-color: var(--accent); }
 .tile.dragging { opacity: .45; }
@@ -238,6 +272,13 @@ body.resizing { user-select: none; cursor: col-resize; }
 .tile .t-typing .tdot:nth-child(3) { animation-delay: .4s; }
 /* stale-owed corner: static amber ⚠ mirroring the chat's "may be stuck" bubble */
 .tile .t-typing.stale { color: var(--warn); font-size: 11px; line-height: 1; margin-top: 3px; }
+/* pending drag-order marker: the captain ordered a start/rework; the card moves
+   when the lieutenant acts — subtle amber chip, deliberately quiet */
+.tile .t-order {
+  display: inline-flex; align-items: center; font-family: var(--mono); font-size: 10.5px;
+  padding: 1px 7px; border: 1px dashed var(--warn); border-radius: 999px; color: var(--warn);
+  line-height: 1.6; white-space: nowrap; opacity: .85;
+}
 /* PR chips — attributes.prs [{url, state: open|merged|closed}], state-colored */
 .prchip {
   display: inline-flex; align-items: center; font-family: var(--mono); font-size: 11px;
@@ -476,18 +517,41 @@ a.a-uri { color: var(--accent); }
   box-shadow: var(--shadow); animation: pop-in .15s ease-out;
 }
 .nc-title { font-weight: 650; font-size: 14px; }
-#nc-name, #nc-body, #nc-type {
+#nc-name, #nc-body, #nc-type, #nc-owner {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 11px; font-size: 13px; outline: none; width: 100%;
 }
-#nc-name:focus, #nc-body:focus, #nc-type:focus { border-color: var(--accent2); }
-#nc-type { cursor: pointer; }
+#nc-name:focus, #nc-body:focus, #nc-type:focus, #nc-owner:focus { border-color: var(--accent2); }
+#nc-type, #nc-owner { cursor: pointer; }
 #nc-body { resize: vertical; min-height: 80px; font-family: var(--mono); font-size: 12px; }
 .nc-actions { display: flex; gap: 8px; justify-content: flex-end; }
 #nc-cancel { color: var(--dim); border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; font-size: 12.5px; }
 #nc-cancel:hover { color: var(--text); }
 #nc-create { background: var(--accent2); border-radius: 7px; color: #eaf6ff; padding: 6px 15px; font-size: 12.5px; }
 #nc-create:hover { background: var(--accent); color: #06222f; }
+
+/* ---------- new lieutenant modal (mirrors the new-card modal) ---------- */
+#lt-overlay {
+  position: fixed; inset: 0; z-index: 90; background: rgba(4, 7, 11, .6);
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px);
+}
+#lt-modal {
+  width: min(460px, calc(100vw - 28px)); display: flex; flex-direction: column; gap: 10px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 14px; padding: 16px;
+  box-shadow: var(--shadow); animation: pop-in .15s ease-out;
+}
+.lt-row { display: flex; gap: 8px; align-items: center; }
+#lt-color { width: 38px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; flex: none; }
+#lt-name, #lt-charter {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  padding: 8px 11px; font-size: 13px; outline: none; width: 100%;
+}
+#lt-name:focus, #lt-charter:focus { border-color: var(--accent2); }
+#lt-charter { resize: vertical; min-height: 80px; font-family: var(--mono); font-size: 12px; }
+#lt-cancel { color: var(--dim); border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; font-size: 12.5px; }
+#lt-cancel:hover { color: var(--text); }
+#lt-create { background: var(--accent2); border-radius: 7px; color: #eaf6ff; padding: 6px 15px; font-size: 12.5px; }
+#lt-create:hover { background: var(--accent); color: #06222f; }
 
 /* ---------- artifact viewer ---------- */
 #av-overlay {
@@ -544,7 +608,7 @@ a.a-uri { color: var(--accent); }
      blows up the whole layout. Force every focusable text input to 16px on
      mobile so focus never triggers a zoom (the accessible fix; the viewport
      maximum-scale is only a secondary guard). */
-  #filter, .composer textarea, #lp-input, #nc-name, #nc-body, #nc-type, #dt-body-input { font-size: 16px; }
+  #filter, .composer textarea, #lp-input, #nc-name, #nc-body, #nc-type, #nc-owner, #lt-name, #lt-charter, #dt-body-input { font-size: 16px; }
   #layout { flex-direction: column; min-height: 0; }
   /* each view fills the space above the tab bar and owns its own scroll region */
   #chat { width: 100%; flex: 1; min-height: 0; border-right: none; display: none; }

@@ -1,6 +1,8 @@
-// chat panel: unified main feed (messages + card-thread bubbles anchored at thread
-// start), whole-window mode switch into a card thread, premium composer.
-import { S, card, cardStatus, cardActivityTs, render, threadUnread, targetOwed, targetOwedStale, USER } from './state.js';
+// chat panel: the captain's conversation with ONE lieutenant at a time — either
+// the lieutenant's main chat or one of its card threads (a card thread's
+// interlocutor is always the owning lieutenant). Whole-window mode switch,
+// premium composer.
+import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, cardStatus, cardActivityTs, render, threadUnread, targetOwed, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji } from './util.js';
 import { md } from './md.js';
@@ -15,8 +17,36 @@ const inputEl = document.getElementById('chat-input');
 let detailOpener = null; // set by main.js to avoid a circular import
 export function onOpenCard(fn) { detailOpener = fn; }
 
+// The chat panel's lieutenant-or-thread mode, normalized: a stale card / dead
+// lieutenant falls back to the first lieutenant; no lieutenants = no target.
+function ensureChatMode() {
+  const lts = lieutenants();
+  if (S.chatMode) {
+    if (S.chatMode.mode === 'card' && card(S.chatMode.id)) return;
+    if (S.chatMode.mode === 'lieutenant' && lieutenant(S.chatMode.id)) return;
+    S.chatMode = null;
+  }
+  if (lts.length) S.chatMode = { mode: 'lieutenant', id: lts[0].id };
+}
 export function currentTarget() {
-  return S.chatMode.mode === 'card' ? 'card:' + S.chatMode.id : 'chat';
+  ensureChatMode();
+  if (!S.chatMode) return null;
+  return S.chatMode.mode === 'card' ? 'card:' + S.chatMode.id : 'lieutenant:' + S.chatMode.id;
+}
+// The lieutenant behind the current conversation (card threads route to the owner).
+function currentLieutenant() {
+  if (!S.chatMode) return null;
+  if (S.chatMode.mode === 'lieutenant') return lieutenant(S.chatMode.id);
+  const c = card(S.chatMode.id);
+  return c ? lieutenant(c.owner) : null;
+}
+
+// Open a lieutenant's main chat (lane card click, new-lieutenant create).
+export function openLieutenantChat(id) {
+  S.chatMode = { mode: 'lieutenant', id };
+  S.view = 'chat'; // on mobile, switch to the chat tab
+  render();
+  if (window.innerWidth > 760) inputEl.focus();
 }
 // Switch the chat panel into a card's thread. The one owner of the card
 // mode-switch: the "talk" button and the desktop card-detail sync both go through
@@ -34,21 +64,22 @@ export function openCardThread(id, opts) {
     render();
   }
 }
-// Return the chat panel to the main conversation (used when a synced card detail
-// closes on desktop). Same mode representation as backToMain, no forked path.
+// Return the chat panel from a card thread to the owning lieutenant's main chat
+// (used when a synced card detail closes on desktop, and by the back button).
 export function syncChatToMain() {
-  if (S.chatMode.mode === 'card') { S.chatMode = { mode: 'main' }; render(); }
+  if (S.chatMode && S.chatMode.mode === 'card') {
+    const c = card(S.chatMode.id);
+    S.chatMode = c && lieutenant(c.owner) ? { mode: 'lieutenant', id: c.owner } : null;
+    render();
+  }
 }
-export function backToMain() {
-  S.chatMode = { mode: 'main' };
-  render();
-}
+export function backToMain() { syncChatToMain(); }
 backBtn.onclick = backToMain;
-openBtn.onclick = () => { if (S.chatMode.mode === 'card' && detailOpener) detailOpener(S.chatMode.id); };
+openBtn.onclick = () => { if (S.chatMode && S.chatMode.mode === 'card' && detailOpener) detailOpener(S.chatMode.id); };
 
 // ---------- feed rendering ----------
-// agent messages rendered this pass, in DOM order, so a post-render pass can wire
-// each .msg.agent[data-speak] button to the right message's text without ever
+// lieutenant messages rendered this pass, in DOM order, so a post-render pass can
+// wire each .msg.agent[data-speak] button to the right message's text without ever
 // interpolating message text into markup (XSS-safe).
 let speakMsgs = [];
 function msgHtml(m) {
@@ -57,34 +88,35 @@ function msgHtml(m) {
     ? '<div class="md pre">' + esc(m.text) + '</div>'
     : '<div class="md">' + md(m.text) + '</div>';
   const who = mine ? '' : esc(m.author) + ' · ';
-  // speak button only on agent bubbles; 🔊 icon, no message text in markup
+  // speak button only on lieutenant bubbles; 🔊 icon, no message text in markup
   const speakBtn = mine ? '' :
     '<button class="msg-speak" type="button" data-speak title="read this message aloud" aria-label="read this message aloud">🔊</button>';
   if (!mine) speakMsgs.push(m);
   return '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body +
     '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
 }
-function typingHtml(stale) {
-  // the "agent owes you a reply" balloon (card.status.owed / the main-chat rule).
+function typingHtml(stale, name) {
+  // the "owes you a reply" balloon (card.status.owed / the main-chat rule).
   // stale = owed past the threshold: a DISTINCT "may be stuck" state, static and
   // amber, so a dropped message never looks like a healthy pending reply forever
   if (stale) {
-    return '<div class="msg agent typing stale" title="no response for a while — the message may not have reached the agent">' +
+    return '<div class="msg agent typing stale" title="no response for a while — the message may not have reached ' + esc(name) + '">' +
       '<span class="twarn">⚠</span>' +
-      '<span class="lbl">no response yet — the agent may be stuck</span></div>';
+      '<span class="lbl">no response yet — ' + esc(name) + ' may be stuck</span></div>';
   }
-  return '<div class="msg agent typing" title="the agent owes you a reply here">' +
+  return '<div class="msg agent typing" title="' + esc(name) + ' owes you a reply here">' +
     '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
-    '<span class="lbl">agent owes you a reply…</span></div>';
+    '<span class="lbl">' + esc(name) + ' owes you a reply…</span></div>';
 }
 function mainFeedMsgs() {
-  // main-chat messages only; card threads live in their own card view
-  const msgs = (((S.doc && S.doc.chat) || [])).slice();
+  // the current lieutenant's main-chat messages; card threads live in their own card view
+  const l = S.chatMode && S.chatMode.mode === 'lieutenant' ? lieutenant(S.chatMode.id) : null;
+  const msgs = ((l && l.chat) || []).slice();
   msgs.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return msgs;
 }
 
-// main chat collapses older history behind one expander; expansion is
+// a main chat collapses older history behind one expander; expansion is
 // client-side only and resets on page load
 const COLLAPSE_KEEP = 30;
 let mainExpanded = false;
@@ -99,20 +131,37 @@ function scrollFeedToBottom() {
 }
 
 export function renderChat() {
+  const target = currentTarget();
+  if (!target) {
+    backBtn.hidden = true;
+    openBtn.hidden = true;
+    titleEl.textContent = '💬 chat';
+    inputEl.placeholder = 'create a lieutenant to start…';
+    inputEl.disabled = true;
+    feedEl.innerHTML = '<div class="empty">no lieutenants yet — add one above the board to start commanding</div>';
+    return;
+  }
+  inputEl.disabled = false;
   const isCard = S.chatMode.mode === 'card';
   const c = isCard ? card(S.chatMode.id) : null;
-  if (isCard && !c) { S.chatMode = { mode: 'main' }; return renderChat(); }
+  const lt = currentLieutenant();
+  const ltName = lt ? lt.name || lt.id : 'lieutenant';
 
   backBtn.hidden = !isCard;
   openBtn.hidden = !isCard;
-  titleEl.textContent = isCard ? cardEmoji(c) + ' ' + (c.title || c.id) : '💬 chat';
-  inputEl.placeholder = isCard ? 'message this card…' : 'message the agent…';
+  if (isCard) {
+    titleEl.textContent = cardEmoji(c) + ' ' + (c.title || c.id);
+  } else {
+    titleEl.innerHTML = '<span class="lt-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span> ' + esc(ltName);
+  }
+  inputEl.placeholder = isCard ? 'message ' + ltName + ' about this card…' : 'message ' + ltName + '…';
 
   // Land at the newest message when the visible conversation changes (first
-  // paint, tab switch into Chat, or entering/leaving a card thread) or when the
+  // paint, tab switch into Chat, or entering/leaving a thread) or when the
   // feed was already near the bottom; otherwise leave the reader's scroll be.
-  const viewKey = currentTarget() + '|' + (window.innerWidth <= 760 ? S.view : 'desktop');
+  const viewKey = target + '|' + (window.innerWidth <= 760 ? S.view : 'desktop');
   const switched = viewKey !== lastViewKey;
+  if (switched) mainExpanded = false; // each conversation starts collapsed
   lastViewKey = viewKey;
   const pinned = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
   speakMsgs = [];
@@ -133,7 +182,7 @@ export function renderChat() {
     if (hidden) html += '<button class="feed-expand" type="button">show earlier messages (' + hidden + ')</button>';
     for (const m of msgs.slice(hidden)) push(m.ts, msgHtml(m));
   }
-  if (targetOwed(currentTarget())) html += typingHtml(targetOwedStale(currentTarget()));
+  if (targetOwed(target)) html += typingHtml(targetOwedStale(target), ltName);
   feedEl.innerHTML = html || '<div class="empty">no messages yet</div>';
   if (switched) scrollFeedToBottom(); // deferred: the feed may still be hidden this frame
   else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
@@ -153,7 +202,7 @@ export function renderChat() {
   speakBtns.forEach((btn, i) => {
     const m = speakMsgs[i];
     if (!m) return;
-    const key = currentTarget() + '|' + m.ts + '|' + m.author; // stable per message, for toggle-off
+    const key = target + '|' + m.ts + '|' + m.author; // stable per message, for toggle-off
     btn.onclick = (e) => {
       e.stopPropagation();
       const spoke = speakMessage(m.text, key);
@@ -161,23 +210,23 @@ export function renderChat() {
     };
   });
 
-  maybeMarkRead(isCard ? c : null);
+  maybeMarkRead(isCard ? c : null, target);
 }
 
 // mark the visible thread read (server-persisted) — debounced, loop-safe.
 // Card unread also derives from level-1 EVENTS, not just thread messages, so a
 // card target uses the server-derived card.status.unread (and the shared
 // cardActivityTs dedupe key); message-based gating alone would leave an
-// event-only unread dotted forever. Main chat keeps the message rule.
+// event-only unread dotted forever. Lieutenant main chats keep the message rule.
 let lastMarked = { target: '', ts: '' };
-function maybeMarkRead(c) {
+function maybeMarkRead(c, target) {
   if (document.hidden) return;
   if (window.innerWidth <= 760 && S.view !== 'chat') return; // thread not visible
-  const target = currentTarget();
-  const msgs = target === 'chat' ? ((S.doc && S.doc.chat) || []) : ((c && c.thread) || []);
-  const unread = target === 'chat' ? threadUnread(target, msgs) : !!(c && cardStatus(c).unread);
+  const isCard = !!c;
+  const msgs = isCard ? (c.thread || []) : mainFeedMsgs();
+  const unread = isCard ? !!cardStatus(c).unread : threadUnread(target, msgs);
   if (!unread) return;
-  const lastTs = target === 'chat' ? (msgs.length ? msgs[msgs.length - 1].ts : '') : cardActivityTs(c);
+  const lastTs = isCard ? cardActivityTs(c) : (msgs.length ? msgs[msgs.length - 1].ts : '');
   if (lastMarked.target === target && lastMarked.ts === lastTs) return; // already sent
   lastMarked = { target, ts: lastTs };
   api.markThreadRead(target).catch(() => { lastMarked = { target: '', ts: '' }; });
@@ -186,11 +235,13 @@ function maybeMarkRead(c) {
 // ---------- composer ----------
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
 async function send() {
+  const target = currentTarget();
+  if (!target) return;
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = '';
   autoGrow(inputEl);
-  try { await api.feedback(currentTarget(), text); } catch (e) { alert(e.message); }
+  try { await api.feedback(target, text); } catch (e) { alert(e.message); }
 }
 inputEl.oninput = () => autoGrow(inputEl);
 // Enter inserts a newline; Cmd+Enter (mac) or Ctrl+Enter sends.

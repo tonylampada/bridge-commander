@@ -3,14 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<title>bridge</title>
+<title>bridge command</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%E2%9A%93</text></svg>">
 <link rel="stylesheet" href="/ui/app.css">
 </head>
 <body>
 
 <header id="topbar">
-  <h1 id="b-title">bridge</h1>
+  <h1 id="b-title">bridge command</h1>
   <div id="b-subtitle"></div>
   <span id="filter-wrap">
     <span id="filter-chips"></span>
@@ -43,7 +43,7 @@
 <div id="settings-panel" hidden>
   <div class="sp-title">voice</div>
   <div class="sp-row">
-    <button id="voice-btn" title="speak new agent messages">🔊 off</button>
+    <button id="voice-btn" title="speak new lieutenant messages">🔊 off</button>
     <span id="voice-tools" class="dim">
       <select id="voice-select" title="TTS voice"></select>
       <button id="voice-test" title="test the selected voice">▶</button>
@@ -74,14 +74,15 @@
     </div>
     <div id="chat-feed"></div>
     <form id="chat-form" class="composer">
-      <textarea id="chat-input" rows="1" placeholder="message the agent…" autocomplete="off"></textarea>
+      <textarea id="chat-input" rows="1" placeholder="message your lieutenant…" autocomplete="off"></textarea>
       <button type="submit" title="send">➤</button>
     </form>
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right -->
+  <!-- board: right — lieutenant lane above the columns -->
   <section id="board-wrap">
+    <div id="lane"></div>
     <div id="board"><div class="empty">waiting for board…</div></div>
   </section>
 </main>
@@ -133,15 +134,32 @@
   <form id="nc-modal">
     <div class="nc-title">New card</div>
     <input id="nc-name" placeholder="title" autocomplete="off" required>
+    <select id="nc-owner" title="owning lieutenant" required></select>
     <select id="nc-type" title="card type">
       <option value="plan">🧠 plan</option>
       <option value="implementation">🔥 implementation</option>
-      <option value="investigation">🕵️‍♂️ investigation</option>
+      <option value="investigation">🕵️ investigation</option>
     </select>
     <textarea id="nc-body" placeholder="body (markdown, optional)" rows="5"></textarea>
     <div class="nc-actions">
       <button type="button" id="nc-cancel">cancel</button>
       <button type="submit" id="nc-create">create</button>
+    </div>
+  </form>
+</div>
+
+<!-- new lieutenant modal -->
+<div id="lt-overlay" hidden>
+  <form id="lt-modal">
+    <div class="nc-title">New lieutenant</div>
+    <div class="lt-row">
+      <input id="lt-color" type="color" value="#58b6ff" title="lieutenant color">
+      <input id="lt-name" placeholder="name" autocomplete="off" required>
+    </div>
+    <textarea id="lt-charter" placeholder="charter — the standing mission (markdown, optional)" rows="5"></textarea>
+    <div class="nc-actions">
+      <button type="button" id="lt-cancel">cancel</button>
+      <button type="submit" id="lt-create">create</button>
     </div>
   </form>
 </div>

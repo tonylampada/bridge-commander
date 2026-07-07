@@ -1,8 +1,8 @@
 // TTS: speak new agent messages when enabled; toggle persists in localStorage
 import { api } from './api.js';
 
-const VOICE_KEY = 'bridge-voice';
-const VOICE_ON_KEY = 'bridge-voice-on';
+const VOICE_KEY = 'bc-voice';
+const VOICE_ON_KEY = 'bc-voice-on';
 const voiceSelect = document.getElementById('voice-select');
 const voiceBtn = document.getElementById('voice-btn');
 
@@ -263,13 +263,13 @@ voiceBtn.onclick = () => setVoiceOn(!voiceOn);
 try { if (localStorage.getItem(VOICE_ON_KEY) === '1') setVoiceOn(true); } catch (e) {} // restore toggle
 document.getElementById('voice-test').onclick = () => realUnlock('Hello, this is my voice.');
 
-// ---------- speak only NEW agent messages ----------
+// ---------- speak only NEW lieutenant messages ----------
 let firstLoad = true;
 const seenMsgs = new Set();
 export function trackMessages(doc) {
   if (!doc) return;
   const all = [];
-  (doc.chat || []).forEach((m) => all.push(['chat', m]));
+  (doc.lieutenants || []).forEach((l) => (l.chat || []).forEach((m) => all.push(['lieutenant:' + l.id, m])));
   (doc.cards || []).forEach((c) => (c.thread || []).forEach((m) => all.push(['card:' + c.id, m])));
   for (const [scope, m] of all) {
     const k = scope + '|' + m.ts + '|' + m.author + '|' + m.text;

@@ -1,7 +1,7 @@
 // boot: SSE, header controls, mobile tabs, render orchestration
-import { S, onRender, render, cards, cardUnread, threadUnread, notifUnreadCount, owedTargets, clearFilters, filtersActive } from './state.js';
+import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, notifUnreadCount, owedTargets, clearFilters, filtersActive } from './state.js';
 import { trackMessages } from './voice.js';
-import { renderBoard, newCardOpen, closeNewCard, closeMoveMenu } from './board.js';
+import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen } from './detail.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
@@ -48,8 +48,8 @@ function renderStatusDot() {
   const owed = owedTargets().length;
   el.className = !S.connected ? '' : owed ? 'busy' : 'ok';
   el.title = !S.connected ? 'disconnected — reconnecting…'
-    : owed ? 'agent owes a reply on ' + owed + ' conversation' + (owed > 1 ? 's' : '')
-    : 'connected — agent idle';
+    : owed ? 'a lieutenant owes a reply on ' + owed + ' conversation' + (owed > 1 ? 's' : '')
+    : 'connected — all quiet';
 }
 
 // ---------- settings panel ----------
@@ -77,8 +77,10 @@ function renderTabs() {
   document.body.dataset.view = S.view;
   tabChat.classList.toggle('on', S.view === 'chat');
   tabBoard.classList.toggle('on', S.view === 'board');
-  // chat tab badge: unread across main chat + all card threads; board badge: notifications
-  let chatN = threadUnread('chat', (S.doc && S.doc.chat) || []);
+  // chat tab badge: unread across every lieutenant chat + all card threads;
+  // board badge: notifications
+  let chatN = 0;
+  for (const l of lieutenants()) chatN += lieutenantUnread(l);
   for (const c of cards()) chatN += cardUnread(c);
   const cn = document.getElementById('tab-chat-n');
   cn.hidden = !chatN; cn.textContent = chatN > 99 ? '99+' : String(chatN);
@@ -95,6 +97,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (artifactOpen()) closeArtifact();
     else if (newCardOpen()) closeNewCard();
+    else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();
     else if (S.notifOpen) { S.notifOpen = false; render(); }
     else if (!spEl.hidden) { spEl.hidden = true; gearBtn.classList.remove('on'); }
@@ -107,8 +110,8 @@ document.addEventListener('keydown', (e) => {
 // ---------- render orchestration ----------
 onRender(() => {
   if (!S.doc) return;
-  document.title = S.doc.title || 'bridge';
-  document.getElementById('b-title').textContent = S.doc.title || 'bridge';
+  document.title = S.doc.title || 'bridge command';
+  document.getElementById('b-title').textContent = S.doc.title || 'bridge command';
   document.getElementById('b-subtitle').textContent = S.doc.subtitle || '';
   syncFilterInputs();
   renderStatusDot();

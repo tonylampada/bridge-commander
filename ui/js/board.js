@@ -1,57 +1,103 @@
-// board: columns of dense tiles, drag&drop, long-press move menu, new-card modal
-import { S, columns, cards, cardVisible, cardStatus, cardRecency, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
+// board: lieutenant lane above the columns, dense tiles, drag&drop, long-press
+// move menu, new-card / new-lieutenant modals.
+import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwed, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
 import { api } from './api.js';
-import { esc, ago, cardEmoji, ownerColor, cardPrs, prChipHtml } from './util.js';
+import { esc, ago, cardEmoji, cardPrs, prChipHtml } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
+import { openLieutenantChat } from './chat.js';
 
+const laneEl = document.getElementById('lane');
 const boardEl = document.getElementById('board');
 
 function byRecency(a, b) {
   return (new Date(cardRecency(b) || 0).getTime() || 0) - (new Date(cardRecency(a) || 0).getTime() || 0);
 }
 
+// ---------- lieutenant lane (above the columns) ----------
+// One card per lieutenant: color, name, charter tooltip, live counts, unread
+// badge for his main chat. Clicking it opens that lieutenant's chat — the
+// captain converses only with lieutenants.
+function ltCardHtml(l) {
+  const mine = cards().filter((c) => c.owner === l.id);
+  const working = mine.filter((c) => c.column === 'working').length;
+  const unread = lieutenantUnread(l);
+  const active = S.chatMode && S.chatMode.mode === 'lieutenant' && S.chatMode.id === l.id;
+  const owed = targetOwed('lieutenant:' + l.id);
+  const staleW = owed && targetOwedStale('lieutenant:' + l.id);
+  const ind = staleW
+    ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
+    : owed
+    ? '<span class="t-typing" title="owes you a reply"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
+    : '';
+  return '<div class="lt-card' + (active ? ' on' : '') + (filterSelected('owner', l.id) ? ' filtered' : '') + '" data-id="' + esc(l.id) + '"' +
+    ' style="border-left-color:' + esc(lieutenantColor(l.id)) + '"' +
+    (l.charter ? ' title="' + esc(l.charter.split('\n')[0].slice(0, 160)) + '"' : '') + '>' +
+    '<span class="lt-dot" style="background:' + esc(lieutenantColor(l.id)) + '"></span>' +
+    '<span class="lt-name">' + esc(l.name || l.id) + '</span>' +
+    ind +
+    '<span class="lt-counts">' + mine.length + (working ? ' · 🔨' + working : '') + '</span>' +
+    (unread ? '<span class="badge-n">' + (unread > 99 ? '99+' : unread) + '</span>' : '') +
+    '</div>';
+}
+
+function renderLane() {
+  laneEl.innerHTML = lieutenants().map(ltCardHtml).join('') +
+    '<button class="lt-add" title="new lieutenant">＋ lieutenant</button>';
+  laneEl.querySelectorAll('.lt-card').forEach((el) => {
+    el.onclick = () => openLieutenantChat(el.dataset.id);
+    el.oncontextmenu = (e) => { e.preventDefault(); toggleFilter('owner', el.dataset.id); };
+  });
+  laneEl.querySelector('.lt-add').onclick = openNewLieutenant;
+}
+
+// ---------- tiles ----------
 function tileHtml(c) {
   const at = c.attributes || {};
-  const owner = at.owner || '';
   const repo = at.repo || '';
   const msgs = (c.thread || []).length;
   const st = cardStatus(c);
-  // "agent owes you a reply" balloon: SAME source as the chat typing bubble
-  // (card.status.owed, server-derived), so tile and chat can never drift.
+  // "the lieutenant owes you a reply" balloon: SAME source as the chat typing
+  // bubble (card.status.owed, server-derived), so tile and chat can never drift.
   // Takes priority over the unread dot — one unambiguous corner indicator.
   // stale-owed mirrors the chat's "may be stuck" state: static amber ⚠, no dots.
   const owed = !!st.owed;
   const staleW = owed && targetOwedStale('card:' + c.id);
   const cornerInd = staleW
-    ? '<span class="t-typing stale" title="no response yet — the agent may be stuck">⚠</span>'
+    ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
     : owed
-    ? '<span class="t-typing" title="the agent owes you a reply here"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
+    ? '<span class="t-typing" title="the lieutenant owes you a reply here"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
     : (st.unread ? '<span class="t-unread" title="unread activity"></span>' : '');
-  const hasLink = Object.entries(at).some(([k, v]) => k !== 'owner' && /^https?:\/\//.test(String(v)));
+  const hasLink = Object.entries(at).some(([k, v]) => /^https?:\/\//.test(String(v)));
   const labels = (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('');
   // PR chips: attributes.prs [{url, state}] — one state-colored chip per entry
   const prs = cardPrs(c).map((pr) => prChipHtml(pr)).join('');
-  // worker-state stripe on the tile's LEFT edge — a PERSISTENT status signal,
-  // deliberately separate from the transient top-right corner. Driven by
-  // card.status.worker (the lease); only the known states get a stripe (whitelist,
-  // so absent renders no stripe and no server value ever reaches the class name —
-  // XSS-safe). working=green pulsing, needs-you=amber solid, idle=gray solid,
-  // absent=none.
+  // a captain drag-order awaiting the lieutenant: subtle pending marker
+  const order = c.pendingOrder
+    ? '<span class="t-order" title="' + esc(c.pendingOrder.kind) + ' sent to ' + esc(c.owner) + ' — the card moves when the lieutenant acts">⏳ ordered</span>'
+    : '';
+  // worker-state stripe on the tile's RIGHT edge — a PERSISTENT status signal,
+  // deliberately separate from the transient top-right corner (the LEFT edge is
+  // the owner's color). Driven by card.status.worker (the lease); only the known
+  // states get a stripe (whitelist, so no server value ever reaches the class
+  // name — XSS-safe). working=green pulsing, needs-you=amber, idle=gray.
   const WORKER_STATES = { working: 'Working', 'needs-you': 'Needs you', idle: 'Idle' };
   const worker = st.worker && WORKER_STATES[st.worker.state] ? st.worker.state : '';
   const workerCls = worker ? ' worker worker-' + worker : ''; // worker value is whitelisted above
   const workerTitle = worker
     ? ' title="worker: ' + esc(WORKER_STATES[worker]) + (st.worker.id ? ' — ' + esc(st.worker.id) : '') + '"'
     : '';
+  // owner color stripe on the LEFT edge: every card belongs to exactly one lieutenant
+  const stripe = '<span class="t-stripe" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>';
   return '<div class="tile' + (c.id === S.openCardId ? ' open' : '') + workerCls + '" draggable="true" data-id="' + esc(c.id) + '"' + workerTitle + '>' +
+    stripe +
     '<div class="t-row1"><span class="t-emoji">' + esc(cardEmoji(c)) + '</span>' +
     '<span class="t-title">' + esc(c.title || c.id) + '</span>' +
     cornerInd + '</div>' +
-    (labels || prs ? '<div class="t-chips">' + labels + prs + '</div>' : '') +
+    (labels || prs || order ? '<div class="t-chips">' + order + labels + prs + '</div>' : '') +
     '<div class="t-foot">' +
-    (owner ? '<span class="t-owner' + (filterSelected('owner', owner) ? ' active' : '') + '" data-owner="' + esc(owner) +
-      '" title="filter by owner"><span class="dot" style="background:' + ownerColor(owner) + '"></span>' + esc(owner) + '</span>' : '') +
+    '<span class="t-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) +
+      '" title="filter by lieutenant"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
     (repo ? '<span class="t-repo" title="repo">' + esc(repo) + '</span>' : '') +
     '<span class="grow"></span>' +
     (hasLink ? '<span class="t-ind" title="has link">📎</span>' : '') +
@@ -61,6 +107,7 @@ function tileHtml(c) {
 }
 
 export function renderBoard() {
+  renderLane();
   const sx = boardEl.scrollLeft;
   const colScroll = {};
   boardEl.querySelectorAll('.column').forEach((col) => {
@@ -69,7 +116,7 @@ export function renderBoard() {
 
   const cols = columns();
   if (!cols.length) {
-    boardEl.innerHTML = '<div class="empty">no columns yet — the agent hasn\'t set up this board</div>';
+    boardEl.innerHTML = '<div class="empty">waiting for board…</div>';
     return;
   }
   boardEl.innerHTML = cols.map((col) => {
@@ -102,7 +149,7 @@ function wire() {
     };
     // drag&drop (desktop)
     el.ondragstart = (e) => {
-      e.dataTransfer.setData('text/bridge-card', el.dataset.id);
+      e.dataTransfer.setData('text/bc-card', el.dataset.id);
       e.dataTransfer.effectAllowed = 'move';
       el.classList.add('dragging');
     };
@@ -127,13 +174,13 @@ function wire() {
   boardEl.querySelectorAll('.column').forEach((col) => {
     const id = col.dataset.id;
     col.ondragover = (e) => {
-      if (e.dataTransfer.types.includes('text/bridge-card')) { e.preventDefault(); col.classList.add('drag-over'); }
+      if (e.dataTransfer.types.includes('text/bc-card')) { e.preventDefault(); col.classList.add('drag-over'); }
     };
     col.ondragleave = () => col.classList.remove('drag-over');
     col.ondrop = async (e) => {
       e.preventDefault();
       col.classList.remove('drag-over');
-      const cardId = e.dataTransfer.getData('text/bridge-card');
+      const cardId = e.dataTransfer.getData('text/bc-card');
       if (cardId) { try { await api.moveCard(cardId, id); } catch (err) { alert(err.message); } }
     };
     col.querySelector('.add-card').onclick = (e) => { e.stopPropagation(); openNewCard(id); };
@@ -176,10 +223,24 @@ document.addEventListener('click', (e) => { if (!menuEl.hidden && !menuEl.contai
 // ---------- new card modal ----------
 const ncOverlay = document.getElementById('nc-overlay');
 const ncType = document.getElementById('nc-type');
+const ncOwner = document.getElementById('nc-owner');
 let ncColumnId = ''; // the column whose "+" opened the modal — the create target
 export function openNewCard(columnId) {
-  ncColumnId = columnId || (columns()[0] && columns()[0].id) || '';
-  ncType.value = 'plan';
+  if (!lieutenants().length) { openNewLieutenant(); return; } // a card needs an owner
+  ncColumnId = columnId || 'backlog';
+  ncType.value = 'implementation';
+  ncOwner.textContent = '';
+  for (const l of lieutenants()) {
+    const o = document.createElement('option');
+    o.value = l.id;
+    o.textContent = l.name || l.id;
+    ncOwner.appendChild(o);
+  }
+  // default owner: the lieutenant whose chat is open, else the first
+  if (S.chatMode) {
+    const cur = S.chatMode.mode === 'lieutenant' ? S.chatMode.id : (cards().find((c) => c.id === S.chatMode.id) || {}).owner;
+    if (cur && lieutenant(cur)) ncOwner.value = cur;
+  }
   document.getElementById('nc-name').value = '';
   document.getElementById('nc-body').value = '';
   ncOverlay.hidden = false;
@@ -195,8 +256,35 @@ document.getElementById('nc-modal').onsubmit = async (e) => {
   if (!title) return;
   const body = document.getElementById('nc-body').value;
   try {
-    const r = await api.createCard({ title, column: ncColumnId, body, attributes: { type: ncType.value } });
+    const r = await api.createCard({ title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value });
     closeNewCard();
     openDetail(r.card.id);
+  } catch (err) { alert(err.message); }
+};
+
+// ---------- new lieutenant modal ----------
+const ltOverlay = document.getElementById('lt-overlay');
+export function openNewLieutenant() {
+  document.getElementById('lt-name').value = '';
+  document.getElementById('lt-charter').value = '';
+  ltOverlay.hidden = false;
+  document.getElementById('lt-name').focus();
+}
+export function closeNewLieutenant() { ltOverlay.hidden = true; }
+export function newLieutenantOpen() { return !ltOverlay.hidden; }
+document.getElementById('lt-cancel').onclick = closeNewLieutenant;
+ltOverlay.onclick = (e) => { if (e.target === ltOverlay) closeNewLieutenant(); };
+document.getElementById('lt-modal').onsubmit = async (e) => {
+  e.preventDefault();
+  const name = document.getElementById('lt-name').value.trim();
+  if (!name) return;
+  try {
+    const r = await api.createLieutenant({
+      name,
+      color: document.getElementById('lt-color').value,
+      charter: document.getElementById('lt-charter').value,
+    });
+    closeNewLieutenant();
+    openLieutenantChat(r.lieutenant.id);
   } catch (err) { alert(err.message); }
 };

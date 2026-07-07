@@ -4,10 +4,10 @@
 // hide the handles) keep winning untouched. Chosen widths persist per panel in
 // localStorage; clamps keep the board area usable at either extreme.
 const PANELS = [
-  { handle: 'chat-resize', key: 'bridge-chat-w', prop: '--chat-w',
+  { handle: 'chat-resize', key: 'bc-chat-w', prop: '--chat-w',
     min: 280, max: () => Math.min(720, window.innerWidth - 420),
     widthAt: (e) => e.clientX },                       // chat sits at the left edge
-  { handle: 'detail-resize', key: 'bridge-detail-w', prop: '--detail-w',
+  { handle: 'detail-resize', key: 'bc-detail-w', prop: '--detail-w',
     min: 380, max: () => Math.min(920, window.innerWidth - 360),
     widthAt: (e) => window.innerWidth - e.clientX },   // detail is fixed to the right edge
 ];
