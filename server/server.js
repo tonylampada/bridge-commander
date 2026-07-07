@@ -56,6 +56,7 @@ const path = require('path');
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
+const names = require(path.join(__dirname, 'names.js'));
 const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
@@ -84,7 +85,12 @@ const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const QUEUE_DIR = path.join(STATE_DIR, 'queue');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
 const UI_DIR = path.join(__dirname, '..', 'ui');
+// Harness working state (session ids, prompts, turn-end logs) lives in the
+// WORKSPACE, never in the harness's global last-resort dir — two boards on one
+// machine must never share it. BC_HARNESS_STATE stays an explicit override.
+const HARNESS_STATE_DIR = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
 fs.mkdirSync(QUEUE_DIR, { recursive: true });
+fs.mkdirSync(HARNESS_STATE_DIR, { recursive: true });
 
 const DEFAULT_PORT = 4780;
 
@@ -295,7 +301,7 @@ function findLieutenant(id) { return board.lieutenants.find((l) => l.id === id);
 function createLieutenant(body) {
   const name = String(body.name || '').trim();
   if (!name) return { error: 'name required' };
-  const id = body.id ? String(body.id) : slug(name);
+  const id = body.id ? String(body.id) : lieutenantIdFrom(name);
   if (!/^[\w][\w.-]*$/.test(id)) return { error: 'bad lieutenant id (use [A-Za-z0-9_.-])' };
   if (findLieutenant(id)) return { error: 'lieutenant exists: ' + id, code: 409 };
   const color = validColor(body.color) || LT_PALETTE[board.lieutenants.length % LT_PALETTE.length];
@@ -331,20 +337,35 @@ function lieutenantPrompt(name, id, charter) {
       + 'Your first act, now and at the start of every turn: run `bc-axi drain`. Ack what you handle.',
   ].filter(Boolean).join('\n\n');
 }
+// Relaunch prompt for a lieutenant whose dead session has no recoverable
+// memory (harness.resumable said no): the same doctrine + charter launch
+// prompt, plus a compact board digest — owned cards and pending queue count —
+// so the fresh session reorients from truth instead of lost conversation.
+function respawnPrompt(lt) {
+  const owned = board.cards.filter((c) => c.owner === lt.id);
+  const digest = owned.map((c) => '- ' + c.id + ' [' + c.column + '] ' + c.title).join('\n');
+  return lieutenantPrompt(lt.name, lt.id, lt.charter) + '\n\n'
+    + '## Respawned without memory\n\n'
+    + 'Your previous session is gone; the board is truth — reorient from it.\n'
+    + 'Your cards (' + owned.length + '):\n' + (digest || '(none)') + '\n'
+    + 'Pending queue: ' + pendingItems(lt.id).length + ' item(s). Your first act: `bc-axi drain`.';
+}
+
 async function spawnLieutenant(body) {
   const name = String(body.name || '').trim();
   if (!name) return { error: 'name required' };
-  const id = body.id ? String(body.id) : slug(name);
+  const id = body.id ? String(body.id) : lieutenantIdFrom(name);
   if (!/^[\w][\w.-]*$/.test(id)) return { error: 'bad lieutenant id (use [A-Za-z0-9_.-])' };
   if (findLieutenant(id)) return { error: 'lieutenant exists: ' + id, code: 409 };
   const harnessName = String(body.harness || readConfig().harness || 'claude');
   let impl;
   try { impl = getHarness(harnessName); } catch (e) { return { error: String(e.message || e) }; }
-  const session = 'bc-lt-' + id.replace(/[^A-Za-z0-9_-]/g, '-');
+  const session = names.lieutenantSession(WORKSPACE, id);
   let ref;
   try {
     ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id, body.charter), {
       session,
+      stateDir: HARNESS_STATE_DIR,
       callbackUrl: TURNEND_URL,
       installHooks: false,
     });
@@ -602,8 +623,21 @@ function columnTitle(id) {
   const c = board.columns.find((k) => k.id === id);
   return c ? c.title : id;
 }
-function slug(s) {
-  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
+// ASCII slug: emoji, ZWJ sequences, and any other non-ASCII are stripped, so
+// derived ids (and the session names built from them) never reach tmux.
+function slugBase(s) {
+  return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+}
+function slug(s) { return slugBase(s) || 'card'; }
+// Lieutenant id from a display name. A name with no ASCII at all (pure emoji)
+// falls back to 'lt', made unique so a second such lieutenant can still be
+// born; a real slug collision stays a 409 in createLieutenant (same-name
+// duplicates are a caller mistake, not a naming gap).
+function lieutenantIdFrom(name) {
+  const base = slugBase(name);
+  if (base) return base;
+  if (!findLieutenant('lt')) return 'lt';
+  for (let i = 2; ; i++) if (!findLieutenant('lt-' + i)) return 'lt-' + i;
 }
 function newCardId(title) {
   const base = slug(title);
@@ -877,7 +911,9 @@ function addProject(body) {
 }
 
 // ---------- workers (F5: card.start, worker.signal, worker done) ----------
-function workerSession(cardId) { return 'bc-w-' + String(cardId).replace(/[^A-Za-z0-9_-]/g, '-'); }
+// Session names carry the workspace discriminator (names.js) — refs are data,
+// so workers recorded under older name schemes keep working via ref.session.
+function workerSession(cardId) { return names.workerSession(WORKSPACE, cardId); }
 function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
 
 // The system move into Working — card.start is the ONE way in (invariant:
@@ -909,7 +945,7 @@ async function startCard(card, body) {
     if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
     let ref;
     try {
-      ref = await harnessFor(existing.ref).resume(existing.ref, { callbackUrl: TURNEND_URL });
+      ref = await harnessFor(existing.ref).resume(existing.ref, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
     } catch (e) {
       return { error: 'worker resume failed: ' + String((e && e.message) || e), code: 502 };
     }
@@ -966,7 +1002,7 @@ async function startCard(card, body) {
   });
   let ref;
   try {
-    ref = await impl.spawn(wt.path, prompt, { session, callbackUrl: TURNEND_URL });
+    ref = await impl.spawn(wt.path, prompt, { session, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
   } catch (e) {
     releaseWorktree(wt, project.path); // best-effort: no spawnless lease left behind
     return { error: 'worker spawn failed: ' + String((e && e.message) || e), code: 502 };
@@ -1033,9 +1069,11 @@ function workerDone(card, body) {
 
 // ---------- supervision loop (invariant 8: supervision is infrastructure) ----------
 // Every ~30s: harness.alive on every lieutenant + worker ref.
-//   lieutenant dead  -> harness.resume (same session name), ref updated, level-1
-//                       event, nudge to drain; max 3 failed attempts then a
-//                       level-1 needs-captain flag (attempts reset when alive).
+//   lieutenant dead  -> harness.resume when resumable (memory recoverable),
+//                       else harness.spawn with charter + board digest (same
+//                       session name either way), ref updated, level-1 event,
+//                       nudge to drain; max 3 failed attempts then a level-1
+//                       needs-captain flag (attempts reset when alive).
 //   worker dead w/o done -> QueueItem to the owner + level-2 card event; the
 //                       card STAYS Working but the registry entry is flagged —
 //                       the owner decides (card start --resume, or move back).
@@ -1058,7 +1096,22 @@ async function superviseTick() {
       if (n > 3) continue; // already flagged needs-captain; a manual revival resets via alive
       respawnAttempts.set(lt.id, n);
       try {
-        const ref = await harnessFor(lt.ref).resume(lt.ref, { callbackUrl: TURNEND_URL, installHooks: false });
+        // Resume when memory is recoverable; else relaunch a fresh session with
+        // charter + owned cards + pending queue as the prompt (the DNA's
+        // auto-respawn side effect) — a bare agent with no context helps nobody.
+        const impl = harnessFor(lt.ref);
+        const opts = { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false };
+        let ref;
+        if (await impl.resumable(lt.ref, opts)) {
+          ref = await impl.resume(lt.ref, opts);
+        } else {
+          await impl.kill(lt.ref); // clear any dead pane still holding the name
+          // Keep the session name (an incarnation, not a new entity) when it is
+          // spawnable; a founder's foreign name gets a workspace-scoped one.
+          const session = /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
+            ? lt.ref.session : names.lieutenantSession(WORKSPACE, lt.id);
+          ref = await impl.spawn(lt.ref.cwd, respawnPrompt(lt), Object.assign({ session }, opts));
+        }
         lt.ref = ref;
         respawnAttempts.delete(lt.id);
         board.events.push(mkEvent({

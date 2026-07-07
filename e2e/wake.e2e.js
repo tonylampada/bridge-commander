@@ -87,13 +87,14 @@ async function stepCase(name, fn) {
     console.error('  ✖ ' + name);
     console.error(e && e.stack ? e.stack : e);
     console.error('--- founder pane tail ---\n' + capture(FOUNDER).split('\n').slice(-30).join('\n'));
-    console.error('--- scout pane tail ---\n' + capture('bc-lt-scout').split('\n').slice(-40).join('\n'));
+    console.error('--- scout pane tail ---\n' + capture(SCOUT).split('\n').slice(-40).join('\n'));
     process.exitCode = 1;
     throw e;
   }
 }
 
 const FOUNDER = 'bc-e2e-founder';
+const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutenantSession(ws, 'scout');
 
 (async () => {
   const port = await freePort();
@@ -203,10 +204,10 @@ const FOUNDER = 'bc-e2e-founder';
       });
       assert.strictEqual(r.status, 200, JSON.stringify(r.body));
       assert.strictEqual(r.body.lieutenant.ref.harness, 'claude');
-      assert.strictEqual(r.body.lieutenant.ref.session, 'bc-lt-scout');
+      assert.strictEqual(r.body.lieutenant.ref.session, SCOUT);
       assert.ok(r.body.lieutenant.ref.resumeId, 'resumeId known at birth (--session-id)');
       // the claude session is really up (pane not sitting at a shell)
-      const cmd = tmux('display-message', '-p', '-t', '=bc-lt-scout:', '#{pane_current_command}').trim();
+      const cmd = tmux('display-message', '-p', '-t', '=' + SCOUT + ':', '#{pane_current_command}').trim();
       assert.ok(!['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh'].includes(cmd), 'claude alive, pane runs: ' + cmd);
       // its turn-ends flow through the workspace hook to the server
       await until('scout turn-end recorded', async () => {
@@ -231,7 +232,7 @@ const FOUNDER = 'bc-e2e-founder';
     console.log('\nwake e2e: ' + passed + ' steps passed');
   } finally {
     // kill the claude session first (politely), then the whole private tmux server
-    tryTmux('kill-session', '-t', '=bc-lt-scout:');
+    tryTmux('kill-session', '-t', '=' + SCOUT + ':');
     tryTmux('kill-server');
     // stop the workspace server via its pidfile
     try {

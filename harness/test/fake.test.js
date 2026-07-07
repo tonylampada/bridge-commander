@@ -41,6 +41,15 @@ test('send throws on a dead session', async () => {
   await assert.rejects(() => fake.send(ref, 'hi'), /not alive/);
 });
 
+test('resumable: true iff memory would survive a resume', async () => {
+  const ref = await fake.spawn('/tmp/x', 'p');
+  assert.strictEqual(await fake.resumable(ref), true);
+  fake.kill(ref);
+  assert.strictEqual(await fake.resumable(ref), true, 'dead but memory held');
+  assert.strictEqual(await fake.resumable({ ...ref, resumeId: 'wrong-id' }), false);
+  assert.strictEqual(await fake.resumable({ harness: 'fake', session: 'bc-nobody', cwd: '/x', resumeId: 'z' }), false);
+});
+
 test('resume revives with memory when resumeId matches', async () => {
   const ref = await fake.spawn('/tmp/x', 'remember-me');
   await fake.send(ref, 'more');

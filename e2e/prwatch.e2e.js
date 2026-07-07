@@ -92,7 +92,7 @@ async function until(what, fn, ms, step = 2000) {
 
 const RUN = crypto.randomBytes(3).toString('hex');
 const CARD = 'prwatch-' + RUN;
-const SESSION = 'bc-w-' + CARD;
+const SESSION = require(path.join(__dirname, '..', 'server', 'names.js')).workerSession(ws, CARD);
 const FILE = 'runs/' + RUN + '.txt';
 const WANT = 'pr watch e2e ' + RUN;
 

@@ -84,7 +84,7 @@ where: file, branch, PR) and hand off (`card move <id> review`) — the card nev
 Working by itself.
 `worker-died` means the session died mid-work: resume it (`card start <id> --resume`,
 same worktree and memory) or move the card back. Steer a live worker with a short line
-typed into its tmux session (`bc-w-<card-id>`); anything long belongs in a rework restart
+typed into its tmux session (the card's `session` attribute); anything long belongs in a rework restart
 with an updated brief. Never do the worker's job yourself.
 
 ## Merges are watched — never hand-archive merged work

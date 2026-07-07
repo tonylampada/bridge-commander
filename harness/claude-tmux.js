@@ -34,6 +34,10 @@ const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh']);
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
 
+// State dir resolution: opts.stateDir (the server/CLI always pass the
+// workspace's .bridge-command/harness), then BC_HARNESS_STATE, then a global
+// last-resort for bare embedders only — shared across workspaces, so never
+// rely on it from workspace-aware callers.
 function stateDirOf(opts = {}) {
   const dir = opts.stateDir || process.env.BC_HARNESS_STATE
     || path.join(os.homedir(), '.bridge-command', 'harness');
@@ -206,6 +210,19 @@ async function alive(ref) {
   return cmd !== null && !SHELLS.has(cmd);
 }
 
+// resumable(ref, opts?) -> bool — would resume(ref) restore memory? True when a
+// resume id is recoverable: ref.resumeId, or the hook-recorded session-id file
+// in the state dir. Introspection only, no side effects beyond ensuring the
+// state dir exists — the server uses it to pick resume vs relaunch-with-charter.
+async function resumable(ref, opts = {}) {
+  if (ref.resumeId) return true;
+  try {
+    return !!fs.readFileSync(path.join(stateDirOf(opts), `${ref.session}.session-id`), 'utf8').trim();
+  } catch {
+    return false;
+  }
+}
+
 // resume(ref) -> HarnessRef — reincarnate a dead session with memory when possible.
 // Prefers the hook-recorded session id (ground truth) over ref.resumeId, kills
 // any leftover dead tmux session, relaunches `claude --resume <id>` in a fresh
@@ -315,7 +332,7 @@ function onTurnEnd(ref, hook, opts = {}) {
   };
 }
 
-// installHooks is exported beyond the six port verbs so `bc-axi init` can
+// installHooks is exported beyond the seven port verbs so `bc-axi init` can
 // install the workspace-level Stop hook (session-agnostic; the server dedupes
 // turn-end POSTs by session_id).
-module.exports = { spawn, send, alive, resume, kill, onTurnEnd, installHooks };
+module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks };

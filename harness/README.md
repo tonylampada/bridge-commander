@@ -1,13 +1,14 @@
 # harness — the multi-harness port
 
 The server speaks ONLY this port ([docs/api/overview.md](../docs/api/overview.md), "harness port").
-Six verbs, nothing else:
+Seven verbs, nothing else:
 
 | Verb | Signature | Purpose |
 |---|---|---|
 | `spawn` | `(cwd, prompt, opts?) → HarnessRef` | birth an agent session |
 | `send` | `(ref, text)` | type into a session, with **verified** submission |
 | `alive` | `(ref) → bool` | liveness |
+| `resumable` | `(ref, opts?) → bool` | introspection: would `resume` restore memory? |
 | `resume` | `(ref) → HarnessRef` | reincarnate a dead session with memory when possible |
 | `kill` | `(ref)` | end a session for good — idempotent, dead ref is a no-op |
 | `onTurnEnd` | `(ref, hook) → unsubscribe()` | turn-boundary detection, push not poll |
@@ -50,7 +51,7 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
   `opts.installHooks: false` skips the per-spawn Stop-hook install (spawn and
   resume both honor it) — for sessions born into a cwd that already carries a
   workspace-level hook, which a per-spawn install would clobber (one bc entry
-  per settings file). `installHooks` is also exported beyond the five verbs so
+  per settings file). `installHooks` is also exported beyond the seven verbs so
   `bc-axi init` can install that workspace-level hook itself.
 - **send** — text is typed ONCE (single-line via `send-keys -l`; multi-line via a
   bracketed paste so embedded newlines don't submit mid-text), then Enter is sent
@@ -76,13 +77,14 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
   (`opts.callbackUrl` / `BC_TURNEND_URL`). `onTurnEnd()` tails that file
   (fs.watch + 1s polling backstop) and fires the hook per event.
 
-State lives in `~/.bridge-command/harness/` (`BC_HARNESS_STATE` or
-`opts.stateDir` to override): `<session>.prompt`, `<session>.session-id`,
-`<session>.turnend.jsonl`.
+State lives in `opts.stateDir` — the server and CLI always pass the
+workspace's `.bridge-command/harness/` (`BC_HARNESS_STATE` overrides; the
+global `~/.bridge-command/harness/` is a last-resort for bare embedders only):
+`<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`.
 
 ## Adding a new harness
 
-Implement the six verbs in one module and register it:
+Implement the seven verbs in one module and register it:
 
 ```js
 const { registerHarness } = require('./port.js');

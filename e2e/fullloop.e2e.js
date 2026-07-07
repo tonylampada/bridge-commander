@@ -77,8 +77,10 @@ function git(dir, ...args) {
   return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
 }
 
+const { lieutenantSession, workspaceDisc } = require(path.join(__dirname, '..', 'server', 'names.js'));
+
 const LT = 'hopper';
-const LT_SESSION = 'bc-lt-' + LT;
+const LT_SESSION = lieutenantSession(ws, LT); // workspace-discriminated
 
 function elapsed(t0) { return ((Date.now() - t0) / 1000).toFixed(0) + 's'; }
 
@@ -90,7 +92,7 @@ function dumpDiagnostics() {
     console.error(fs.readFileSync(path.join(ws, '.bridge-command', 'queue', LT + '.jsonl'), 'utf8').trim());
     console.error('ack cursor: ' + fs.readFileSync(path.join(ws, '.bridge-command', 'queue', LT + '.ack'), 'utf8').trim());
   } catch (e) { console.error('(no queue state: ' + e.message + ')'); }
-  for (const s of (tryTmux('list-sessions', '-F', '#S') || '').split('\n').filter((x) => x.startsWith('bc-w-'))) {
+  for (const s of (tryTmux('list-sessions', '-F', '#S') || '').split('\n').filter((x) => x.startsWith('bc-' + workspaceDisc(ws) + '-w-'))) {
     console.error('\n--- worker pane (' + s + ') ---');
     console.error(capture(s).split('\n').slice(-40).join('\n'));
   }
@@ -208,7 +210,7 @@ function dumpDiagnostics() {
     assert.strictEqual(c.type, 'implementation');
     assert.strictEqual(String(c.attributes.repo), 'proj');
     assert.ok(ev.some((e) => e.kind === 'started'), 'card.start happened (started event)');
-    assert.ok(c.attributes.session && c.attributes.session.startsWith('bc-w-'), 'worker session bound: ' + c.attributes.session);
+    assert.ok(c.attributes.session && c.attributes.session.startsWith('bc-' + workspaceDisc(ws) + '-w-'), 'worker session bound: ' + c.attributes.session);
     assert.ok(ev.some((e) => e.kind === 'worker-done'), 'worker reported done');
     const handoff = ev.find((e) => e.kind === 'handoff' && e.actor !== 'user');
     assert.ok(handoff, 'the handoff event exists and is the lieutenant\'s');

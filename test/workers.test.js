@@ -11,6 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
+const { workerSession } = require('../server/names.js');
 
 function git(dir, ...args) {
   return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -99,7 +100,10 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     const r = await s.api('POST', '/api/cards/fix-login/start', { harness: 'fake' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     const w = r.body.worker;
-    assert.strictEqual(w.ref.session, 'bc-w-fix-login');
+    // workspace-scoped session name: discriminator between bc- and -w-
+    const sess = workerSession(s.dir, 'fix-login');
+    assert.strictEqual(w.ref.session, sess);
+    assert.match(sess, /^bc-[A-Za-z0-9-]+-w-fix-login$/);
     assert.ok(w.ref.resumeId, 'resumeId known at birth');
     assert.strictEqual(w.branch, 'bc/fix-login');
     assert.strictEqual(w.project, 'proj');
@@ -108,7 +112,7 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     const card = r.body.card;
     assert.strictEqual(card.column, 'working');
     assert.strictEqual(card.pendingOrder, null);
-    assert.strictEqual(card.attributes.session, 'bc-w-fix-login');
+    assert.strictEqual(card.attributes.session, sess);
     assert.strictEqual(card.attributes.worktree, w.worktree.path);
     assert.strictEqual(card.attributes.branch, 'bc/fix-login');
     const started = card.events[card.events.length - 1];
@@ -127,7 +131,7 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
 
     // the brief (the fake's spawn marker records the launch prompt): task,
     // thread context, worker duties, branch, and the local-only mode contract
-    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-w-fix-login.json'), 'utf8'));
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, sess + '.json'), 'utf8'));
     assert.strictEqual(rec.cwd, wt);
     assert.match(rec.prompt, /Worker brief — card "Fix login"/);
     assert.match(rec.prompt, /login button 404s/);
@@ -143,7 +147,7 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     const disk = boardOnDisk(s);
     assert.strictEqual(disk.workers.length, 1);
     assert.strictEqual(disk.workers[0].card, 'fix-login');
-    assert.strictEqual(disk.workers[0].ref.session, 'bc-w-fix-login');
+    assert.strictEqual(disk.workers[0].ref.session, sess);
   } finally { await teardown(); }
 });
 
@@ -206,7 +210,7 @@ test('investigation: brief carries the report contract, no branch; done attaches
     const card0 = r.body.card;
     assert.strictEqual(card0.attributes.branch, undefined);
 
-    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-w-why-slow.json'), 'utf8'));
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, workerSession(s.dir, 'why-slow') + '.json'), 'utf8'));
     assert.match(rec.prompt, /investigation/);
     assert.match(rec.prompt, /reports\/why-slow\.md/);
     assert.doesNotMatch(rec.prompt, /git checkout -b/);
@@ -235,12 +239,12 @@ test('turn-end resolves worker refs (before lieutenant adoption), hook payload i
     const w = (await s.api('POST', '/api/cards/turns/start', { harness: 'fake' })).body.worker;
 
     // match by the worker's resumeId
-    let r = await s.api('POST', '/api/turn-end', { session: 'bc-w-turns', session_id: w.ref.resumeId });
+    let r = await s.api('POST', '/api/turn-end', { session: w.ref.session, session_id: w.ref.resumeId });
     assert.strictEqual(r.body.worker, 'turns');
     assert.strictEqual(r.body.lieutenant, null);
 
     // match by session name; a CHANGED session_id is adopted as ground truth
-    r = await s.api('POST', '/api/turn-end', { session: 'bc-w-turns', session_id: 'uuid-after-resume' });
+    r = await s.api('POST', '/api/turn-end', { session: w.ref.session, session_id: 'uuid-after-resume' });
     assert.strictEqual(r.body.worker, 'turns');
     const disk = boardOnDisk(s);
     assert.strictEqual(disk.workers[0].ref.resumeId, 'uuid-after-resume');
@@ -260,7 +264,7 @@ test('worker turn-end without done on a Working card wakes the owner (worker-sto
       .filter((i) => i.kind === 'worker-stopped' && i.card === 'wedged');
 
     // first stop: QueueItem + level-2 card event; the card does NOT move
-    let r = await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    let r = await s.api('POST', '/api/turn-end', { session: w.ref.session, session_id: w.ref.resumeId });
     assert.strictEqual(r.body.worker, 'wedged');
     assert.strictEqual((await stopItems()).length, 1);
     const card = (await s.api('GET', '/api/cards/wedged')).body;
@@ -271,23 +275,23 @@ test('worker turn-end without done on a Working card wakes the owner (worker-sto
     assert.match(ev.text, /stopped without reporting done/);
 
     // repeat turn-ends in the same stop-state coalesce — no stacking
-    await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    await s.api('POST', '/api/turn-end', { session: w.ref.session, session_id: w.ref.resumeId });
     assert.strictEqual((await stopItems()).length, 1);
 
     // a signal opens a fresh stop-state: the next stop re-notifies
     await s.api('POST', '/api/cards/wedged/worker/signal', { text: 'steered — back at it' });
-    await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    await s.api('POST', '/api/turn-end', { session: w.ref.session, session_id: w.ref.resumeId });
     assert.strictEqual((await stopItems()).length, 2);
 
     // the drain hint names the stop and the session to peek
     const cli = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
     assert.strictEqual(cli.code, 0, cli.stderr);
     assert.match(cli.stdout, /WORKER STOPPED — card wedged/);
-    assert.match(cli.stdout, /tmux attach -t bc-w-wedged/);
+    assert.match(cli.stdout, new RegExp('tmux attach -t ' + w.ref.session.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
     // after done, turn-ends only bump counters — never a worker-stopped item
     await s.api('POST', '/api/cards/wedged/worker/done', { outcome: 'finished for real' });
-    await s.api('POST', '/api/turn-end', { session: 'bc-w-wedged', session_id: w.ref.resumeId });
+    await s.api('POST', '/api/turn-end', { session: w.ref.session, session_id: w.ref.resumeId });
     assert.strictEqual((await stopItems()).length, 2);
   } finally { await teardown(); }
 });
@@ -306,7 +310,7 @@ test('card start --resume reincarnates a dead recorded worker in the same worktr
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     assert.strictEqual(r.body.resumed, true);
     const w = r.body.worker;
-    assert.strictEqual(w.ref.session, 'bc-w-crashy');
+    assert.strictEqual(w.ref.session, workerSession(s.dir, 'crashy'));
     assert.strictEqual(w.worktree.path, first.worktree.path, 'same worktree — context preserved');
     assert.strictEqual(w.done, false);
     assert.strictEqual((await s.api('GET', '/api/cards/crashy')).body.column, 'working');
@@ -346,7 +350,7 @@ test('fresh restart after done: refuses over a live session; releases the dead o
     // the session dies (server restart clears the in-process fake; drop its
     // cross-process marker too), then a fresh start reprovisions
     await s.stop();
-    fs.rmSync(path.join(fdir, 'bc-w-redo.json'), { force: true });
+    fs.rmSync(path.join(fdir, workerSession(wsDir, 'redo') + '.json'), { force: true });
     s = await startServerWithLieutenant({ dir: wsDir, env });
     r = await s.api('POST', '/api/cards/redo/start', { harness: 'fake', brief: 'redo it with tests' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -358,7 +362,7 @@ test('fresh restart after done: refuses over a live session; releases the dead o
     assert.strictEqual(wtList.length, 2, 'clone + exactly one linked worktree:\n' + wtList.join('\n'));
     assert.ok(fs.existsSync(r.body.worker.worktree.path), 'new worktree provisioned');
     assert.strictEqual(r.body.worker.worktree.path, first.worktree.path, 'same deterministic path reused');
-    assert.match(JSON.parse(fs.readFileSync(path.join(fdir, 'bc-w-redo.json'), 'utf8')).prompt, /redo it with tests/);
+    assert.match(JSON.parse(fs.readFileSync(path.join(fdir, workerSession(wsDir, 'redo') + '.json'), 'utf8')).prompt, /redo it with tests/);
     const disk = boardOnDisk(s);
     assert.strictEqual(disk.workers.filter((w) => w.card === 'redo').length, 1, 'one registry entry per card');
     assert.strictEqual(disk.workers.find((w) => w.card === 'redo').done, false);

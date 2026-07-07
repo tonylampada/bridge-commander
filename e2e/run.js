@@ -6,7 +6,8 @@
 //
 // Covers: board init, lieutenant create, cards of each type, captain message →
 // queue item drained + acked, drag-order → queue item, archive/restore, bell
-// derivation. Exits non-zero on the first failure.
+// derivation, restart survival, and two-workspace isolation (session names +
+// harness state never shared across boards). Exits non-zero on the first failure.
 'use strict';
 
 const { spawn } = require('node:child_process');
@@ -228,6 +229,55 @@ async function step(name, fn) {
       assert.strictEqual(b.cards.length, 3);
       again.kill('SIGTERM');
       await sleep(200);
+    });
+
+    await step('two boards, one machine: same-named lieutenant → distinct sessions, harness state per workspace', async () => {
+      const { lieutenantSession } = require(path.join(__dirname, '..', 'server', 'names.js'));
+      // Two fresh servers on two temp workspaces; the file-backed fake harness
+      // records each spawn (session, prompt, and the stateDir plumbed through
+      // the port) so the workspace scoping is genuinely exercised.
+      const boards = [];
+      for (let i = 0; i < 2; i++) {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-e2e-twin-'));
+        const p = await freePort();
+        const child = spawn(process.execPath, [SERVER_JS, dir, '--port', String(p), '--host', '127.0.0.1'], {
+          stdio: 'ignore',
+          env: Object.assign({}, process.env, { BC_FAKE_STATE: path.join(dir, 'fake') }),
+        });
+        boards.push({ dir, port: p, child, base: 'http://127.0.0.1:' + p });
+      }
+      try {
+        for (const b of boards) {
+          const deadline2 = Date.now() + 10000;
+          for (;;) {
+            try { if ((await fetch(b.base + '/api/status')).ok) break; } catch (e) {}
+            if (Date.now() > deadline2) throw new Error('twin server not ready on port ' + b.port);
+            await sleep(50);
+          }
+          const res = await fetch(b.base + '/api/lieutenants', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: 'Twin', id: 'twin', spawn: true, harness: 'fake' }),
+          });
+          const text = await res.text();
+          assert.ok(res.ok, 'twin lieutenant spawn on port ' + b.port + ': ' + text);
+          b.lt = JSON.parse(text).lieutenant;
+        }
+        assert.notStrictEqual(boards[0].lt.ref.session, boards[1].lt.ref.session,
+          'same lieutenant name on two boards must not collide on a tmux session');
+        for (const b of boards) {
+          assert.strictEqual(b.lt.ref.session, lieutenantSession(b.dir, 'twin'));
+          assert.match(b.lt.ref.session, /^bc-[A-Za-z0-9-]+-lt-twin$/, 'workspace-discriminated, ASCII-only');
+          const rec = JSON.parse(fs.readFileSync(path.join(b.dir, 'fake', b.lt.ref.session + '.json'), 'utf8'));
+          const want = path.join(b.dir, '.bridge-command', 'harness');
+          assert.strictEqual(rec.stateDir, want, 'harness state under THIS workspace, never a shared global dir');
+          assert.ok(fs.existsSync(want), 'workspace harness state dir provisioned');
+        }
+      } finally {
+        for (const b of boards) {
+          if (b.child.exitCode == null) b.child.kill('SIGKILL');
+          fs.rmSync(b.dir, { recursive: true, force: true });
+        }
+      }
     });
 
     console.log('\ne2e: ' + passed + ' steps passed');

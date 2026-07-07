@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const { VERBS, registerHarness, getHarness, isHarnessRef, harnessFor } = require('../port.js');
 
-test('getHarness returns builtin fake with all six verbs', () => {
+test('getHarness returns builtin fake with all seven verbs', () => {
   const h = getHarness('fake');
   for (const verb of VERBS) assert.strictEqual(typeof h[verb], 'function', verb);
 });
@@ -12,13 +12,16 @@ test('getHarness throws on unknown harness', () => {
   assert.throws(() => getHarness('nope'), /unknown harness "nope"/);
 });
 
-test('registerHarness validates the six verbs', () => {
+test('registerHarness validates the seven verbs', () => {
   assert.throws(() => registerHarness('bad', { spawn() {} }), /missing verb/);
   assert.throws(() => registerHarness('no-kill', {
-    spawn() {}, send() {}, alive() {}, resume() {}, onTurnEnd() {},
+    spawn() {}, send() {}, alive() {}, resumable() {}, resume() {}, onTurnEnd() {},
   }), /missing verb kill/);
-  const impl = {
+  assert.throws(() => registerHarness('no-resumable', {
     spawn() {}, send() {}, alive() {}, resume() {}, kill() {}, onTurnEnd() {},
+  }), /missing verb resumable/);
+  const impl = {
+    spawn() {}, send() {}, alive() {}, resumable() {}, resume() {}, kill() {}, onTurnEnd() {},
   };
   registerHarness('custom', impl);
   assert.strictEqual(getHarness('custom'), impl);

@@ -1,5 +1,5 @@
 'use strict';
-// fake — in-memory harness implementing the same five verbs, for unit tests
+// fake — in-memory harness implementing the same seven verbs, for unit tests
 // of server code. No tmux, no claude, no filesystem.
 //
 // Refs look like the real thing: { harness: 'fake', session: 'bc-<id>', cwd, resumeId }.
@@ -9,6 +9,8 @@
 //             emits one turn-end event asynchronously (the "reply" turn).
 //   send    — throws on a dead session; records the text; emits a turn-end.
 //   alive   — session exists and is not killed.
+//   resumable — would resume restore memory? true iff this process holds the
+//             session's transcript under a matching resumeId.
 //   resume  — revives a dead session; transcript (memory) survives iff the
 //             resumeId matches the recorded one.
 //   kill    — ends a session for good (idempotent); in file-backed mode also
@@ -20,7 +22,7 @@
 //
 // File-backed mode (cross-process observability): when BC_FAKE_STATE names a
 // directory, spawn/send also persist there —
-//   <session>.json         spawn record { cwd, resumeId, prompt }
+//   <session>.json         spawn record { cwd, resumeId, prompt, stateDir }
 //   <session>.sends.jsonl  one JSON line per send { ts, session, text }
 // and a session unknown to THIS process counts as alive (and accepts sends)
 // iff its <session>.json marker exists. That lets a test process watch what a
@@ -95,7 +97,12 @@ async function spawn(cwd, prompt, opts = {}) {
     turns: 0,
   });
   const marker = markerFile(session);
-  if (marker) fs.writeFileSync(marker, JSON.stringify({ cwd, resumeId, prompt }, null, 2) + '\n');
+  if (marker) {
+    // stateDir rides along so a watching test can verify what dir the caller
+    // plumbed through the port (the fake itself never writes state there).
+    fs.writeFileSync(marker,
+      JSON.stringify({ cwd, resumeId, prompt, stateDir: opts.stateDir || null }, null, 2) + '\n');
+  }
   emitTurnEnd(session);
   return { harness: 'fake', session, cwd, resumeId };
 }
@@ -119,6 +126,13 @@ async function alive(ref) {
   if (s) return s.alive;
   const marker = markerFile(ref.session);
   return !!(marker && fs.existsSync(marker));
+}
+
+// resumable — introspection only: memory survives a resume iff this process
+// still holds the session's transcript under the same resumeId.
+async function resumable(ref) {
+  const s = sessions.get(ref.session);
+  return !!(s && ref.resumeId && ref.resumeId === s.resumeId);
 }
 
 async function resume(ref) {
@@ -171,4 +185,4 @@ function reset() {
   sessions.clear();
 }
 
-module.exports = { spawn, send, alive, resume, onTurnEnd, kill, transcript, reset };
+module.exports = { spawn, send, alive, resumable, resume, onTurnEnd, kill, transcript, reset };

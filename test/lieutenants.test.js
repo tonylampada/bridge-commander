@@ -39,6 +39,35 @@ test('lieutenant create: slug id, palette color, charter; duplicates conflict', 
   }
 });
 
+test('emoji-safe naming: id is the ASCII slug, display name keeps the emoji, session stays ASCII', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const s = await startServer({ env: { BC_FAKE_STATE: fdir } });
+  try {
+    // ZWJ emoji sequence + name → emoji stripped from the id, kept in the name
+    let r = await s.api('POST', '/api/lieutenants', {
+      name: '👩‍🦰 marcela', spawn: true, harness: 'fake',
+    });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.lieutenant.id, 'marcela');
+    assert.strictEqual(r.body.lieutenant.name, '👩‍🦰 marcela', 'display keeps the emoji');
+    assert.match(r.body.lieutenant.ref.session, /^bc-[A-Za-z0-9-]+-lt-marcela$/, 'emoji never reach tmux');
+    // eslint-disable-next-line no-control-regex
+    assert.match(r.body.lieutenant.ref.session, /^[\x21-\x7e]+$/, 'session name is pure ASCII');
+
+    // pure-emoji names still yield usable, unique ids (fallback 'lt', deduped)
+    r = await s.api('POST', '/api/lieutenants', { name: '👩‍🦰' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.id, 'lt');
+    assert.strictEqual(r.body.lieutenant.name, '👩‍🦰');
+    r = await s.api('POST', '/api/lieutenants', { name: '🧔' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.id, 'lt-2');
+  } finally {
+    await s.stop();
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});
+
 test('lieutenants persist with the board and survive a restart', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   const s1 = await startServer({ dir });

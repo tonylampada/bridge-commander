@@ -252,7 +252,10 @@ async function cmdInit() {
   // dedupes by session_id. NOTE: claude captures hooks at startup, so the
   // founding session's own turn-ends start flowing on its next restart.
   const { installHooks } = require(path.join(SELF_DIR, '..', 'harness', 'claude-tmux.js'));
-  installHooks(WORKSPACE, 'ws', path.join(STATE_DIR, 'harness'), 'http://127.0.0.1:' + PORT + '/api/turn-end');
+  // Harness state is workspace-scoped (never the harness's global last-resort
+  // dir); BC_HARNESS_STATE stays an explicit override, matching the server.
+  const harnessState = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
+  installHooks(WORKSPACE, 'ws', harnessState, 'http://127.0.0.1:' + PORT + '/api/turn-end');
   console.log('turn-end hook installed (.claude/settings.local.json -> /api/turn-end)');
 
   // 5. shared memory scaffold (never overwrite what exists)

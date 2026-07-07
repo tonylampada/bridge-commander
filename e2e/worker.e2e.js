@@ -84,8 +84,10 @@ async function until(what, fn, ms, step = 1000) {
   }
 }
 
+const { workerSession } = require(path.join(__dirname, '..', 'server', 'names.js'));
+
 const CARD = 'hello-file';
-const SESSION = 'bc-w-' + CARD;
+const SESSION = workerSession(ws, CARD); // workspace-discriminated
 const WANT = 'bridge command was here';
 
 let passed = 0;
@@ -155,7 +157,7 @@ async function stepCase(name, fn) {
 
       r = await runCli(['card', 'start', CARD, '--workspace', ws, '--port', String(port)]);
       assert.strictEqual(r.code, 0, r.stderr + r.stdout);
-      assert.match(r.stdout, /started worker claude:bc-w-hello-file/);
+      assert.match(r.stdout, new RegExp('started worker claude:' + SESSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
       // the card moved to Working AT START (system move), attrs bound
       const card = (await api('GET', '/api/cards/' + CARD)).body;

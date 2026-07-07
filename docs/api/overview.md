@@ -104,12 +104,13 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `harness.spawn` | `cwd, prompt, opts → HarnessRef` | ⚙️ | birth a lieutenant or worker session (`opts`: session name, state dir, turn-end callback URL, hook install mode) |
 | `harness.send` | `ref, text` | ⚙️ | type into a session (the wake half of delivery) |
 | `harness.alive` | `ref → bool` | ⚙️ | liveness check for supervision |
+| `harness.resumable` | `ref → bool` | ⚙️ | introspection: would `resume` restore memory? The server picks resume vs relaunch-with-charter on it |
 | `harness.resume` | `ref, opts → HarnessRef` | ⚙️ | reincarnate a dead session with memory when possible |
 | `harness.kill` | `ref` | ⚙️ | end a session for good (idempotent): merged-PR cleanup, card archive, lieutenant.retire |
 | `harness.onTurnEnd` | `ref, hook` | embedders | turn-boundary detection for port consumers; the SERVER's channel is the spawn-time callback URL — a Stop hook in the session POSTs each turn end (with its tmux session for exact attribution) |
 
 The server speaks ONLY this port. v0 ships the `claude` implementation (plus a file-backed
-`fake` for tests); adding a harness is implementing these six verbs, nothing else.
+`fake` for tests); adding a harness is implementing these seven verbs, nothing else.
 Harness working state (session ids, prompts, turn-end logs) lives in the workspace's
 `.bridge-command/harness/` — never global; spawned session names are unique per workspace.
 

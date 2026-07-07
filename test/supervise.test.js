@@ -68,6 +68,60 @@ test('dead lieutenant is respawned: ref updated, level-1 respawned event, drain 
     const sends = readSends(fdir, 'bc-lt-ada');
     assert.strictEqual(sends.length, 1);
     assert.match(sends[0].text, /respawned — run: bc-axi drain/);
+    // no recoverable memory (fake resumable=false) → relaunched with the
+    // rebuilt doctrine+charter prompt instead of a bare session
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada.json'), 'utf8'));
+    assert.match(rec.prompt, /Respawned without memory/);
+    assert.match(rec.prompt, /bc-axi drain/);
+  } finally {
+    await s.stop();
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});
+
+test('non-resumable respawn relaunches with charter + owned cards + pending queue digest', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const nowIso = new Date().toISOString();
+  const s = await startServer({
+    env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
+    seed: (dir) => {
+      seedBoard(dir, {
+        lieutenants: [{
+          id: 'ada', name: 'Ada', color: '#58b6ff', charter: 'guard the port domain',
+          chat: [], created: nowIso,
+          ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-lost' },
+        }],
+        cards: [{
+          id: 'fix-1', title: 'Fix one', type: 'implementation', owner: 'ada', column: 'backlog',
+          labels: [], attributes: {}, body: '', created: nowIso, updated: nowIso,
+          threadStart: null, pendingOrder: null, events: [], thread: [],
+        }, {
+          id: 'probe-2', title: 'Probe two', type: 'investigation', owner: 'ada', column: 'review',
+          labels: [], attributes: {}, body: '', created: nowIso, updated: nowIso,
+          threadStart: null, pendingOrder: null, events: [], thread: [],
+        }],
+      });
+      const qdir = path.join(dir, '.bridge-command', 'queue');
+      fs.mkdirSync(qdir, { recursive: true });
+      fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
+        JSON.stringify({ seq: 1, ts: nowIso, lieutenant: 'ada', kind: 'message', text: 'pending one' }) + '\n');
+    },
+  });
+  try {
+    await until('respawned event', async () => {
+      const b = (await s.api('GET', '/api/board')).body;
+      return b.events.some((e) => e.kind === 'respawned');
+    });
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada.json'), 'utf8'));
+    assert.match(rec.prompt, /guard the port domain/, 'charter carried');
+    assert.match(rec.prompt, /Your cards \(2\)/);
+    assert.match(rec.prompt, /- fix-1 \[backlog\] Fix one/);
+    assert.match(rec.prompt, /- probe-2 \[review\] Probe two/);
+    assert.match(rec.prompt, /Pending queue: 1 item/);
+    assert.match(rec.prompt, /Your first act: `bc-axi drain`/);
+    // the session name is an incarnation, not a new entity
+    const lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants[0];
+    assert.strictEqual(lt.ref.session, 'bc-lt-ada');
   } finally {
     await s.stop();
     fs.rmSync(fdir, { recursive: true, force: true });

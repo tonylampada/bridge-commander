@@ -76,8 +76,8 @@ orchestration doctrine distills firstmate. Zero dependencies — plain Node ≥ 
   with the turn-end hook (`POST /api/turn-end`) re-nudging a lieutenant that ends a turn with
   items still unacked. Only ack removes; a dead session loses nothing; a server restart is a
   non-event.
-- **The harness port** is the only seam to agent sessions — six verbs (`spawn`, `send`,
-  `alive`, `resume`, `kill`, `onTurnEnd`); see [harness/README.md](harness/README.md).
+- **The harness port** is the only seam to agent sessions — seven verbs (`spawn`, `send`,
+  `alive`, `resumable`, `resume`, `kill`, `onTurnEnd`); see [harness/README.md](harness/README.md).
   v0 ships `claude` over tmux, plus an in-memory `fake` for tests.
 - **Workers**: `bc-axi card start <id>` is ONE atomic op — isolated worktree
   (`treehouse get --lease` when available, else `git worktree add`), a real worker session
@@ -95,7 +95,7 @@ orchestration doctrine distills firstmate. Zero dependencies — plain Node ≥ 
 | Suite | Command | Proves |
 |---|---|---|
 | server unit | `node --test test/*.test.js` | board ops, cards, orders, queues/ack, chat, events/bell, kinds, labels, archive/restore, status leases, projects, workers, supervision, PR watch (gh stubbed), turn-end resolution, retire, CLI |
-| harness unit | `node --test harness/test/*.test.js` | port contract (six verbs), ref shape, fake behavior, tmux ANSI/composer parsing |
+| harness unit | `node --test harness/test/*.test.js` | port contract (seven verbs), ref shape, fake behavior, tmux ANSI/composer parsing |
 | API e2e | `node e2e/run.js` | full API flow on a real server + throwaway workspace: init → lieutenants → cards → orders → archive/restore → bell → restart survival |
 | harness smoke | `node harness/smoke.js [--resume]` | REAL claude session: spawn → turn-end hook → send → alive/kill (→ resume with memory) |
 | wake e2e | `node e2e/wake.e2e.js` | REAL tmux + claude: the teleport (init), wake lines landing in panes, coalescing, drain/ack by a real lieutenant |

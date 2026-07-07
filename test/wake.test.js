@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { startServer, sleep } = require('./helper');
+const { lieutenantSession } = require('../server/names.js');
 
 function sendsFile(dir, session) { return path.join(dir, session + '.sends.jsonl'); }
 function readSends(dir, session) {
@@ -167,12 +168,16 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
     const lt = r.body.lieutenant;
     assert.strictEqual(lt.id, 'spawn-bot');
     assert.strictEqual(lt.ref.harness, 'fake');
-    assert.strictEqual(lt.ref.session, 'bc-lt-spawn-bot');
+    // workspace-scoped session name: discriminator between bc- and -lt-
+    assert.strictEqual(lt.ref.session, lieutenantSession(s.dir, 'spawn-bot'));
+    assert.match(lt.ref.session, /^bc-[A-Za-z0-9-]+-lt-spawn-bot$/);
     assert.strictEqual(lt.ref.cwd, path.resolve(s.dir)); // spawned in the workspace root
     assert.ok(lt.ref.resumeId, 'resumeId known at birth');
 
     // launch prompt = doctrine + charter + situating line (recorded by the fake's spawn marker)
-    const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-spawn-bot.json'), 'utf8'));
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, lt.ref.session + '.json'), 'utf8'));
+    // harness state plumbed through the port is the WORKSPACE's, never global
+    assert.strictEqual(rec.stateDir, path.join(s.dir, '.bridge-command', 'harness'));
     assert.match(rec.prompt, /Lieutenant doctrine/);
     assert.match(rec.prompt, /guard the gate/);
     assert.match(rec.prompt, /lieutenant "Spawn Bot" \(id: spawn-bot\)/);
@@ -180,7 +185,7 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
 
     // the ref survives a restart (board is truth) and receives wakes
     await s.api('POST', '/api/feedback', { target: 'lieutenant:spawn-bot', text: 'welcome aboard' });
-    const sends = await waitSends(fdir, 'bc-lt-spawn-bot', 1);
+    const sends = await waitSends(fdir, lt.ref.session, 1);
     assert.strictEqual(sends.length, 1);
     assert.match(sends[0].text, /\[bridge-command\] 1 pending item\(s\)/);
 
