@@ -67,6 +67,7 @@ document.addEventListener('click', (e) => {
     t.closest('.lt-card') ||                  // a lane card — switches the chat, not a close
     t.closest('#lt-overlay') ||               // new-lieutenant modal
     t.closest('#move-menu') ||                // transient popovers dismiss on their own
+    t.closest('#owner-menu') ||
     t.closest('#notif-panel') ||
     t.closest('#settings-panel') ||
     t.closest('#label-picker') ||
@@ -203,6 +204,53 @@ export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 avOverlay.onclick = (e) => { if (e.target === avOverlay) closeArtifact(); };
 
+// ---------- owner menu (reassign the owning lieutenant) ----------
+// Popover twin of the board's move-menu (shares its look — see app.css): lists
+// the OTHER lieutenants by name with their color dot; picking one PATCHes
+// {owner} and the SSE board push repaints chip + tile live. Opened by the ✎ on
+// the owner chip, which only renders while no worker is bound (the server
+// refuses owner changes otherwise). Closes on select / outside click / Esc
+// (main.js).
+const omEl = document.getElementById('owner-menu');
+function openOwnerMenu(cardId, x, y) {
+  const c = card(cardId);
+  if (!c) return;
+  omEl.textContent = '';
+  const head = document.createElement('div');
+  head.className = 'mm-head';
+  head.textContent = 'hand card to';
+  omEl.appendChild(head);
+  const others = lieutenants().filter((l) => l.id !== c.owner);
+  if (!others.length) {
+    const none = document.createElement('div');
+    none.className = 'mm-none';
+    none.textContent = 'no other lieutenant';
+    omEl.appendChild(none);
+  }
+  for (const l of others) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    dot.style.background = lieutenantColor(l.id);
+    b.appendChild(dot);
+    b.appendChild(document.createTextNode(l.name || l.id));
+    b.onclick = async () => {
+      closeOwnerMenu();
+      try { await api.patchCard(cardId, { owner: l.id }); }
+      catch (e) { alert(e.message); }
+    };
+    omEl.appendChild(b);
+  }
+  omEl.hidden = false;
+  const r = omEl.getBoundingClientRect();
+  omEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+  omEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+}
+export function closeOwnerMenu() { omEl.hidden = true; }
+export function ownerMenuOpen() { return !omEl.hidden; }
+document.addEventListener('click', (e) => { if (!omEl.hidden && !omEl.contains(e.target)) closeOwnerMenu(); });
+
 // Opening the card clears its unread: level-1 events and lieutenant replies both
 // derive from the same per-card read marker server-side, so one POST covers
 // both. The chat panel only marks the thread when IT is visible (and only on
@@ -258,7 +306,12 @@ export function renderDetail() {
   // c, so a same-looking attrs row on another card must not skip the rebuild
   const attrsChanged = setHtmlIfChanged(attrsEl,
     '<span class="attr attr-owner" data-card="' + esc(c.id) + '" title="filter by lieutenant"><span class="k">lieutenant</span>' +
-    '<span class="v" style="color:' + esc(lieutenantColor(c.owner)) + '">' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span></span>' +
+    '<span class="v" style="color:' + esc(lieutenantColor(c.owner)) + '">' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
+    // ✎ only while no worker is bound — mirrors the server guard on owner PATCH.
+    // Rendered in the markup (not appended after) so a worker binding/unbinding
+    // changes the innerHTML signature and setHtmlIfChanged rebuilds the row.
+    (worker ? '' : '<button type="button" class="owner-edit" title="change owner (only while no worker is bound)">✎</button>') +
+    '</span>' +
     (c.pendingOrder ? '<span class="attr"><span class="k">pending</span><span class="v">⏳ ' + esc(c.pendingOrder.kind) + '</span></span>' : '') +
     Object.entries(at)
       .filter(([k]) => k !== 'emoji' && k !== 'prs' && k !== 'artifacts')
@@ -268,20 +321,12 @@ export function renderDetail() {
   if (ownerChip) {
     ownerChip.style.cursor = 'pointer';
     ownerChip.onclick = () => toggleFilter('owner', c.owner);
-    // Owner reassignment (allowed server-side only while no worker is bound):
-    // a small ✎ on the chip cycles through a prompt of the other lieutenants.
-    const edit = document.createElement('button');
-    edit.type = 'button'; edit.textContent = '✎'; edit.title = 'change owner (only while no worker is bound)';
-    edit.style.cssText = 'border:none;background:none;cursor:pointer;padding:0 2px;font-size:11px;opacity:.6';
-    edit.onclick = async (e) => {
-      e.stopPropagation();
-      const others = lieutenants().filter((l) => l.id !== c.owner);
-      if (!others.length) return alert('no other lieutenant to hand this card to');
-      const pick = prompt('new owner id (' + others.map((l) => l.id).join(', ') + '):', others[0].id);
-      if (!pick || pick === c.owner) return;
-      try { await api.patchCard(c.id, { owner: pick }); } catch (err) { alert(err.message); }
+    const edit = ownerChip.querySelector('.owner-edit');
+    if (edit) edit.onclick = (e) => {
+      e.stopPropagation(); // the chip click is the owner filter, not the menu
+      const r = edit.getBoundingClientRect();
+      openOwnerMenu(c.id, r.left, r.bottom + 4);
     };
-    ownerChip.appendChild(edit);
   }
 
   // labels (user-owned) — DOM-built, so guarded by a signature (card + each
