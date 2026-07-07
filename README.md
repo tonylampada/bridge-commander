@@ -29,6 +29,17 @@ the founding lieutenant, installs the turn-end Stop hook, and scaffolds workspac
 button or `bc-axi lieutenant create --spawn`: the server spawns a real session in the
 workspace root with [doctrine](skill/DOCTRINE.md) + charter as the launch prompt.
 
+**Workers**: repos join the workspace via `bc-axi project add <url|path> --mode
+no-mistakes|direct-PR|local-only` (cloned under `projects/`). `bc-axi card start <id>` is
+ONE atomic op — an isolated git worktree (`treehouse get --lease` when available, else
+`git worktree add`), a real worker session launched with the generated brief (task + card
+thread + the project's delivery-mode contract), session/worktree/branch bound to the card,
+card → Working. Workers report with `bc-axi worker signal` and `bc-axi worker done`; the
+lieutenant verifies and hands off — nothing moves a card out of Working automatically. The
+server supervises: dead lieutenants are auto-respawned (resume), dead workers flag their
+owner, and merged PRs archive the card and release the worktree (never hand-archive merged
+work).
+
 ## Development
 
 ```sh
@@ -38,6 +49,8 @@ cli/bc-axi init --name <lt>                     # workspace.init — the telepor
 node --test test/*.test.js                      # unit tests
 node e2e/run.js                                 # API-level end-to-end suite (throwaway workspace)
 node e2e/wake.e2e.js                            # wake/teleport e2e — REAL tmux + REAL claude sessions
+node e2e/worker.e2e.js                          # worker e2e — card start → REAL claude worker in a
+                                                #   REAL isolated worktree → signal/done → verified change
 ```
 
 `bc-axi` with no arguments prints full CLI usage. Everything is Node built-ins only — no

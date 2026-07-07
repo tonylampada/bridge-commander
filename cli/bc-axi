@@ -32,6 +32,7 @@ const opts = {
   name: null, color: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
+  mode: null, briefFile: null, resume: false, outcome: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -62,10 +63,14 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--json') opts.json = true;
   else if (a === '--spawn') opts.spawn = true;
   else if (a === '--harness') opts.harness = argv[++i];
+  else if (a === '--mode') opts.mode = argv[++i];
+  else if (a === '--brief-file') opts.briefFile = argv[++i];
+  else if (a === '--resume') opts.resume = true;
+  else if (a === '--outcome') opts.outcome = argv[++i];
   else positional.push(a);
 }
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
-if ((cmd === 'card' || cmd === 'lieutenant') && positional.length) cmd = cmd + ' ' + positional.shift();
+if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker') && positional.length) cmd = cmd + ' ' + positional.shift();
 
 // ---------- workspace resolution ----------
 function findWorkspace(start) {
@@ -476,6 +481,74 @@ async function cmdRestore() {
   console.log('restored ' + id + ' in ' + r.card.column);
 }
 
+// ---------- card.start / workers (F5) ----------
+async function cmdStart() {
+  const id = positional[0];
+  if (!id) {
+    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume] [--harness h]\n' +
+      '  ONE atomic op: provision an isolated worktree, spawn the worker session with the brief\n' +
+      '  as launch prompt, bind session/worktree/branch to the card, move it to Working.\n' +
+      '  --brief-file adds/overrides the task text (default: the card body).\n' +
+      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.');
+  }
+  const body = { actor: opts.actor || 'agent' };
+  if (opts.briefFile) body.brief = readInput(opts.briefFile);
+  if (opts.resume) body.resume = true;
+  if (opts.harness) body.harness = opts.harness;
+  console.log((opts.resume ? 'resuming' : 'starting') + ' a worker for ' + id + ' (worktree + real session — can take a minute)...');
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/start', body, 180000);
+  const w = r.worker;
+  console.log((r.resumed ? 'resumed' : 'started') + ' worker ' + w.ref.harness + ':' + w.ref.session
+    + '\n  worktree: ' + w.worktree.path + (w.branch ? '\n  branch:   ' + w.branch : '')
+    + '\n  card ' + id + ' -> working');
+}
+
+// worker text rides positionally (plain argv, no shell re-interpolation) or via
+// --text-file/--outcome for anything long or multi-line.
+async function cmdWorkerSignal() {
+  const id = positional[0];
+  const text = opts.textFile ? readInput(opts.textFile).trim() : positional.slice(1).join(' ').trim();
+  if (!id || !text) die('usage: bc-axi worker signal <card-id> "<milestone>" [--text-file f|-]');
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/worker/signal',
+    { text, actor: opts.actor || 'worker' });
+  console.log('signal #' + r.event.seq + ' -> ' + id);
+}
+
+async function cmdWorkerDone() {
+  const id = positional[0];
+  const outcome = opts.outcome != null ? opts.outcome
+    : (opts.textFile ? readInput(opts.textFile).trim() : positional.slice(1).join(' ').trim());
+  if (!id || !outcome) {
+    die('usage: bc-axi worker done <card-id> --outcome "<what landed>" [or positional text / --text-file f|-]\n' +
+      '  Include the full PR URL when one exists (it auto-populates the card\'s prs attribute).');
+  }
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/worker/done',
+    { outcome, actor: opts.actor || 'worker' });
+  const prs = (r.card.attributes && r.card.attributes.prs) || [];
+  console.log('done -> ' + id + ' (owner notified' + (prs.length ? '; prs: ' + prs.map((p) => p.url).join(' ') : '') + ')');
+}
+
+// ---------- projects (F6) ----------
+async function cmdProjectAdd() {
+  const source = positional[0];
+  if (!source || !opts.mode) {
+    die('usage: bc-axi project add <git-url|path> --mode no-mistakes|direct-PR|local-only [--name n]\n' +
+      '  Clones into <workspace>/projects/<name> and registers {name, path, mode}.');
+  }
+  const body = { source, mode: opts.mode, actor: opts.actor || 'agent' };
+  if (opts.name) body.name = opts.name;
+  console.log('cloning ' + source + ' ...');
+  const r = await request('POST', '/api/projects', body, 300000);
+  console.log('project ' + r.project.name + ' registered (' + r.project.mode + ') at ' + r.project.path);
+}
+
+async function cmdProjectList() {
+  const r = await request('GET', '/api/projects');
+  if (opts.json) return console.log(JSON.stringify(r.projects, null, 2));
+  if (!r.projects.length) return console.log('no projects registered (bc-axi project add <url|path> --mode <m>)');
+  for (const p of r.projects) console.log(p.name + '\t' + p.mode + '\t' + p.path);
+}
+
 // ---------- conversation & delivery ----------
 async function cmdSay() {
   const target = positional[0];
@@ -520,10 +593,25 @@ async function cmdDrain() {
       hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
     } else if (it.kind === 'start-order') {
       head = 'START ORDER — ' + cardBit(it.card);
-      hint = 'the captain ordered this card started: read it (bc-axi card show ' + it.card + ') and begin work per your doctrine';
+      hint = 'the captain ordered this card started: read it (bc-axi card show ' + it.card + '), brief the worker, then: bc-axi card start ' + it.card + ' [--brief-file <f>]';
     } else if (it.kind === 'rework-order') {
       head = 'REWORK ORDER — ' + cardBit(it.card);
-      hint = 'the captain sent this back: rework it, rewrite the body to current state, then hand off: bc-axi card move ' + it.card + ' review';
+      hint = 'the captain sent this back: steer the live worker (short line into its session) or restart one with an updated brief (bc-axi card start ' + it.card + ' --brief-file <f>); when reworked, rewrite the body and hand off: bc-axi card move ' + it.card + ' review';
+    } else if (it.kind === 'worker-signal') {
+      head = 'worker milestone — ' + cardBit(it.card);
+      hint = 'note it; act only if it changes your plan';
+    } else if (it.kind === 'worker-done') {
+      head = 'WORKER DONE — ' + cardBit(it.card);
+      hint = 'verify the work in its worktree, rewrite the card body to current state, then hand off: bc-axi card move ' + it.card + ' review';
+    } else if (it.kind === 'worker-died') {
+      head = 'WORKER DIED — ' + cardBit(it.card);
+      hint = 'the worker session died without done: resume it (bc-axi card start ' + it.card + ' --resume) or move the card back to backlog';
+    } else if (it.kind === 'pr-merged') {
+      head = 'PR MERGED — ' + cardBit(it.card);
+      hint = 'the server archived the card and released the worktree; nothing to do beyond noting it';
+    } else if (it.kind === 'pr-closed') {
+      head = 'PR CLOSED (unmerged) — ' + cardBit(it.card);
+      hint = 'decide: rework and reopen, or archive the card (killed)';
     } else if (it.kind === 'card-created') {
       head = 'new card for you — ' + cardBit(it.card);
       hint = 'read it: bc-axi card show ' + it.card;
@@ -605,8 +693,11 @@ const commands = {
   open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
   board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
   'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList,
+  'project add': cmdProjectAdd, 'project list': cmdProjectList,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
+  'card start': cmdStart,
+  'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone,
   show: cmdShow, // alias for card show
   event: cmdEvent, notify: cmdNotify,
   say: cmdSay, drain: cmdDrain, ack: cmdAck,
@@ -630,6 +721,12 @@ if (!commands[cmd]) {
     '                                         --spawn births a REAL agent session in the workspace root\n' +
     '                                         (doctrine + charter as launch prompt, ref persisted)\n' +
     '  lieutenant list [--json]               id, name, color, charter first line\n' +
+    '\nproject (delivery modes):\n' +
+    '  project add <git-url|path> --mode no-mistakes|direct-PR|local-only [--name n]\n' +
+    '                                         clone into <workspace>/projects/<name> and register it;\n' +
+    '                                         a card\'s repo attribute must name a registered project\n' +
+    '                                         before card start\n' +
+    '  project list [--json]                  name, mode, path\n' +
     '\nread:\n' +
     '  board [--json]                         lane + columns + card one-liners (or full JSON)\n' +
     '  card show <card-id> [--json]           one card: type, owner, attrs, body, events, thread\n' +
@@ -651,6 +748,19 @@ if (!commands[cmd]) {
     '                                         kill = archive (append-only file, off the board)\n' +
     '  card restore <card-id> [--note "..."]  resurrect the most recent archived snapshot in full;\n' +
     '                                         appends a loud level-1 event\n' +
+    '  card start <card-id> [--brief-file f|-] [--resume] [--harness h]\n' +
+    '                                         card.start: ONE atomic op — isolated worktree + real\n' +
+    '                                         worker session (brief as launch prompt), session/worktree/\n' +
+    '                                         branch bound to the card, card -> Working. Refuses plan\n' +
+    '                                         cards, Working cards, and unregistered repos. --resume\n' +
+    '                                         reincarnates the recorded worker (after worker-died)\n' +
+    '\nworker (run by the worker itself, from its worktree):\n' +
+    '  worker signal <card-id> "<milestone>" [--text-file f|-]\n' +
+    '                                         real milestone -> level-2 card event + QueueItem to owner\n' +
+    '  worker done <card-id> --outcome "<what landed>"\n' +
+    '                                         finished: QueueItem wakes the owner; the card does NOT\n' +
+    '                                         move (the lieutenant verifies, then hands off). PR URLs in\n' +
+    '                                         the outcome auto-populate the card\'s prs attribute\n' +
     '\nevents & chat:\n' +
     '  event <card-id> [--level 1|2] [--kind K] [--text-file f|-]   append timeline event\n' +
     '                                         level 1 rings the captain; level 2 = timeline only\n' +

@@ -15,6 +15,9 @@
 //             lieutenants: [{id, name, color, charter, chat: [{author,text,ts}], created,
 //                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
 //                            lastTurnEnd?, turns?}],
+//             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
+//             workers:  [{card, ref, worktree: {path, tool}, branch?, project,
+//                         spawnedAt, done?, outcome?, flagged?, lastTurnEnd?, turns?}],
 //             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
 //                        created, updated, threadStart, pendingOrder,
 //                        status: {worker: null|{id, state, expires}},  // lease; only status.set writes it
@@ -51,6 +54,9 @@ const path = require('path');
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
+const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
+const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
+const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -113,6 +119,8 @@ function configHost() {
 }
 const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
 const BIND_HOST = opts.host || configHost() || '127.0.0.1';
+// Turn-end hooks (workspace-level and per-worker-spawn) POST here.
+const TURNEND_URL = 'http://127.0.0.1:' + PORT + '/api/turn-end';
 
 // ---------- pidfile: single instance per workspace ----------
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
@@ -149,6 +157,7 @@ function defaultBoard() {
   return {
     title: path.basename(WORKSPACE), subtitle: '', updated: now(), seq: 0,
     columns: COLUMNS, lieutenants: [], cards: [], events: [], labels: [], reads: {}, kinds: {},
+    projects: [], workers: [],
   };
 }
 function normalizeBoard(doc) {
@@ -166,6 +175,15 @@ function normalizeBoard(doc) {
     // ref: a persisted HarnessRef or null (odd shapes collapse to null).
     if (lt.ref !== undefined && !isHarnessRef(lt.ref)) lt.ref = null;
   }
+  // projects: the registered-repo registry; workers: the live worker-ref registry
+  // (both survive restarts — board is truth). Odd shapes are dropped.
+  if (!Array.isArray(b.projects)) b.projects = [];
+  b.projects = b.projects.filter((p) => p && typeof p === 'object'
+    && typeof p.name === 'string' && p.name
+    && typeof p.path === 'string' && p.path
+    && PROJECT_MODES.includes(p.mode));
+  if (!Array.isArray(b.workers)) b.workers = [];
+  b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref));
   for (const c of b.cards) {
     if (!Array.isArray(c.events)) c.events = [];
     if (!Array.isArray(c.thread)) c.thread = [];
@@ -216,6 +234,12 @@ const BUILTIN_KINDS = {
   killed: { emoji: '🪦', level: 2 },
   resurrected: { emoji: '🧟', level: 1 },
   question: { emoji: '🙋', level: 1 },
+  started: { emoji: '🚀', level: 2 },
+  signal: { emoji: '📡', level: 2 },
+  'worker-done': { emoji: '✅', level: 2 },
+  'worker-died': { emoji: '💀', level: 2 },
+  respawned: { emoji: '♻️', level: 1 },
+  'needs-captain': { emoji: '🚨', level: 1 },
 };
 function validKindEntry(v) {
   return !!(v && typeof v === 'object' && typeof v.emoji === 'string' && v.emoji.trim() &&
@@ -320,7 +344,7 @@ async function spawnLieutenant(body) {
   try {
     ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id, body.charter), {
       session,
-      callbackUrl: 'http://127.0.0.1:' + PORT + '/api/turn-end',
+      callbackUrl: TURNEND_URL,
       installHooks: false,
     });
   } catch (e) {
@@ -604,6 +628,9 @@ function createCard(body, actorDefault) {
   if (findCard(id)) return { error: 'card exists: ' + id, code: 409 };
   const column = body.column ? String(body.column) : 'backlog';
   if (!board.columns.some((c) => c.id === column)) return { error: 'unknown column: ' + column };
+  // Working is a fact, not a label: a card is in Working iff a live worker
+  // exists for it, and only card.start creates one. Cards are never BORN there.
+  if (column === 'working') return { error: 'cards cannot be created in Working — a card enters Working only through card.start (which spawns its worker)' };
   const actor = String(body.actor || actorDefault || 'agent').slice(0, 60);
   const card = {
     id, title: title.slice(0, 200), type, owner, column,
@@ -706,6 +733,9 @@ function archiveCard(card, body, actorDefault) {
   if (note) rec.note = note;
   fs.appendFileSync(ARCHIVE_FILE, JSON.stringify(rec) + '\n');
   board.cards = board.cards.filter((c) => c.id !== card.id);
+  // An archived card has no worker: drop its registry entry so supervision
+  // stops watching a session that no longer represents live work.
+  board.workers = board.workers.filter((w) => w.card !== card.id);
   // The kill lands on the board-level stream (the card is gone) with a card
   // reference. Typed by reason: merged = landed (level 1 — worth a bell),
   // killed = killed (level 2 — the captain's own act, no bell). Levels come from
@@ -752,6 +782,334 @@ function restoreCard(id, body) {
   return { ok: true, card, event: ev };
 }
 
+// ---------- projects (F6: the registered-repo registry) ----------
+// workspace.addProject: clone the repo into <workspace>/projects/<name> and
+// record {name, path, mode}. A card's `repo` attribute must name a registered
+// project for card.start to provision its worker a worktree.
+function findProject(name) { return board.projects.find((p) => p.name === name); }
+function addProject(body) {
+  const source = String((body && body.source) || '').trim();
+  if (!source) return { error: 'source required (git URL or local path)' };
+  const mode = String((body && body.mode) || 'no-mistakes');
+  if (!PROJECT_MODES.includes(mode)) return { error: 'bad mode (use ' + PROJECT_MODES.join('|') + ')' };
+  const name = String((body && body.name) || path.basename(source.replace(/\/+$/, '')).replace(/\.git$/, '')).trim();
+  if (!/^[\w][\w.-]*$/.test(name)) return { error: 'bad project name: ' + name + ' (use [A-Za-z0-9_.-], or pass --name)' };
+  if (findProject(name)) return { error: 'project exists: ' + name, code: 409 };
+  const dest = path.join(WORKSPACE, 'projects', name);
+  if (fs.existsSync(dest)) return { error: 'destination already exists: ' + dest, code: 409 };
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const src = fs.existsSync(source) ? path.resolve(source) : source;
+  try {
+    execFileSync('git', ['clone', src, dest],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 300000 });
+  } catch (e) {
+    return { error: 'clone failed: ' + String((e && e.stderr) || (e && e.message) || e).trim(), code: 502 };
+  }
+  const project = { name, path: dest, mode, source: src, added: now() };
+  board.projects.push(project);
+  board.events.push(mkEvent({ text: 'project ' + name + ' registered (' + mode + ')',
+    actor: (body && body.actor) || 'agent', level: 2 }, {}));
+  return { project };
+}
+
+// ---------- workers (F5: card.start, worker.signal, worker done) ----------
+function workerSession(cardId) { return 'bc-w-' + String(cardId).replace(/[^A-Za-z0-9_-]/g, '-'); }
+function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
+
+// The system move into Working — card.start is the ONE way in (invariant:
+// Working ⇔ live worker). Clears any pendingOrder (a start-order just executed).
+function enterWorking(card, text) {
+  const from = card.column;
+  card.column = 'working';
+  card.pendingOrder = null;
+  card.updated = now();
+  const ev = mkEvent({
+    text: text + (from !== 'working' ? ' (' + columnTitle(from) + ' → ' + columnTitle('working') + ')' : ''),
+    actor: 'server',
+  }, { kind: 'started' });
+  card.events.push(ev);
+  return ev;
+}
+
+// card.start — ONE atomic op: provision an isolated worktree, spawn the worker
+// session with the brief as launch prompt (per-spawn hook install is SAFE here
+// precisely because the cwd is an isolated worktree — never the workspace root,
+// whose hook a per-spawn install would clobber), bind {session, worktree,
+// branch} into the card + the worker registry, move the card → Working.
+// body.resume reincarnates a recorded (dead) worker in the same worktree instead.
+async function startCard(card, body) {
+  if (card.type === 'plan') return { error: 'plan cards never start (no worker is spawned for a plan)' };
+
+  const existing = findWorker(card.id);
+  if (body && body.resume) {
+    if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
+    let ref;
+    try {
+      ref = await harnessFor(existing.ref).resume(existing.ref, { callbackUrl: TURNEND_URL });
+    } catch (e) {
+      return { error: 'worker resume failed: ' + String((e && e.message) || e), code: 502 };
+    }
+    existing.ref = ref;
+    existing.done = false;
+    delete existing.outcome;
+    delete existing.flagged;
+    enterWorking(card, 'worker ' + ref.session + ' resumed in ' + existing.worktree.path);
+    return { worker: existing, resumed: true };
+  }
+
+  if (card.column === 'working') return { error: 'card is already Working', code: 409 };
+  if (existing && !existing.done) {
+    return { error: 'card already has a worker (' + existing.ref.session + ') — resume it (card start --resume) or archive first', code: 409 };
+  }
+  const repoAttr = card.attributes && card.attributes.repo;
+  if (!repoAttr) return { error: 'card has no repo attribute — set it first: card patch ' + card.id + ' --attr repo=<project>' };
+  const project = findProject(String(repoAttr));
+  if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path> --mode <mode>)' };
+
+  const harnessName = String((body && body.harness) || readConfig().harness || 'claude');
+  let impl;
+  try { impl = getHarness(harnessName); } catch (e) { return { error: String((e && e.message) || e) }; }
+
+  // A finished previous worker (rework restart): its session must be gone
+  // (a live one is resumed/steered, not spawned over), then its worktree is
+  // released first — only when clean, so committed-but-unmerged work is never
+  // discarded.
+  if (existing) {
+    let up = false;
+    try { up = await harnessFor(existing.ref).alive(existing.ref); } catch (e) { up = false; }
+    if (up) {
+      return { error: 'previous worker session ' + existing.ref.session + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it', code: 409 };
+    }
+    const prevProject = findProject(existing.project) || project;
+    const rel = releaseWorktree(existing.worktree, prevProject.path);
+    if (!rel.released) {
+      return { error: 'previous worker worktree not releasable (' + rel.reason + '): ' + existing.worktree.path, code: 409 };
+    }
+    board.workers.splice(board.workers.indexOf(existing), 1);
+  }
+
+  let wt;
+  try { wt = createWorktree(project.path, card.id, WORKSPACE); }
+  catch (e) { return { error: 'worktree provisioning failed: ' + String((e && e.message) || e), code: 502 }; }
+
+  const session = workerSession(card.id);
+  const branch = card.type === 'investigation' ? null : 'bc/' + card.id;
+  const prompt = workerBrief({
+    card, task: body && body.brief, thread: card.thread || [],
+    project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
+    cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
+  });
+  let ref;
+  try {
+    ref = await impl.spawn(wt.path, prompt, { session, callbackUrl: TURNEND_URL });
+  } catch (e) {
+    releaseWorktree(wt, project.path); // best-effort: no spawnless lease left behind
+    return { error: 'worker spawn failed: ' + String((e && e.message) || e), code: 502 };
+  }
+
+  card.attributes.session = session;
+  card.attributes.worktree = wt.path;
+  if (branch) card.attributes.branch = branch;
+  const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
+  if (branch) worker.branch = branch;
+  board.workers.push(worker);
+  enterWorking(card, 'worker ' + session + ' started in ' + wt.path);
+  return { worker };
+}
+
+// worker.signal — a real milestone from the worker: level-2 event on the card
+// + a QueueItem to the owning lieutenant.
+function workerSignal(card, body) {
+  const text = String((body && body.text) || '').trim();
+  if (!text) return { error: 'text required' };
+  const ev = mkEvent({ text: text.slice(0, 2000), actor: (body && body.actor) || 'worker' }, { kind: 'signal' });
+  card.events.push(ev);
+  card.updated = now();
+  queuePush(card.owner, { kind: 'worker-signal', card: card.id, text: text.slice(0, 2000) });
+  return { ok: true, event: ev };
+}
+
+// worker done — the worker finished: event + QueueItem to the owner. The card
+// does NOT move — the lieutenant verifies the work, rewrites the body, and
+// hands off to review itself. PR URLs in the outcome auto-populate the card's
+// `prs` attribute (state open — the PR watch takes it from there); an
+// investigation's report file is auto-attached as a card artifact.
+const PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+function workerDone(card, body) {
+  const outcome = String((body && body.outcome) || '').trim();
+  if (!outcome) return { error: 'outcome required' };
+  const w = findWorker(card.id);
+  if (w) { w.done = true; w.outcome = outcome.slice(0, 2000); delete w.flagged; }
+  const urls = outcome.match(PR_URL_RE) || [];
+  if (urls.length) {
+    if (!Array.isArray(card.attributes.prs)) card.attributes.prs = [];
+    for (const url of urls) {
+      if (!card.attributes.prs.some((p) => p && p.url === url)) card.attributes.prs.push({ url, state: 'open' });
+    }
+  }
+  if (card.type === 'investigation') {
+    const report = path.join(STATE_DIR, 'reports', card.id + '.md');
+    if (fs.existsSync(report)) {
+      if (!Array.isArray(card.attributes.artifacts)) card.attributes.artifacts = [];
+      const uri = 'file://' + report;
+      if (!card.attributes.artifacts.some((a) => a && a.uri === uri)) {
+        card.attributes.artifacts.push({ uri, label: 'report' });
+      }
+    }
+  }
+  const ev = mkEvent({ text: 'worker done: ' + outcome.slice(0, 1900), actor: (body && body.actor) || 'worker' }, { kind: 'worker-done' });
+  card.events.push(ev);
+  card.updated = now();
+  queuePush(card.owner, { kind: 'worker-done', card: card.id, text: outcome.slice(0, 2000) });
+  return { ok: true, event: ev };
+}
+
+// ---------- supervision loop (invariant 8: supervision is infrastructure) ----------
+// Every ~30s: harness.alive on every lieutenant + worker ref.
+//   lieutenant dead  -> harness.resume (same session name), ref updated, level-1
+//                       event, nudge to drain; max 3 failed attempts then a
+//                       level-1 needs-captain flag (attempts reset when alive).
+//   worker dead w/o done -> QueueItem to the owner + level-2 card event; the
+//                       card STAYS Working but the registry entry is flagged —
+//                       the owner decides (card start --resume, or move back).
+//   worker done      -> nothing to watch (the done QueueItem already landed).
+const SUPERVISE_MS = process.env.BC_SUPERVISE_INTERVAL_MS !== undefined
+  ? parseInt(process.env.BC_SUPERVISE_INTERVAL_MS, 10) : 30000;
+const respawnAttempts = new Map(); // lieutenant id -> consecutive failed respawns
+let supervising = false;
+async function superviseTick() {
+  if (supervising) return; // never overlap ticks
+  supervising = true;
+  try {
+    let changed = false;
+    for (const lt of board.lieutenants) {
+      if (!isHarnessRef(lt.ref)) continue;
+      let up = false;
+      try { up = await harnessFor(lt.ref).alive(lt.ref); } catch (e) { up = false; }
+      if (up) { respawnAttempts.delete(lt.id); continue; }
+      const n = (respawnAttempts.get(lt.id) || 0) + 1;
+      if (n > 3) continue; // already flagged needs-captain; a manual revival resets via alive
+      respawnAttempts.set(lt.id, n);
+      try {
+        const ref = await harnessFor(lt.ref).resume(lt.ref, { callbackUrl: TURNEND_URL, installHooks: false });
+        lt.ref = ref;
+        respawnAttempts.delete(lt.id);
+        board.events.push(mkEvent({
+          text: 'lieutenant ' + lt.name + ' session died — respawned as ' + ref.harness + ':' + ref.session,
+          actor: 'server',
+        }, { kind: 'respawned' }));
+        changed = true;
+        nudged.delete(lt.id); // the reincarnated session owes a drain: queue is truth, its memory is a cache
+        if (pendingItems(lt.id).length) scheduleWake(lt.id);
+        else {
+          const target = lt.ref;
+          Promise.resolve()
+            .then(() => harnessFor(target).send(target, '[bridge-command] session respawned — run: bc-axi drain'))
+            .catch(() => {});
+        }
+      } catch (e) {
+        console.error(now() + ' respawn failed for ' + lt.id + ' (attempt ' + n + '/3): ' + String((e && e.message) || e));
+        if (n === 3) {
+          board.events.push(mkEvent({
+            text: 'lieutenant ' + lt.name + ' is down and 3 respawn attempts failed — needs the captain (session ' + lt.ref.session + ')',
+            actor: 'server',
+          }, { kind: 'needs-captain' }));
+          respawnAttempts.set(lt.id, 4);
+          changed = true;
+        }
+      }
+    }
+    for (const w of board.workers) {
+      if (w.done || w.flagged) continue;
+      let up = false;
+      try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+      if (up) continue;
+      w.flagged = true;
+      changed = true;
+      const card = findCard(w.card);
+      if (card) {
+        card.events.push(mkEvent({
+          text: 'worker session ' + w.ref.session + ' died without reporting done',
+          actor: 'server',
+        }, { kind: 'worker-died' }));
+        card.updated = now();
+        queuePush(card.owner, {
+          kind: 'worker-died', card: card.id,
+          text: 'worker session ' + w.ref.session + ' died without reporting done',
+        });
+      }
+    }
+    if (changed) { saveBoard(); broadcast(); }
+  } finally {
+    supervising = false;
+  }
+}
+if (Number.isInteger(SUPERVISE_MS) && SUPERVISE_MS > 0) setInterval(superviseTick, SUPERVISE_MS).unref();
+
+// ---------- PR watch (F6: merged PR ⇒ archive + release, no agent turn) ----------
+// Every ~2min: for every card whose `prs` attribute holds an open URL, ask gh.
+// MERGED -> release the worktree (only when clean — uncommitted work is never
+// discarded), archive the card (reason merged: the landed level-1 event), and
+// queue a pr-merged item to the owner. CLOSED (unmerged) -> mark the state and
+// tell the owner; the card stays. gh failures leave state untouched.
+const PRWATCH_MS = process.env.BC_PRWATCH_INTERVAL_MS !== undefined
+  ? parseInt(process.env.BC_PRWATCH_INTERVAL_MS, 10) : 120000;
+const GH_CMD = process.env.BC_GH_CMD || 'gh'; // injectable for tests
+function ghPrState(url) {
+  return new Promise((resolve) => {
+    execFile(GH_CMD, ['pr', 'view', url, '--json', 'state,mergedAt'], { timeout: 30000 }, (err, stdout) => {
+      if (err) return resolve(null);
+      try { resolve(JSON.parse(stdout)); } catch (e) { resolve(null); }
+    });
+  });
+}
+let prWatching = false;
+async function prWatchTick() {
+  if (prWatching) return;
+  prWatching = true;
+  try {
+    for (const card of [...board.cards]) {
+      const prs = card.attributes && card.attributes.prs;
+      if (!Array.isArray(prs) || !prs.some((p) => p && p.state === 'open' && p.url)) continue;
+      let merged = null;
+      let changed = false;
+      for (const pr of prs) {
+        if (!pr || pr.state !== 'open' || !pr.url) continue;
+        const st = await ghPrState(pr.url);
+        if (!st || !st.state) continue;
+        if (st.state === 'MERGED') { pr.state = 'merged'; merged = pr; changed = true; }
+        else if (st.state === 'CLOSED') {
+          pr.state = 'closed';
+          changed = true;
+          card.events.push(mkEvent({ text: 'PR closed without merge: ' + pr.url, actor: 'server', level: 2 }, {}));
+          queuePush(card.owner, { kind: 'pr-closed', card: card.id, text: pr.url });
+        }
+      }
+      if (!changed) continue;
+      if (merged) {
+        const w = findWorker(card.id);
+        const project = findProject(w ? w.project : String((card.attributes && card.attributes.repo) || ''));
+        const wtRec = w ? w.worktree
+          : (card.attributes && card.attributes.worktree ? { path: card.attributes.worktree, tool: 'git' } : null);
+        let note = merged.url;
+        if (wtRec && project) {
+          const rel = releaseWorktree(wtRec, project.path);
+          if (!rel.released) {
+            note += ' (worktree NOT released: ' + rel.reason + ')';
+            console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
+          }
+        }
+        queuePush(card.owner, { kind: 'pr-merged', card: card.id, text: merged.url });
+        archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
+      }
+      saveBoard(); broadcast();
+    }
+  } finally {
+    prWatching = false;
+  }
+}
+if (Number.isInteger(PRWATCH_MS) && PRWATCH_MS > 0) setInterval(prWatchTick, PRWATCH_MS).unref();
+
 // ---------- static ui ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -788,6 +1146,7 @@ const server = http.createServer(async (req, res) => {
         workspace: WORKSPACE, port: PORT, cards: board.cards.length,
         lieutenants: board.lieutenants.length, seq: board.seq,
         queue_seq: qseq, queue_pending: pending,
+        projects: board.projects.length, workers: board.workers.length,
         pid: process.pid,
       });
     }
@@ -852,17 +1211,32 @@ const server = http.createServer(async (req, res) => {
 
     // ----- turn boundaries (the BC_TURNEND_URL target; posted by the Stop-hook relay) -----
     // The workspace-level hook fires for ANY claude in the workspace cwd, so
-    // resolution dedupes by session_id: (1) a ref whose resumeId matches;
-    // (2) a ref whose session name matches the hook's session arg; (3) adoption —
-    // exactly one ref-bearing lieutenant still missing its resumeId (the founding
-    // teleport learns its claude id from its first turn end). Anything else is
-    // some other agent in the workspace: acknowledged, ignored.
+    // resolution dedupes by session_id: (1) a lieutenant ref whose resumeId
+    // matches; (2) a lieutenant ref whose session name matches the hook's
+    // session arg; (3) a WORKER ref by resumeId then session (workers' POSTs
+    // arrive from the per-spawn hooks in their isolated worktrees — resolved
+    // BEFORE adoption so a worker's first POST can never be mis-adopted);
+    // (4) adoption — exactly one ref-bearing lieutenant still missing its
+    // resumeId (the founding teleport learns its claude id from its first turn
+    // end). Anything else is some other agent in the workspace: acknowledged,
+    // ignored.
     if (route === 'POST /api/turn-end') {
       const body = JSON.parse(await readBody(req) || '{}');
       const sid = body.session_id ? String(body.session_id) : '';
       const sname = body.session ? String(body.session) : '';
       let lt = sid ? board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.resumeId === sid) : null;
       if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === sname);
+      if (!lt) {
+        let w = sid ? board.workers.find((x) => x.ref.resumeId === sid) : null;
+        if (!w && sname) w = board.workers.find((x) => x.ref.session === sname);
+        if (w) {
+          if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
+          w.lastTurnEnd = now();
+          w.turns = (w.turns || 0) + 1;
+          saveBoard();
+          return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
+        }
+      }
       if (!lt && sid) {
         const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
         if (cands.length === 1) lt = cands[0];
@@ -898,11 +1272,29 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, card: publicCard(r.card, 'user'), event: r.event });
     }
-    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status))?$/.exec(p);
+    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|worker\/signal|worker\/done))?$/.exec(p);
     if (cardRoute) {
       const card = findCard(decodeURIComponent(cardRoute[1]));
       if (!card) return sendJson(res, 404, { error: 'unknown card: ' + decodeURIComponent(cardRoute[1]) });
       const sub = cardRoute[3];
+      if (sub === 'start' && req.method === 'POST') { // card.start — the ONE atomic op into Working
+        const r = await startCard(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, card: publicCard(card, 'user'), worker: r.worker, resumed: !!r.resumed });
+      }
+      if (sub === 'worker/signal' && req.method === 'POST') {
+        const r = workerSignal(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, event: r.event });
+      }
+      if (sub === 'worker/done' && req.method === 'POST') {
+        const r = workerDone(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, event: r.event, card: publicCard(card, 'user') });
+      }
       if (!sub && req.method === 'GET') return sendJson(res, 200, publicCard(card, url.searchParams.get('user') || 'user'));
       if (!sub && req.method === 'PATCH') {
         patchCard(card, JSON.parse(await readBody(req) || '{}'));
@@ -937,6 +1329,15 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, r);
       }
       return sendJson(res, 405, { error: 'method not allowed' });
+    }
+
+    // ----- projects (F6) -----
+    if (route === 'GET /api/projects') return sendJson(res, 200, { projects: board.projects });
+    if (route === 'POST /api/projects') {
+      const r = addProject(JSON.parse(await readBody(req) || '{}'));
+      if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, project: r.project });
     }
 
     // ----- board-level events (free-form notify) -----

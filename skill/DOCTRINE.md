@@ -55,10 +55,39 @@ them when confident — you don't wait for permission inside your mission. Outsi
 Escalate to the captain only what needs the captain: decisions, review-ready work, real
 blockers.
 
-## Starting work — TODO(F5)
+## Projects and delivery modes
 
-Worker mechanics (`card.start`: spawn worker + worktree, card → Working, supervision,
-delivery pipeline) arrive in a later phase. Until then, when a card must be started, do the
-work through whatever safe means you have (e.g. delegate to a subagent in a scratch clone —
-never the project checkout), keep the card's body and events truthful, and hand off to Your
-review when done.
+Work happens in registered projects. `bc-axi project add <git-url|path> --mode
+no-mistakes|direct-PR|local-only` clones a repo into the workspace and records its delivery
+mode — how finished work reaches main: `no-mistakes` = validation pipeline → PR → captain
+merge; `direct-PR` = push + PR, captain merge; `local-only` = ready in branch, no remote.
+A card must carry `repo: <project-name>` (`--attr repo=…`) before it can start. Pick the
+mode with the captain when registering; the worker brief carries the mode's contract
+automatically.
+
+## Starting work
+
+`bc-axi card start <card-id> [--brief-file <f>]` is the ONE way work begins: it provisions
+an isolated worktree, spawns a real worker session with the brief as its launch prompt,
+binds session/worktree/branch to the card, and moves it to Working — all atomically. Before
+starting, make the brief good: the card body (or `--brief-file`) must state the task and
+acceptance criteria; the worker also sees the card thread. `plan` cards never start, and
+cards are never created in Working. A captain start-order (Backlog→Working drag) means:
+read the card, sharpen the brief, `card start`.
+
+## Supervising workers
+
+Workers report through your queue: `worker-signal` items are milestones (note them),
+`worker-done` means verify the work in its worktree, rewrite the card body to current
+state, and hand off (`card move <id> review`) — the card never leaves Working by itself.
+`worker-died` means the session died mid-work: resume it (`card start <id> --resume`,
+same worktree and memory) or move the card back. Steer a live worker with a short line
+typed into its tmux session (`bc-w-<card-id>`); anything long belongs in a rework restart
+with an updated brief. Never do the worker's job yourself.
+
+## Merges are watched — never hand-archive merged work
+
+The server watches every open PR on your cards. When one merges, the server itself archives
+the card (reason `merged`), releases the worktree, and tells you with a `pr-merged` item —
+your only job before that point is getting the PR reviewed and merged by the captain.
+Archive by hand only for killed (dismissed) work.

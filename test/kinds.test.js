@@ -18,6 +18,12 @@ const BUILTINS = {
   killed: { emoji: '🪦', level: 2 },
   resurrected: { emoji: '🧟', level: 1 },
   question: { emoji: '🙋', level: 1 },
+  started: { emoji: '🚀', level: 2 },
+  signal: { emoji: '📡', level: 2 },
+  'worker-done': { emoji: '✅', level: 2 },
+  'worker-died': { emoji: '💀', level: 2 },
+  respawned: { emoji: '♻️', level: 1 },
+  'needs-captain': { emoji: '🚨', level: 1 },
 };
 
 test('kinds set/get roundtrip: built-ins under registered, idempotent replace, validation', async () => {

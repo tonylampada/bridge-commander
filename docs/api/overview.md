@@ -85,7 +85,8 @@ Callers · mechanisms: 🤠 captain (UI click/drag) · ⚓ lieutenant (CLI) · �
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `worker.signal` | `card, text` | 🛠️ | real milestones (branch, tests green, PR open) → level-2 event + QueueItem to the owner |
-| `worker.end` | `card, outcome` | ⚙️ via harness turn-end/exit hooks | worker finished or died; wakes the owning lieutenant |
+| `worker.done` | `card, outcome` | 🛠️ | worker finished: event + QueueItem wake the owner; the card stays Working until the lieutenant verifies and hands off. PR URLs in the outcome populate the card's `prs` (the PR watch takes it from there); an investigation's report is attached as an artifact |
+| worker death | — | ⚙️ supervision loop | a worker ref dead without `done` → `worker-died` QueueItem to the owner + level-2 event; the card stays Working, flagged — the owner resumes (`card.start --resume`) or moves it back |
 
 ### harness port (internal seam — the multi-harness contract)
 
@@ -122,8 +123,9 @@ implementing these five verbs, nothing else.
 | `chat.say` by captain | QueueItem (write-ahead) + `harness.send` wake to the owning lieutenant |
 | worker signal / turn-end | level-2 event on card + QueueItem to the owning lieutenant |
 | worker done + lieutenant review | lieutenant rewrites body, moves → Your review — the level-1 handoff |
-| PR merged (server watch) | card archived (`merged`), worktree released, level-1 event |
-| lieutenant session dies | server auto-respawn (resume when possible; else charter + cards + queue), level-1 event on its lane card |
+| PR merged (server watch) | card archived (`merged`), worktree released (only when clean), level-1 event, `pr-merged` QueueItem to the owner |
+| worker session dies without `done` | `worker-died` QueueItem to the owner + level-2 event; card stays Working, flagged |
+| lieutenant session dies | server auto-respawn (resume when possible; else charter + cards + queue), level-1 event, drain nudge; 3 failed attempts → level-1 needs-captain |
 | level-1 event / owed reply | captain's bell (derived unseen set, cleared by reading — bridge semantics) |
 
 ## Memory
