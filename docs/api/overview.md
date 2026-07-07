@@ -38,7 +38,7 @@ columns; each lieutenant has a color, and its cards carry that color stripe.
 | Worker | Implementation agent bound 1:1 to a Working card: tmux session + isolated worktree (+ delivery pipeline per project mode). Ephemeral — dies with the card's Working state |
 | Event | Card timeline entry: `text`, `level` (1 = bell, 2 = timeline only), `actor`, `kind` (open token; the board's kinds registry maps kind → emoji + default level) |
 | Message | Chat utterance. `target`: a lieutenant's main chat or a card thread. A card thread is a **context folder**: the interlocutor is always the owning lieutenant, never the worker |
-| QueueItem | One durable delivery to a lieutenant. Kinds: captain `message`, `start-order`, `rework-order`, `card-created` / `card-moved` (captain acts echoed to the owner), `worker-signal`, `worker-stopped`, `worker-died`, `worker done`, `pr-merged`, `pr-closed`. `seq`-ordered, at-least-once |
+| QueueItem | One durable delivery to a lieutenant. Kinds: captain `message`, `start-order`, `rework-order`, `card-created` / `card-moved` (captain acts echoed to the owner), `worker-signal`, `worker-said` (a non-owner posted on the card thread), `worker-stopped`, `worker-died`, `worker done`, `pr-merged`, `pr-closed`. `seq`-ordered, at-least-once |
 | Archive | Append-only frozen card snapshots with `reason`; `card.restore` resurrects with full state and a loud level-1 event (a snapshot frozen in Working restores to Backlog — only `card.start` may enter Working) |
 | Label | Board-level tag registry: name + color, palette auto-assigned; cards carry label names |
 
@@ -135,6 +135,8 @@ Harness working state (session ids, prompts, turn-end logs) lives in the workspa
 | captain creates / moves a card | `card-created` / `card-moved` QueueItem to the owner (awareness, not an order) |
 | `card.start` | worker spawned (worktree + session), card → Working, level-2 event |
 | `chat.say` by captain | QueueItem (write-ahead) + `harness.send` wake to the owning lieutenant |
+| `chat.say` on a card thread by anyone but the owning lieutenant (its worker, a peer, unidentified tooling) | `worker-said` QueueItem waking the owner — the thread alone notifies nobody |
+| `worker.send` by the lieutenant | text typed into the card's live worker session (harness `send`, verified submission) + level-2 event; loud error without a live worker. `card.start --resume` refuses a brief and points here |
 | worker signal | level-2 event on card + QueueItem to the owning lieutenant |
 | worker turn-end without `done` (card still Working) | `worker-stopped` QueueItem to the owner + level-2 event, immediately — a stopped worker is never invisible |
 | worker done + lieutenant review | lieutenant rewrites body, moves → Your review — the level-1 handoff |

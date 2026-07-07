@@ -106,6 +106,47 @@ test('cli: say self-identifies by its tmux session', async () => {
   }
 });
 
+test('card-thread say by a non-owner queues a worker-said item waking the owner; the identified owner is exempt', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    // grace owns the card and HAS a session ref (so she can be identified as the owner)
+    await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace', ref: { harness: 'fake', session: 'bc-grace', cwd: '/tmp' } });
+    await s.api('POST', '/api/cards', { title: 'Watched', owner: 'grace' });
+
+    // an unidentified caller (a worker's tmux session resolves to no lieutenant)
+    // → durable worker-said item for the owner, on top of the thread message
+    let r = await s.api('POST', '/api/message', { target: 'card:watched', text: 'EMERGENCY: the PR looks spurious', session: 'bc-w-nobody' });
+    assert.strictEqual(r.status, 200);
+    let items = (await s.api('GET', '/api/feed?lieutenant=grace')).body.items;
+    assert.strictEqual(items.length, 1);
+    assert.strictEqual(items[0].kind, 'worker-said');
+    assert.strictEqual(items[0].card, 'watched');
+    assert.strictEqual(items[0].target, 'card:watched');
+    assert.strictEqual(items[0].text, 'EMERGENCY: the PR looks spurious');
+
+    // a peer lieutenant (identified, NOT the owner) also notifies, stamped as itself
+    await s.api('POST', '/api/message', { target: 'card:watched', text: 'peer heads-up', session: 'bc-' + LT });
+    await s.api('POST', '/api/lieutenants', { name: 'Hopper', id: 'hopper', ref: { harness: 'fake', session: 'bc-hopper', cwd: '/tmp' } });
+    await s.api('POST', '/api/message', { target: 'card:watched', text: 'from hopper', session: 'bc-hopper' });
+    items = (await s.api('GET', '/api/feed?lieutenant=grace')).body.items;
+    const hop = items.find((i) => i.text === 'from hopper');
+    assert.ok(hop, 'peer say queued');
+    assert.strictEqual(hop.kind, 'worker-said');
+    assert.strictEqual(hop.author, 'Hopper');
+
+    // the owner replying on her OWN card thread never self-notifies
+    const before = (await s.api('GET', '/api/feed?lieutenant=grace')).body.items.length;
+    await s.api('POST', '/api/message', { target: 'card:watched', text: 'on it', session: 'bc-grace' });
+    items = (await s.api('GET', '/api/feed?lieutenant=grace')).body.items;
+    assert.strictEqual(items.length, before, 'no worker-said for the owner\'s own reply');
+    // …but her reply DID land on the thread
+    const card = (await s.api('GET', '/api/cards/watched')).body;
+    assert.strictEqual(card.thread[card.thread.length - 1].text, 'on it');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('captain feedback lands in the thread and queues a message item to the owner', async () => {
   const s = await startServerWithLieutenant();
   try {

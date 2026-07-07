@@ -524,6 +524,11 @@ async function cmdStart() {
       '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.\n' +
       '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.');
   }
+  if (opts.resume && opts.briefFile) {
+    die('--resume does not deliver briefs: the reincarnated worker keeps its own context and the\n' +
+      'brief would be silently dropped. To hand a live worker new instructions:\n' +
+      '  bc-axi worker send ' + id + ' --text-file <f|->');
+  }
   const body = { actor: opts.actor || 'agent' };
   if (opts.briefFile) body.brief = readInput(opts.briefFile);
   if (opts.resume) body.resume = true;
@@ -560,6 +565,23 @@ async function cmdWorkerDone() {
     { outcome, actor: opts.actor || 'worker' });
   const prs = (r.card.attributes && r.card.attributes.prs) || [];
   console.log('done -> ' + id + ' (owner notified' + (prs.length ? '; prs: ' + prs.map((p) => p.url).join(' ') : '') + ')');
+}
+
+// worker.send — the lieutenant side: hand a LIVE worker new instructions,
+// delivered into its session by the server through the harness typer
+// (verified submission — the same send half captain-feedback delivery uses).
+async function cmdWorkerSend() {
+  const id = positional[0];
+  const text = opts.textFile ? readInput(opts.textFile).trim() : positional.slice(1).join(' ').trim();
+  if (!id || !text) {
+    die('usage: bc-axi worker send <card-id> "<instructions>" [--text-file f|-]\n' +
+      '  Deliver text into the card\'s live worker session (typed + verified submission).\n' +
+      '  Errors when no live worker is bound — resume one first: card start <card-id> --resume.');
+  }
+  // The server types into a real pane with submit verification/retries — allow it time.
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/worker/send',
+    { text, actor: opts.actor || 'agent' }, 60000);
+  console.log('sent -> worker ' + r.session + ' (card ' + id + ')');
 }
 
 // ---------- projects (F6) ----------
@@ -641,6 +663,9 @@ async function cmdDrain() {
     } else if (it.kind === 'worker-signal') {
       head = 'worker milestone — ' + cardBit(it.card);
       hint = 'note it; act only if it changes your plan';
+    } else if (it.kind === 'worker-said') {
+      head = 'worker said — ' + cardBit(it.card);
+      hint = 'read the thread (bc-axi thread card:' + it.card + ') and act; steer the worker: bc-axi worker send ' + it.card + ' --text-file <f|->';
     } else if (it.kind === 'worker-done') {
       head = 'WORKER DONE — ' + cardBit(it.card);
       hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text), rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
@@ -746,7 +771,7 @@ const commands = {
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
   'card start': cmdStart,
-  'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone,
+  'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone, 'worker send': cmdWorkerSend,
   show: cmdShow, // alias for card show
   event: cmdEvent, notify: cmdNotify,
   say: cmdSay, drain: cmdDrain, ack: cmdAck,
@@ -807,7 +832,11 @@ if (!commands[cmd]) {
     '                                         worker session (brief as launch prompt), session/worktree/\n' +
     '                                         branch bound to the card, card -> Working. Refuses plan\n' +
     '                                         cards, Working cards, and unregistered repos. --resume\n' +
-    '                                         reincarnates the recorded worker (after worker-died)\n' +
+    '                                         reincarnates the recorded worker (after worker-died);\n' +
+    '                                         it never takes --brief-file (use worker send instead)\n' +
+    '  worker send <card-id> "<instructions>" [--text-file f|-]\n' +
+    '                                         hand a LIVE worker new instructions: typed into its\n' +
+    '                                         session with verified submission (run by the lieutenant)\n' +
     '\nworker (run by the worker itself, from its worktree):\n' +
     '  worker signal <card-id> "<milestone>" [--text-file f|-]\n' +
     '                                         real milestone -> level-2 card event + QueueItem to owner\n' +
@@ -821,7 +850,9 @@ if (!commands[cmd]) {
     '  notify [--kind K] [--text-file f|-]    board-level notification (no card)\n' +
     '  say <lieutenant:ID|card:ID> [--actor a] [--text-file f|-]\n' +
     '                                         post a chat message; a card thread\'s interlocutor is\n' +
-    '                                         the owning lieutenant (lieutenant-main says also notify)\n' +
+    '                                         the owning lieutenant (lieutenant-main says also notify).\n' +
+    '                                         A card-thread say by anyone but the owner (e.g. its\n' +
+    '                                         worker) also queues a worker-said item waking the owner\n' +
     '\ndelivery (at-least-once):\n' +
     '  drain [--lieutenant <id>] [--json]     print pending QueueItems with card context and a\n' +
     '    next-action hint per item (--json: raw JSON lines). Captain messages, start/rework\n' +
