@@ -96,7 +96,7 @@ function typingHtml(state, name) {
   // 'stale'  = owed past the threshold: a DISTINCT "may be stuck" state, static
   //            and amber, so a dropped message never looks healthy forever
   // 'queued' = delivered to the durable inbox but NOT drained yet — static
-  //            single check, "waiting to be picked up", no typing animation
+  //            hourglass, "waiting to be picked up", no typing animation
   // 'seen'   = drained; the lieutenant owes the reply for real — animated dots
   if (state === 'stale') {
     return '<div class="msg agent typing stale" title="no response for a while — the message may not have reached ' + esc(name) + '">' +
@@ -105,7 +105,7 @@ function typingHtml(state, name) {
   }
   if (state === 'queued') {
     return '<div class="msg agent typing queued" title="delivered — ' + esc(name) + ' hasn\'t picked it up yet">' +
-      '<span class="tcheck">✓</span>' +
+      '<span class="tcheck">⏳</span>' +
       '<span class="lbl">delivered — waiting for ' + esc(name) + ' to pick it up</span></div>';
   }
   return '<div class="msg agent typing" title="' + esc(name) + ' owes you a reply here">' +
