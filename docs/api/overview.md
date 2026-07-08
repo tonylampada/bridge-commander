@@ -101,7 +101,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 
 | Verb | Signature | Called by | Purpose |
 |---|---|---|---|
-| `harness.spawn` | `cwd, prompt, opts → HarnessRef` | ⚙️ | birth a lieutenant or worker session (`opts`: session name, state dir, turn-end callback URL, hook install mode) |
+| `harness.spawn` | `cwd, prompt, opts → HarnessRef` | ⚙️ | birth a lieutenant session or a worker WINDOW inside its lieutenant's session (`opts`: session name, window name — non-numeric, `w-<card-id>` —, state dir, turn-end callback URL, hook install mode) |
 | `harness.send` | `ref, text` | ⚙️ | type into a session (the wake half of delivery) |
 | `harness.alive` | `ref → bool` | ⚙️ | liveness check for supervision |
 | `harness.resumable` | `ref → bool` | ⚙️ | introspection: would `resume` restore memory? The server picks resume vs relaunch-with-charter on it |

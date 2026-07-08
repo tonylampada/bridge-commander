@@ -1,8 +1,15 @@
 'use strict';
 // claude-tmux — the claude implementation of the harness port, over tmux.
 //
-// HarnessRef: { harness: 'claude', session: 'bc-<id>', cwd, resumeId? }
+// HarnessRef: { harness: 'claude', session: 'bc-<id>', window?, cwd, resumeId? }
 //   session  — tmux session name (predictable `bc-*`, the captain's attach escape hatch)
+//   window   — when present, the agent lives in a named WINDOW of that session
+//              instead of owning the whole session (papercut #8: workers as
+//              windows inside their lieutenant's session). Window names must
+//              start with a letter — a numeric name would be parsed by tmux as
+//              a window INDEX — and every tmux call addresses the pane with the
+//              exact-match `=session:=window` form. Lifecycle coupling is
+//              accepted design: the session dying takes its windows with it.
 //   resumeId — the claude session uuid. Set deterministically at spawn via
 //              `--session-id <uuid>` (verified claude 2.1.202), refreshed from
 //              Stop-hook payloads. `claude --resume <resumeId>` keeps the SAME
@@ -53,21 +60,70 @@ function newSessionName() {
   return 'bc-' + crypto.randomBytes(3).toString('hex');
 }
 
-// paneTarget — exact-match tmux target for a session's active pane.
-// The bare `=name` exact-match form resolves for session-level commands but
-// NOT for pane-level ones (verified tmux 3.4: `send-keys -t =name` fails with
-// "can't find pane"); the trailing colon (`=name:`) resolves for both.
-function paneTarget(session) {
-  return `=${session}:`;
+// stateKey — the per-agent key for prompt/turnend/session-id state files and
+// the Stop-hook `session` argument. Window-granular agents share their tmux
+// session name with the lieutenant (and sibling workers), so the bare session
+// would collide; the `session:window` form is unique — tmux session names can
+// never contain ':'.
+function stateKey(session, window) {
+  return window ? `${session}:${window}` : session;
 }
 
-async function paneCommand(session) {
-  const out = await t.tryTmux('display-message', '-p', '-t', paneTarget(session), '#{pane_current_command}');
+// paneTarget — exact-match tmux target for an agent's pane.
+// Session-granular: the bare `=name` exact-match form resolves for
+// session-level commands but NOT for pane-level ones (verified tmux 3.4:
+// `send-keys -t =name` fails with "can't find pane"); the trailing colon
+// (`=name:`) resolves for both. Window-granular: `=session:=window`, exact on
+// both halves, so tmux never pattern-matches or reads the window as an index.
+function paneTarget(session, window) {
+  return window ? `=${session}:=${window}` : `=${session}:`;
+}
+
+async function paneCommand(target) {
+  const out = await t.tryTmux('display-message', '-p', '-t', target, '#{pane_current_command}');
   return out === null ? null : out.trim();
 }
 
 async function hasSession(session) {
-  return (await t.tryTmux('has-session', '-t', paneTarget(session))) !== null;
+  return (await t.tryTmux('has-session', '-t', `=${session}:`)) !== null;
+}
+
+// hasWindow — strict window existence. `display-message -t =ses:=missing`
+// does NOT error — tmux silently falls back to another pane (verified tmux
+// 3.4) — so existence is checked against the session's actual window list.
+async function hasWindow(session, window) {
+  const out = await t.tryTmux('list-windows', '-t', `=${session}:`, '-F', '#{window_name}');
+  return out !== null && out.split('\n').includes(window);
+}
+
+function paneExists(session, window) {
+  return window ? hasWindow(session, window) : hasSession(session);
+}
+
+// createPane — bring the agent's pane into existence. Session-granular: a
+// fresh detached session. Window-granular: a new window appended to the
+// session, created with -d so a worker spawn never steals the lieutenant's
+// focus; when the session is not up yet it is created with this window as its
+// first (the accepted lifecycle coupling — no separate fleet session).
+async function createPane(session, window, cwd) {
+  if (!window) {
+    await t.tmux('new-session', '-d', '-s', session, '-c', cwd);
+  } else if (await hasSession(session)) {
+    await t.tmux('new-window', '-d', '-t', `=${session}:`, '-n', window, '-c', cwd);
+  } else {
+    await t.tmux('new-session', '-d', '-s', session, '-n', window, '-c', cwd);
+  }
+}
+
+// killPane — session-granular kills the session; window-granular kills ONLY
+// the window (the lieutenant and sibling workers cohabit the session).
+// Killing a session's last window ends the session — tmux's own semantics.
+async function killPane(session, window) {
+  if (window) {
+    if (await hasWindow(session, window)) await t.tryTmux('kill-window', '-t', paneTarget(session, window));
+  } else if (await hasSession(session)) {
+    await t.tryTmux('kill-session', '-t', paneTarget(session));
+  }
 }
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
@@ -122,31 +178,34 @@ async function installHooks(cwd, session, stateDir, callbackUrl) {
 // busy footer, permission-mode footer) and the trust screen does not.
 const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 
-async function launchAndSettle(session, launchCmd) {
-  await t.sendLiteral(paneTarget(session), launchCmd);
+async function launchAndSettle(target, launchCmd) {
+  await t.sendLiteral(target, launchCmd);
   await t.sleep(300);
-  await t.sendKey(paneTarget(session), 'Enter');
+  await t.sendKey(target, 'Enter');
 
   const deadline = Date.now() + 45000;
   while (Date.now() < deadline) {
     await t.sleep(500);
-    const cmd = await paneCommand(session);
-    if (cmd === null) throw new Error(`tmux session ${session} vanished during launch`);
+    const cmd = await paneCommand(target);
+    if (cmd === null) throw new Error(`tmux pane ${target} vanished during launch`);
     if (SHELLS.has(cmd)) continue; // claude not up yet (or it already exited — captured by timeout)
-    const pane = await t.capture(paneTarget(session), 40);
+    const pane = await t.capture(target, 40);
     if (TRUST_RE.test(pane)) {
-      await t.sendKey(paneTarget(session), 'Enter');
+      await t.sendKey(target, 'Enter');
       await t.sleep(1000);
       continue;
     }
     if (UI_READY_RE.test(pane)) return;
   }
-  const tail = await t.capture(paneTarget(session), 20);
-  throw new Error(`claude did not start in session ${session} within 45s; pane tail:\n${tail}`);
+  const tail = await t.capture(target, 20);
+  throw new Error(`claude did not start at ${target} within 45s; pane tail:\n${tail}`);
 }
 
 // spawn(cwd, prompt, opts?) -> HarnessRef
-// opts: { session?, stateDir?, callbackUrl?, extraArgs?: string[], installHooks?: boolean }
+// opts: { session?, window?, stateDir?, callbackUrl?, extraArgs?: string[], installHooks?: boolean }
+// window: birth the agent as a named window inside `session` (which must then
+// be given too) instead of owning a whole session; the session is created on
+// demand when it is not up yet.
 // installHooks: false skips the per-spawn Stop-hook install — for sessions born
 // into a cwd that already carries a workspace-level hook (installing another
 // would clobber it: installHooks keeps ONE bc entry per settings file).
@@ -157,58 +216,71 @@ async function spawn(cwd, prompt, opts = {}) {
   if (!/^bc-[A-Za-z0-9_-]+$/.test(session)) {
     throw new Error(`invalid session name "${session}" (must match bc-<id>)`);
   }
-  if (await hasSession(session)) throw new Error(`tmux session ${session} already exists`);
+  const window = opts.window === undefined || opts.window === null ? undefined : String(opts.window);
+  if (window !== undefined && !/^[A-Za-z][A-Za-z0-9_-]*$/.test(window)) {
+    throw new Error(`invalid window name "${window}" (must start with a letter — tmux parses numeric names as window indexes)`);
+  }
+  if (window) {
+    if (await hasWindow(session, window)) throw new Error(`tmux window ${session}:${window} already exists`);
+  } else if (await hasSession(session)) {
+    throw new Error(`tmux session ${session} already exists`);
+  }
   const stateDir = stateDirOf(opts);
   const resumeId = crypto.randomUUID();
+  const key = stateKey(session, window);
 
   if (opts.installHooks !== false) {
-    await installHooks(cwdAbs, session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+    await installHooks(cwdAbs, key, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
   }
 
-  const promptFile = path.join(stateDir, `${session}.prompt`);
+  const promptFile = path.join(stateDir, `${key}.prompt`);
   fs.writeFileSync(promptFile, prompt);
 
-  await t.tmux('new-session', '-d', '-s', session, '-c', cwdAbs);
+  await createPane(session, window, cwdAbs);
   try {
     const extra = (opts.extraArgs || []).map(shellQuote).join(' ');
     const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
       + `claude --dangerously-skip-permissions --session-id ${resumeId} `
       + (extra ? extra + ' ' : '')
       + `"$(cat ${shellQuote(promptFile)})"`;
-    await launchAndSettle(session, launchCmd);
+    await launchAndSettle(paneTarget(session, window), launchCmd);
   } catch (err) {
-    await t.tryTmux('kill-session', '-t', paneTarget(session));
+    await killPane(session, window);
     try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
     throw err;
   }
 
-  return { harness: 'claude', session, cwd: cwdAbs, resumeId };
+  const ref = { harness: 'claude', session, cwd: cwdAbs, resumeId };
+  if (window) ref.window = window;
+  return ref;
 }
 
 // send(ref, text) — type into the session with verified submission.
 // Enter is retried, never the text. Throws when the submit provably failed.
 async function send(ref, text) {
-  if (!(await alive(ref))) throw new Error(`session ${ref.session} is not alive`);
-  const verdict = await t.submit(paneTarget(ref.session), text, {
+  const name = stateKey(ref.session, ref.window);
+  if (!(await alive(ref))) throw new Error(`session ${name} is not alive`);
+  const verdict = await t.submit(paneTarget(ref.session, ref.window), text, {
     retries: Number(process.env.BC_SEND_RETRIES || 3),
     enterSleep: Number(process.env.BC_SEND_SLEEP_MS || 400),
   });
   if (verdict === 'pending') {
-    throw new Error(`text not submitted to ${ref.session} (Enter swallowed; text left in composer)`);
+    throw new Error(`text not submitted to ${name} (Enter swallowed; text left in composer)`);
   }
   if (verdict === 'send-failed') {
-    throw new Error(`text not sent to ${ref.session} (tmux send failed)`);
+    throw new Error(`text not sent to ${name} (tmux send failed)`);
   }
   // 'empty' = confirmed; 'unknown' = pane unreadable, assume sent (lenient —
   // an unreadable pane must not turn a normal send into a false error).
   await t.sleep(1000); // let the turn spin up so an immediate capture sees it working
 }
 
-// alive(ref) — tmux session exists AND its pane is still running the agent
-// (a pane sitting back at a bare shell means claude exited).
+// alive(ref) — the ref's session (and window, for window-granular refs) exists
+// AND its pane is still running the agent (a pane sitting back at a bare shell
+// means claude exited).
 async function alive(ref) {
-  if (!(await hasSession(ref.session))) return false;
-  const cmd = await paneCommand(ref.session);
+  if (!(await paneExists(ref.session, ref.window))) return false;
+  const cmd = await paneCommand(paneTarget(ref.session, ref.window));
   return cmd !== null && !SHELLS.has(cmd);
 }
 
@@ -219,7 +291,7 @@ async function alive(ref) {
 async function resumable(ref, opts = {}) {
   if (ref.resumeId) return true;
   try {
-    return !!fs.readFileSync(path.join(stateDirOf(opts), `${ref.session}.session-id`), 'utf8').trim();
+    return !!fs.readFileSync(path.join(stateDirOf(opts), `${stateKey(ref.session, ref.window)}.session-id`), 'utf8').trim();
   } catch {
     return false;
   }
@@ -232,38 +304,42 @@ async function resumable(ref, opts = {}) {
 async function resume(ref, opts = {}) {
   if (await alive(ref)) return { ...ref };
   const stateDir = stateDirOf(opts);
+  const key = stateKey(ref.session, ref.window);
   let resumeId = ref.resumeId;
   try {
-    const rec = fs.readFileSync(path.join(stateDir, `${ref.session}.session-id`), 'utf8').trim();
+    const rec = fs.readFileSync(path.join(stateDir, `${key}.session-id`), 'utf8').trim();
     if (rec) resumeId = rec;
   } catch {
     // no recorded id — fall back to the ref's
   }
-  if (await hasSession(ref.session)) await t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+  await killPane(ref.session, ref.window); // clear any dead pane still holding the name
 
   if (opts.installHooks !== false) {
-    await installHooks(ref.cwd, ref.session, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+    await installHooks(ref.cwd, key, stateDir, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
   }
-  await t.tmux('new-session', '-d', '-s', ref.session, '-c', ref.cwd);
+  await createPane(ref.session, ref.window, ref.cwd);
   try {
     const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
       + 'claude --dangerously-skip-permissions '
       + (resumeId ? `--resume ${resumeId}` : '');
-    await launchAndSettle(ref.session, launchCmd.trim());
+    await launchAndSettle(paneTarget(ref.session, ref.window), launchCmd.trim());
   } catch (err) {
-    await t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+    await killPane(ref.session, ref.window);
     throw err;
   }
-  return { harness: 'claude', session: ref.session, cwd: ref.cwd, resumeId };
+  const out = { harness: 'claude', session: ref.session, cwd: ref.cwd, resumeId };
+  if (ref.window) out.window = ref.window;
+  return out;
 }
 
-// kill(ref) — end the session for good. Idempotent: killing a dead or missing
-// session is a no-op. The tmux session goes away (claude inside dies with its
-// pane); harness state files are left behind on purpose — resumeId and the
-// turn-end log are cheap, and a later resume(ref) can still reincarnate the
-// conversation if the kill turns out to have been premature.
+// kill(ref) — end the agent's pane for good. Idempotent: killing a dead or
+// missing one is a no-op. Session-granular refs take the whole session;
+// window-granular refs take ONLY their window (the lieutenant and sibling
+// workers cohabit the session). Harness state files are left behind on
+// purpose — resumeId and the turn-end log are cheap, and a later resume(ref)
+// can still reincarnate the conversation if the kill turns out premature.
 async function kill(ref) {
-  if (await hasSession(ref.session)) await t.tryTmux('kill-session', '-t', paneTarget(ref.session));
+  await killPane(ref.session, ref.window);
 }
 
 // onTurnEnd(ref, hook) -> unsubscribe()
@@ -273,7 +349,7 @@ async function kill(ref) {
 // backstop, so no boundary is missed on filesystems with flaky watch.
 function onTurnEnd(ref, hook, opts = {}) {
   const stateDir = stateDirOf(opts);
-  const file = path.join(stateDir, `${ref.session}.turnend.jsonl`);
+  const file = path.join(stateDir, `${stateKey(ref.session, ref.window)}.turnend.jsonl`);
   let offset = 0;
   try {
     offset = fs.statSync(file).size;

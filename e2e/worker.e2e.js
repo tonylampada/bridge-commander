@@ -58,8 +58,8 @@ function tmux(...args) {
   return execFileSync('tmux', args, { encoding: 'utf8', env: ENV, stdio: ['ignore', 'pipe', 'pipe'] });
 }
 function tryTmux(...args) { try { return tmux(...args); } catch (e) { return null; } }
-function capture(session, lines = 120) {
-  const out = tryTmux('capture-pane', '-p', '-t', '=' + session + ':', '-S', '-' + lines);
+function capture(target, lines = 120) {
+  const out = tryTmux('capture-pane', '-p', '-t', target, '-S', '-' + lines);
   return out === null ? '' : out;
 }
 function git(dir, ...args) {
@@ -84,10 +84,13 @@ async function until(what, fn, ms, step = 1000) {
   }
 }
 
-const { workerSession } = require(path.join(__dirname, '..', 'server', 'names.js'));
+const { lieutenantSession, workerWindow } = require(path.join(__dirname, '..', 'server', 'names.js'));
 
 const CARD = 'hello-file';
-const SESSION = workerSession(ws, CARD); // workspace-discriminated
+// the worker lives as a WINDOW inside the owning lieutenant's session
+const SESSION = lieutenantSession(ws, 'ada'); // workspace-discriminated
+const WINDOW = workerWindow(CARD);
+const TARGET = '=' + SESSION + ':=' + WINDOW; // exact-match session:window pane target
 const WANT = 'bridge command was here';
 
 let passed = 0;
@@ -99,7 +102,7 @@ async function stepCase(name, fn) {
   } catch (e) {
     console.error('  ✖ ' + name);
     console.error(e && e.stack ? e.stack : e);
-    console.error('--- worker pane tail ---\n' + capture(SESSION).split('\n').slice(-50).join('\n'));
+    console.error('--- worker pane tail ---\n' + capture(TARGET).split('\n').slice(-50).join('\n'));
     process.exitCode = 1;
     throw e;
   }
@@ -157,12 +160,13 @@ async function stepCase(name, fn) {
 
       r = await runCli(['card', 'start', CARD, '--workspace', ws, '--port', String(port)]);
       assert.strictEqual(r.code, 0, r.stderr + r.stdout);
-      assert.match(r.stdout, new RegExp('started worker claude:' + SESSION.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+      assert.match(r.stdout, new RegExp('started worker claude:'
+        + (SESSION + ':' + WINDOW).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
       // the card moved to Working AT START (system move), attrs bound
       const card = (await api('GET', '/api/cards/' + CARD)).body;
       assert.strictEqual(card.column, 'working');
-      assert.strictEqual(card.attributes.session, SESSION);
+      assert.strictEqual(card.attributes.session, SESSION + ':' + WINDOW);
       assert.strictEqual(card.attributes.branch, 'bc/' + CARD);
       worktree = card.attributes.worktree;
       assert.ok(worktree && fs.existsSync(worktree), 'worktree exists: ' + worktree);
@@ -174,8 +178,13 @@ async function stepCase(name, fn) {
       assert.strictEqual(fs.realpathSync(git(worktree, 'rev-parse', '--show-toplevel')), fs.realpathSync(worktree));
       assert.notStrictEqual(git(worktree, 'rev-parse', '--absolute-git-dir'), git(clone, 'rev-parse', '--absolute-git-dir'));
 
-      // the claude session is really up (pane not sitting at a shell)
-      const cmd = tmux('display-message', '-p', '-t', '=' + SESSION + ':', '#{pane_current_command}').trim();
+      // the worker landed as a named WINDOW inside the lieutenant's session
+      // (list-windows is the strict existence check — display-message silently
+      // falls back to another pane when the window is missing)
+      const windows = tmux('list-windows', '-t', '=' + SESSION + ':', '-F', '#{window_name}').split('\n');
+      assert.ok(windows.includes(WINDOW), 'window ' + WINDOW + ' in ' + SESSION + ', got: ' + windows.join(','));
+      // and its pane really runs claude (not sitting at a shell)
+      const cmd = tmux('display-message', '-p', '-t', TARGET, '#{pane_current_command}').trim();
       assert.ok(!['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh'].includes(cmd), 'worker alive, pane runs: ' + cmd);
     });
 
@@ -201,7 +210,7 @@ async function stepCase(name, fn) {
 
     console.log('\nworker e2e: ' + passed + ' steps passed');
   } finally {
-    tryTmux('kill-session', '-t', '=' + SESSION + ':');
+    tryTmux('kill-session', '-t', '=' + SESSION + ':'); // takes the worker windows with it
     tryTmux('kill-server');
     if (server && server.exitCode == null) server.kill('SIGTERM');
     await sleep(300);
