@@ -121,7 +121,7 @@ test('lease survives a restart; expiry is derived on read, so decay happens even
   }
 });
 
-test('owed: flips true on a captain thread message, false on lieutenant reply, survives restart', async () => {
+test('owed: flips true on a captain message, clears on ACK (not on the reply alone), survives restart', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   let s = null;
   try {
@@ -129,25 +129,67 @@ test('owed: flips true on a captain thread message, false on lieutenant reply, s
     await s.api('POST', '/api/cards', withOwner({ title: 'Ask' }));
     assert.strictEqual((await cardStatus(s, 'ask')).owed, false);
 
-    await s.api('POST', '/api/feedback', { target: 'card:ask', text: 'please check' });
+    const f1 = await s.api('POST', '/api/feedback', { target: 'card:ask', text: 'please check' });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, true);
 
+    // owed is queue truth: the reply alone does NOT consume the message
     await s.api('POST', '/api/message', { target: 'card:ask', text: 'on it' });
+    assert.strictEqual((await cardStatus(s, 'ask')).owed, true);
+
+    // the ack consumes it — owed clears
+    await s.api('POST', '/api/feed/ack', { seq: f1.body.seq });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, false);
 
-    await s.api('POST', '/api/feedback', { target: 'card:ask', text: 'and this?' });
+    const f2 = await s.api('POST', '/api/feedback', { target: 'card:ask', text: 'and this?' });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, true);
 
-    // owed is derived from persisted state: a restart must not forget it
+    // owed is derived from persisted state (queue + ack cursor): a restart must not forget it
     await s.stop();
     s = await startServer({ dir });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, true);
 
     await s.api('POST', '/api/message', { target: 'card:ask', text: 'answered' });
+    await s.api('POST', '/api/feed/ack', { seq: f2.body.seq });
     assert.strictEqual((await cardStatus(s, 'ask')).owed, false);
   } finally {
     if (s) await s.stop();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('owed: a buried captain message (interleaved reply to an earlier batch) stays owed until acked', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Buried' }));
+
+    // captain msg A: drained AND acked — fully handled
+    const a = await s.api('POST', '/api/feedback', { target: 'card:buried', text: 'msg A' });
+    await s.api('GET', '/api/feed?lieutenant=ada');
+    await s.api('POST', '/api/feed/ack', { seq: a.body.seq });
+    assert.strictEqual((await cardStatus(s, 'buried')).owed, false);
+
+    // captain msg B lands mid-turn; the lieutenant then replies to the EARLIER
+    // batch, so the reply becomes the last thread message. B is unhandled and
+    // must STILL read owed+queued — this is the case that regressed live.
+    const b = await s.api('POST', '/api/feedback', { target: 'card:buried', text: 'msg B' });
+    await s.api('POST', '/api/message', { target: 'card:buried', text: 'reply to A' });
+    let st = await cardStatus(s, 'buried');
+    assert.strictEqual(st.owed, true);
+    assert.strictEqual(st.owedState, 'queued'); // undrained: the lieutenant never saw B
+
+    // draining B flips it to seen (turn underway) — still owed
+    await s.api('GET', '/api/feed?lieutenant=ada');
+    st = await cardStatus(s, 'buried');
+    assert.strictEqual(st.owed, true);
+    assert.strictEqual(st.owedState, 'seen');
+
+    // only the ack consumes B
+    await s.api('POST', '/api/feed/ack', { seq: b.body.seq });
+    st = await cardStatus(s, 'buried');
+    assert.strictEqual(st.owed, false);
+    assert.strictEqual(st.owedState, null);
+  } finally {
+    await s.stop();
   }
 });
 
@@ -160,7 +202,7 @@ test('owedState: queued while undrained, seen the moment a drain serves it (no a
     assert.strictEqual((await cardStatus(s, 'tri')).owedState, null);
 
     // captain message → durable queue item, undrained: the lieutenant has NOT seen it
-    await s.api('POST', '/api/feedback', { target: 'card:tri', text: 'you there?' });
+    const f = await s.api('POST', '/api/feedback', { target: 'card:tri', text: 'you there?' });
     let st = await cardStatus(s, 'tri');
     assert.strictEqual(st.owed, true);
     assert.strictEqual(st.owedState, 'queued');
@@ -183,7 +225,14 @@ test('owedState: queued while undrained, seen the moment a drain serves it (no a
     s = await startServer({ dir });
     assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'seen');
 
+    // the reply alone does NOT clear owed — the message is still unconsumed
     await s.api('POST', '/api/message', { target: 'card:tri', text: 'here' });
+    st = await cardStatus(s, 'tri');
+    assert.strictEqual(st.owed, true);
+    assert.strictEqual(st.owedState, 'seen');
+
+    // the ack (turn end) consumes it: owed clears
+    await s.api('POST', '/api/feed/ack', { seq: f.body.seq });
     st = await cardStatus(s, 'tri');
     assert.strictEqual(st.owed, false);
     assert.strictEqual(st.owedState, null);
@@ -197,39 +246,52 @@ test('owedState: queued while undrained, seen the moment a drain serves it (no a
   }
 });
 
-test('owedState: ack with no drain on record still reads seen (ack implies seen)', async () => {
+test('owedState: ack with no drain on record consumes the message — owed clears entirely', async () => {
   const s = await startServerWithLieutenant();
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Ackonly' }));
     const f = await s.api('POST', '/api/feedback', { target: 'card:ackonly', text: 'ping' });
     assert.strictEqual((await cardStatus(s, 'ackonly')).owedState, 'queued');
     await s.api('POST', '/api/feed/ack', { seq: f.body.seq });
-    assert.strictEqual((await cardStatus(s, 'ackonly')).owedState, 'seen');
+    const st = await cardStatus(s, 'ackonly');
+    assert.strictEqual(st.owed, false); // acked = consumed, even with no drain ever recorded
+    assert.strictEqual(st.owedState, null);
   } finally {
     await s.stop();
   }
 });
 
-test('board payload: cards carry owedState and lieutenants carry chatQueued for the main chat', async () => {
+test('board payload: cards carry owedState and lieutenants carry chatOwed/chatQueued for the main chat', async () => {
   const s = await startServerWithLieutenant();
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Pay' }));
     let b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatOwed, false);
     assert.strictEqual(b.lieutenants[0].chatQueued, false);
     assert.strictEqual(b.cards[0].status.owedState, null);
 
     const f = await s.api('POST', '/api/feedback', { target: 'lieutenant:ada', text: 'ping' });
     const fc = await s.api('POST', '/api/feedback', { target: 'card:pay', text: 'ping card' });
     b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatOwed, true);
     assert.strictEqual(b.lieutenants[0].chatQueued, true);
     assert.strictEqual(b.cards[0].status.owedState, 'queued');
 
-    // one drain (no ack) picks up both: main chat and card flip to seen together
+    // one drain (no ack) picks up both: main chat and card flip to seen together,
+    // but both stay OWED — the drain starts the turn, only the ack consumes
     assert.ok(f.body.seq && fc.body.seq);
     await s.api('GET', '/api/feed?lieutenant=ada');
     b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatOwed, true);
     assert.strictEqual(b.lieutenants[0].chatQueued, false);
     assert.strictEqual(b.cards[0].status.owedState, 'seen');
+
+    // acking the highest drained seq consumes both
+    await s.api('POST', '/api/feed/ack', { seq: fc.body.seq });
+    b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatOwed, false);
+    assert.strictEqual(b.cards[0].status.owed, false);
+    assert.strictEqual(b.cards[0].status.owedState, null);
   } finally {
     await s.stop();
   }
