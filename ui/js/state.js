@@ -73,16 +73,24 @@ export function cardStatus(c) {
 }
 // owed on a target, as a tri-state: null (nothing owed), 'queued' (the message
 // is durably in the lieutenant's inbox but NOT yet drained — unseen), or 'seen'
-// (drained; the lieutenant is actively on the hook for a reply). Cards carry the
-// server-derived status.owedState; a lieutenant's main chat uses the same
-// latest-message rule derived here plus the server's chatQueued bit.
+// (drained; the lieutenant is actively on the hook for a reply). Both are
+// server-derived from the delivery queue — owed means the latest captain
+// message is unACKED, regardless of who spoke last in the thread, so a message
+// buried under an interleaved reply keeps showing until actually consumed.
+// Cards carry status.owed/owedState; a lieutenant's main chat carries the
+// equivalent chatOwed/chatQueued bits.
 export function targetOwedState(target) {
   const lt = /^lieutenant:(.+)$/.exec(target || '');
   if (lt) {
     const l = lieutenant(lt[1]);
-    const ch = (l && l.chat) || [];
-    const last = ch[ch.length - 1];
-    if (!(last && last.author === USER)) return null;
+    if (!l) return null;
+    let owed = l.chatOwed;
+    if (owed === undefined) { // older server payload: fall back to the last-message rule
+      const ch = l.chat || [];
+      const last = ch[ch.length - 1];
+      owed = !!(last && last.author === USER);
+    }
+    if (!owed) return null;
     return l.chatQueued ? 'queued' : 'seen';
   }
   const c = card((target || '').slice(5));

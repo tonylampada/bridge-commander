@@ -549,6 +549,13 @@ function lastThreadReadMs(target, user) {
   const ts = r && r.threads && r.threads[target];
   return ts ? Date.parse(ts) : 0;
 }
+// owed is QUEUE truth, not thread order: the latest captain message delivered
+// to this target has not been ACKED (consumed) by its lieutenant. Thread order
+// lies under interleaving — a captain message sent mid-turn gets buried when
+// the lieutenant replies to an EARLIER batch, and "last thread message is the
+// captain's" would read not-owed while the message sits genuinely unhandled.
+// Only the ack clears owed; a reply alone does not (in the normal reply-then-ack
+// turn the two coincide, so the simple case still clears promptly).
 // owed splits into a tri-state, because "unanswered" hides two very different
 // situations: the captain's message may still sit UNDRAINED in the owner's queue
 // (the lieutenant never saw it), or the lieutenant drained it — its turn started —
@@ -579,13 +586,19 @@ function targetQueued(target, msgSeqs) {
   const m = msgSeqs.get(target);
   return !!(m && m.seq > seenCursor(m.lt));
 }
+// Owed = the latest captain message delivered to this target is still unacked
+// (not yet consumed). No delivery on record → not owed.
+function targetOwed(target, msgSeqs) {
+  const m = msgSeqs.get(target);
+  return !!(m && m.seq > readAck(m.lt));
+}
 function cardStatus(card, user, msgSeqs) {
   const thread = card.thread || [];
-  const last = thread.length ? thread[thread.length - 1] : null;
-  const owed = !!(last && last.author === 'user'); // latest thread message is the captain's, unanswered
+  const msgs = msgSeqs || latestMessageSeqs();
+  const owed = targetOwed('card:' + card.id, msgs);
   let owedState = null;
   if (owed) {
-    owedState = targetQueued('card:' + card.id, msgSeqs || latestMessageSeqs()) ? 'queued' : 'seen';
+    owedState = targetQueued('card:' + card.id, msgs) ? 'queued' : 'seen';
   }
   const readMs = lastThreadReadMs('card:' + card.id, user);
   let unread = false;
@@ -622,9 +635,12 @@ function publicBoard(user) {
     boot: BOOT_ID,
     kinds: effectiveKinds(),
     cards: board.cards.map((c) => publicCard(c, user, msgSeqs)),
-    // chatQueued mirrors owedState:'queued' for a lieutenant's MAIN chat (the UI
-    // derives main-chat owed client-side; the seen/unseen bit only lives here).
-    lieutenants: board.lieutenants.map((l) => Object.assign({}, l, { chatQueued: targetQueued('lieutenant:' + l.id, msgSeqs) })),
+    // chatOwed/chatQueued mirror status.owed/owedState:'queued' for a
+    // lieutenant's MAIN chat — both queue-derived, same rules as cards.
+    lieutenants: board.lieutenants.map((l) => Object.assign({}, l, {
+      chatOwed: targetOwed('lieutenant:' + l.id, msgSeqs),
+      chatQueued: targetQueued('lieutenant:' + l.id, msgSeqs),
+    })),
   });
 }
 
@@ -1869,7 +1885,7 @@ const server = http.createServer(async (req, res) => {
         const ev = mkEvent({ text: text.slice(0, 200), actor: msg.author, level: body.level, kind: body.kind }, { level: 1 });
         board.events.push(ev);
       }
-      saveBoard(); broadcast(); // a lieutenant reply clears derived owed via broadcast
+      saveBoard(); broadcast(); // owed clears on ACK, not here — the reply alone leaves it derived from the queue
       return sendJson(res, 200, { ok: true });
     }
     if (route === 'POST /api/feedback') { // captain -> lieutenant (chat.say, captain side)
