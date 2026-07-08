@@ -480,14 +480,23 @@ function commitAck(seq, ownerId) {
 // they clear the flag so a later append can retry, and they are logged.
 // The flag is in-memory by design: after a server restart the next append or
 // turn-end simply re-nudges (at-least-once delivery tolerates a spare wake).
-const nudged = new Set(); // lieutenant ids nudged since their last drain
+// Each entry carries the send timestamp: a nudge older than WAKE_TTL_MS no
+// longer suppresses the next wake, because "sent" is not "delivered" — tmux
+// send-keys can land in a busy pane and never become a turn. The supervision
+// sweep re-runs scheduleWake for live lieutenants with pending items, so a
+// lapsed nudge self-heals within one tick instead of hanging forever.
+const WAKE_TTL_MS = process.env.BC_WAKE_TTL_MS !== undefined
+  ? parseInt(process.env.BC_WAKE_TTL_MS, 10) : 90000;
+const nudged = new Map(); // lieutenant id -> epoch-ms of the last wake sent since its last drain
 function wakeLine(n) { return '[bridge-command] ' + n + ' pending item(s) — run: bc-axi drain'; }
 function scheduleWake(ltId) {
   const lt = findLieutenant(ltId);
   if (!lt || !isHarnessRef(lt.ref)) return;
   const n = pendingItems(ltId).length;
-  if (!n || nudged.has(ltId)) return;
-  nudged.add(ltId);
+  if (!n) return;
+  const ts = nudged.get(ltId);
+  if (ts !== undefined && Date.now() - ts <= WAKE_TTL_MS) return;
+  nudged.set(ltId, Date.now());
   Promise.resolve()
     .then(() => harnessFor(lt.ref).send(lt.ref, wakeLine(n)))
     .catch((e) => {
@@ -1279,7 +1288,15 @@ async function superviseTick() {
       if (!isHarnessRef(lt.ref)) continue;
       let up = false;
       try { up = await harnessFor(lt.ref).alive(lt.ref); } catch (e) { up = false; }
-      if (up) { respawnAttempts.delete(lt.id); continue; }
+      if (up) {
+        respawnAttempts.delete(lt.id);
+        // Alive but possibly deaf: a wake that landed in a busy pane never
+        // became a turn, yet was recorded as sent. Re-run scheduleWake — it
+        // no-ops while the last nudge is within WAKE_TTL_MS or nothing is
+        // pending, so only a genuinely stuck wake re-fires.
+        if (pendingItems(lt.id).length) scheduleWake(lt.id);
+        continue;
+      }
       const n = (respawnAttempts.get(lt.id) || 0) + 1;
       if (n > 3) continue; // already flagged needs-captain; a manual revival resets via alive
       respawnAttempts.set(lt.id, n);
