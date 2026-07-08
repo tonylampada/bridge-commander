@@ -155,6 +155,82 @@ test('3 failed respawn attempts flag needs-captain (level 1), then stop retrying
   }
 });
 
+test('wake heartbeat: a live lieutenant with pending items is woken by the sweep, coalesced within TTL, quiet once acked', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const nowIso = new Date().toISOString();
+  fakeSession(fdir, 'bc-lt-ada'); // ALIVE before the server boots — never enters the respawn branch
+  const s = await startServer({
+    env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0', BC_WAKE_TTL_MS: '60000' },
+    seed: (dir) => {
+      seedBoard(dir, {
+        lieutenants: [{
+          id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+          ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-ada' },
+        }],
+      });
+      // Seeded straight into the queue file: no queuePush ran, so no wake was
+      // ever scheduled — exactly the missed-wake shape the sweep must heal.
+      const qdir = path.join(dir, '.bridge-command', 'queue');
+      fs.mkdirSync(qdir, { recursive: true });
+      fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
+        JSON.stringify({ seq: 1, ts: nowIso, lieutenant: 'ada', kind: 'message', text: 'unseen all night' }) + '\n');
+    },
+  });
+  try {
+    // the sweep notices the live-but-never-nudged lieutenant and wakes it
+    const sends = await until('heartbeat wake', () => {
+      const got = readSends(fdir, 'bc-lt-ada');
+      return got.length ? got : null;
+    });
+    assert.match(sends[0].text, /1 pending item\(s\) — run: bc-axi drain/);
+    // fresh nudge within TTL: further ticks stay coalesced, no wake spam
+    await sleep(600);
+    assert.strictEqual(readSends(fdir, 'bc-lt-ada').length, 1, 'coalesced while the nudge is fresh');
+    assert.strictEqual((await s.api('GET', '/api/board')).body.events.filter((e) => e.kind === 'respawned').length, 0);
+    // drained AND acked -> nothing pending -> the sweep goes quiet
+    const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
+    await s.api('POST', '/api/feed/ack', { seq: items[items.length - 1].seq });
+    await sleep(600);
+    assert.strictEqual(readSends(fdir, 'bc-lt-ada').length, 1, 'no re-nudge after the queue is handled');
+  } finally {
+    await s.stop();
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});
+
+test('wake heartbeat: a stale nudge lapses after BC_WAKE_TTL_MS and the sweep re-fires it', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const nowIso = new Date().toISOString();
+  fakeSession(fdir, 'bc-lt-ada');
+  const s = await startServer({
+    env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0', BC_WAKE_TTL_MS: '200' },
+    seed: (dir) => {
+      seedBoard(dir, {
+        lieutenants: [{
+          id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+          ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-ada' },
+        }],
+      });
+      const qdir = path.join(dir, '.bridge-command', 'queue');
+      fs.mkdirSync(qdir, { recursive: true });
+      fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
+        JSON.stringify({ seq: 1, ts: nowIso, lieutenant: 'ada', kind: 'message', text: 'stuck wake' }) + '\n');
+    },
+  });
+  try {
+    // never drained: the first wake's nudge outlives its TTL and the next
+    // sweep tick fires again — a send-keys that never became a turn self-heals
+    const sends = await until('re-fired wake after TTL', () => {
+      const got = readSends(fdir, 'bc-lt-ada');
+      return got.length >= 2 ? got : null;
+    });
+    for (const snd of sends.slice(0, 2)) assert.match(snd.text, /1 pending item\(s\) — run: bc-axi drain/);
+  } finally {
+    await s.stop();
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});
+
 test('dead worker without done: worker-died QueueItem + card event, card stays Working, flagged once', async () => {
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
   const nowIso = new Date().toISOString();
