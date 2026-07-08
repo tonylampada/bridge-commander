@@ -28,7 +28,7 @@ function ltCardHtml(l) {
   const ind = staleW
     ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
     : owed === 'queued'
-    ? '<span class="t-typing queued" title="delivered — not picked up yet">✓</span>'
+    ? '<span class="t-typing queued" title="delivered — not picked up yet">⏳</span>'
     : owed
     ? '<span class="t-typing" title="owes you a reply"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
     : '';
@@ -94,13 +94,13 @@ function tileHtml(c) {
   // bubble (card.status.owedState, server-derived), so tile and chat can never
   // drift. Takes priority over the unread dot — one unambiguous corner indicator.
   // stale-owed mirrors the chat's "may be stuck" state: static amber ⚠, no dots.
-  // queued mirrors the chat's "delivered, not picked up": static check, no dots.
+  // queued mirrors the chat's "delivered, not picked up": static hourglass, no dots.
   const owed = targetOwedState('card:' + c.id);
   const staleW = owed && targetOwedStale('card:' + c.id);
   const cornerInd = staleW
     ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
     : owed === 'queued'
-    ? '<span class="t-typing queued" title="delivered — the lieutenant hasn\'t picked it up yet">✓</span>'
+    ? '<span class="t-typing queued" title="delivered — the lieutenant hasn\'t picked it up yet">⏳</span>'
     : owed
     ? '<span class="t-typing" title="the lieutenant owes you a reply here"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
     : (st.unread ? '<span class="t-unread" title="unread activity"></span>' : '');

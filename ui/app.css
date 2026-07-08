@@ -139,7 +139,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg.typing.stale { border-color: var(--warn); }
 .msg.typing.stale .twarn { color: var(--warn); font-size: 13px; line-height: 1; }
 .msg.typing.stale .lbl { color: var(--warn); }
-/* queued-owed: delivered but not picked up yet — static single check, no animation,
+/* queued-owed: delivered but not picked up yet — static hourglass, no animation,
    so a message sitting unseen in the inbox never reads as "being responded to" */
 .msg.typing.queued .tcheck { color: var(--dim); font-size: 13px; line-height: 1; }
 /* per-message speak button (agent bubbles only): hover-revealed on desktop */
@@ -286,7 +286,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .tile .t-typing .tdot:nth-child(3) { animation-delay: .4s; }
 /* stale-owed corner: static amber ⚠ mirroring the chat's "may be stuck" bubble */
 .tile .t-typing.stale { color: var(--warn); font-size: 11px; line-height: 1; margin-top: 3px; }
-/* queued-owed corner: static ✓ mirroring the chat's "delivered, not picked up" bubble */
+/* queued-owed corner: static ⏳ mirroring the chat's "delivered, not picked up" bubble */
 .tile .t-typing.queued { color: var(--dim); font-size: 11px; line-height: 1; margin-top: 3px; }
 /* pending drag-order marker: the captain ordered a start/rework; the card moves
    when the lieutenant acts — subtle amber chip, deliberately quiet */
