@@ -663,7 +663,9 @@ async function cmdDrain() {
   // feed.drain — at-least-once: the server serves everything past each
   // lieutenant's committed ack cursor and drain never advances it. After
   // HANDLING the items, run `bc-axi ack <seq>` with the highest seq handled;
-  // until then every drain re-offers the same items (dedupe by seq).
+  // until then every drain re-offers the same items (dedupe by seq). An
+  // identified drain does advance the separate drained cursor — the captain's
+  // board flips the message from queued/unseen to seen/responding.
   // Default output is agent-ergonomic (card context + next-action hint per
   // item); --json prints the raw QueueItems, one JSON line each.
   const sess = currentTmuxSession();

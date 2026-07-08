@@ -151,7 +151,7 @@ test('owed: flips true on a captain thread message, false on lieutenant reply, s
   }
 });
 
-test('owedState: queued while the message sits unacked, seen after the drain is acked, null on reply', async () => {
+test('owedState: queued while undrained, seen the moment a drain serves it (no ack), null on reply', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   let s = null;
   try {
@@ -159,8 +159,8 @@ test('owedState: queued while the message sits unacked, seen after the drain is 
     await s.api('POST', '/api/cards', withOwner({ title: 'Tri' }));
     assert.strictEqual((await cardStatus(s, 'tri')).owedState, null);
 
-    // captain message → durable queue item, unacked: the lieutenant has NOT seen it
-    const f = await s.api('POST', '/api/feedback', { target: 'card:tri', text: 'you there?' });
+    // captain message → durable queue item, undrained: the lieutenant has NOT seen it
+    await s.api('POST', '/api/feedback', { target: 'card:tri', text: 'you there?' });
     let st = await cardStatus(s, 'tri');
     assert.strictEqual(st.owed, true);
     assert.strictEqual(st.owedState, 'queued');
@@ -170,21 +170,43 @@ test('owedState: queued while the message sits unacked, seen after the drain is 
     s = await startServer({ dir });
     assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'queued');
 
-    // draining alone is not seeing — only the committed ack advances the cursor
+    // DRAINING IS SEEING: a lieutenant drains at turn start and acks only at
+    // turn end, so the drain alone — no ack — must flip queued→seen. (The
+    // ack-keyed version shipped in PR #9 left the whole working phase 'queued'.)
     await s.api('GET', '/api/feed?lieutenant=ada');
-    assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'queued');
-    await s.api('POST', '/api/feed/ack', { seq: f.body.seq });
     st = await cardStatus(s, 'tri');
     assert.strictEqual(st.owed, true);
-    assert.strictEqual(st.owedState, 'seen'); // drained, reply still owed
+    assert.strictEqual(st.owedState, 'seen'); // drained, reply still owed — the working window
+
+    // the drained cursor is durable: seen survives a restart with no ack ever written
+    await s.stop();
+    s = await startServer({ dir });
+    assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'seen');
 
     await s.api('POST', '/api/message', { target: 'card:tri', text: 'here' });
     st = await cardStatus(s, 'tri');
     assert.strictEqual(st.owed, false);
     assert.strictEqual(st.owedState, null);
+
+    // a FRESH captain message re-queues: the old cursor must not mark it seen
+    await s.api('POST', '/api/feedback', { target: 'card:tri', text: 'and now?' });
+    assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'queued');
   } finally {
     if (s) await s.stop();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('owedState: ack with no drain on record still reads seen (ack implies seen)', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Ackonly' }));
+    const f = await s.api('POST', '/api/feedback', { target: 'card:ackonly', text: 'ping' });
+    assert.strictEqual((await cardStatus(s, 'ackonly')).owedState, 'queued');
+    await s.api('POST', '/api/feed/ack', { seq: f.body.seq });
+    assert.strictEqual((await cardStatus(s, 'ackonly')).owedState, 'seen');
+  } finally {
+    await s.stop();
   }
 });
 
@@ -202,8 +224,9 @@ test('board payload: cards carry owedState and lieutenants carry chatQueued for 
     assert.strictEqual(b.lieutenants[0].chatQueued, true);
     assert.strictEqual(b.cards[0].status.owedState, 'queued');
 
-    // ack both messages: main chat pickup and card pickup are independent bits
-    await s.api('POST', '/api/feed/ack', { seq: Math.max(f.body.seq, fc.body.seq) });
+    // one drain (no ack) picks up both: main chat and card flip to seen together
+    assert.ok(f.body.seq && fc.body.seq);
+    await s.api('GET', '/api/feed?lieutenant=ada');
     b = (await s.api('GET', '/api/board')).body;
     assert.strictEqual(b.lieutenants[0].chatQueued, false);
     assert.strictEqual(b.cards[0].status.owedState, 'seen');
