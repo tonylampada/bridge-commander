@@ -1,6 +1,6 @@
 // board: lieutenant lane above the columns, dense tiles, drag&drop, long-press
 // move menu, new-card / new-lieutenant modals.
-import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwed, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
+import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
 import { api } from './api.js';
 import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged } from './util.js';
 import { labelChipHtml } from './labels.js';
@@ -23,10 +23,12 @@ function ltCardHtml(l) {
   const working = mine.filter((c) => c.column === 'working').length;
   const unread = lieutenantUnread(l);
   const active = S.chatMode && S.chatMode.mode === 'lieutenant' && S.chatMode.id === l.id;
-  const owed = targetOwed('lieutenant:' + l.id);
+  const owed = targetOwedState('lieutenant:' + l.id);
   const staleW = owed && targetOwedStale('lieutenant:' + l.id);
   const ind = staleW
     ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
+    : owed === 'queued'
+    ? '<span class="t-typing queued" title="delivered — not picked up yet">✓</span>'
     : owed
     ? '<span class="t-typing" title="owes you a reply"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
     : '';
@@ -89,13 +91,16 @@ function tileHtml(c) {
   const msgs = (c.thread || []).length;
   const st = cardStatus(c);
   // "the lieutenant owes you a reply" balloon: SAME source as the chat typing
-  // bubble (card.status.owed, server-derived), so tile and chat can never drift.
-  // Takes priority over the unread dot — one unambiguous corner indicator.
+  // bubble (card.status.owedState, server-derived), so tile and chat can never
+  // drift. Takes priority over the unread dot — one unambiguous corner indicator.
   // stale-owed mirrors the chat's "may be stuck" state: static amber ⚠, no dots.
-  const owed = !!st.owed;
+  // queued mirrors the chat's "delivered, not picked up": static check, no dots.
+  const owed = targetOwedState('card:' + c.id);
   const staleW = owed && targetOwedStale('card:' + c.id);
   const cornerInd = staleW
     ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
+    : owed === 'queued'
+    ? '<span class="t-typing queued" title="delivered — the lieutenant hasn\'t picked it up yet">✓</span>'
     : owed
     ? '<span class="t-typing" title="the lieutenant owes you a reply here"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
     : (st.unread ? '<span class="t-unread" title="unread activity"></span>' : '');

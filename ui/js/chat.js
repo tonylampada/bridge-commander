@@ -2,7 +2,7 @@
 // the lieutenant's main chat or one of its card threads (a card thread's
 // interlocutor is always the owning lieutenant). Whole-window mode switch,
 // premium composer.
-import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, cardStatus, cardActivityTs, render, threadUnread, targetOwed, targetOwedStale, USER } from './state.js';
+import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged } from './util.js';
 import { md } from './md.js';
@@ -90,14 +90,23 @@ function msgHtml(m) {
   return '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body +
     '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
 }
-function typingHtml(stale, name) {
-  // the "owes you a reply" balloon (card.status.owed / the main-chat rule).
-  // stale = owed past the threshold: a DISTINCT "may be stuck" state, static and
-  // amber, so a dropped message never looks like a healthy pending reply forever
-  if (stale) {
+function typingHtml(state, name) {
+  // the "owes you a reply" balloon (card.status.owedState / the main-chat rule),
+  // one visual per state so queued-unseen never masquerades as being worked on:
+  // 'stale'  = owed past the threshold: a DISTINCT "may be stuck" state, static
+  //            and amber, so a dropped message never looks healthy forever
+  // 'queued' = delivered to the durable inbox but NOT drained yet — static
+  //            single check, "waiting to be picked up", no typing animation
+  // 'seen'   = drained; the lieutenant owes the reply for real — animated dots
+  if (state === 'stale') {
     return '<div class="msg agent typing stale" title="no response for a while — the message may not have reached ' + esc(name) + '">' +
       '<span class="twarn">⚠</span>' +
       '<span class="lbl">no response yet — ' + esc(name) + ' may be stuck</span></div>';
+  }
+  if (state === 'queued') {
+    return '<div class="msg agent typing queued" title="delivered — ' + esc(name) + ' hasn\'t picked it up yet">' +
+      '<span class="tcheck">✓</span>' +
+      '<span class="lbl">delivered — waiting for ' + esc(name) + ' to pick it up</span></div>';
   }
   return '<div class="msg agent typing" title="' + esc(name) + ' owes you a reply here">' +
     '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
@@ -208,7 +217,8 @@ export function renderChat() {
     if (hidden) blocks.push({ html: '<button class="feed-expand" type="button">show earlier messages (' + hidden + ')</button>' });
     for (const m of msgs.slice(hidden)) push(m);
   }
-  const tail = targetOwed(target) ? typingHtml(targetOwedStale(target), ltName) : '';
+  const owedState = targetOwedState(target);
+  const tail = owedState ? typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName) : '';
 
   const prev = feed;
   feed = { key: target, blocks, tail };
