@@ -48,7 +48,7 @@ test('absent when no worker; state absent (or worker null) unlinks', async () =>
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Bare' }));
     let st = await cardStatus(s, 'bare');
-    assert.deepStrictEqual(st, { worker: { id: null, state: 'absent' }, owed: false, unread: false });
+    assert.deepStrictEqual(st, { worker: { id: null, state: 'absent' }, owed: false, owedState: null, unread: false });
 
     await s.api('POST', '/api/cards/bare/status', { worker: { id: 'w1', state: 'idle' } });
     st = await cardStatus(s, 'bare');
@@ -148,6 +148,67 @@ test('owed: flips true on a captain thread message, false on lieutenant reply, s
   } finally {
     if (s) await s.stop();
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('owedState: queued while the message sits unacked, seen after the drain is acked, null on reply', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
+  let s = null;
+  try {
+    s = await startServerWithLieutenant({ dir });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Tri' }));
+    assert.strictEqual((await cardStatus(s, 'tri')).owedState, null);
+
+    // captain message → durable queue item, unacked: the lieutenant has NOT seen it
+    const f = await s.api('POST', '/api/feedback', { target: 'card:tri', text: 'you there?' });
+    let st = await cardStatus(s, 'tri');
+    assert.strictEqual(st.owed, true);
+    assert.strictEqual(st.owedState, 'queued');
+
+    // queued derives from the queue files, so a restart must not forget it
+    await s.stop();
+    s = await startServer({ dir });
+    assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'queued');
+
+    // draining alone is not seeing — only the committed ack advances the cursor
+    await s.api('GET', '/api/feed?lieutenant=ada');
+    assert.strictEqual((await cardStatus(s, 'tri')).owedState, 'queued');
+    await s.api('POST', '/api/feed/ack', { seq: f.body.seq });
+    st = await cardStatus(s, 'tri');
+    assert.strictEqual(st.owed, true);
+    assert.strictEqual(st.owedState, 'seen'); // drained, reply still owed
+
+    await s.api('POST', '/api/message', { target: 'card:tri', text: 'here' });
+    st = await cardStatus(s, 'tri');
+    assert.strictEqual(st.owed, false);
+    assert.strictEqual(st.owedState, null);
+  } finally {
+    if (s) await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('board payload: cards carry owedState and lieutenants carry chatQueued for the main chat', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Pay' }));
+    let b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatQueued, false);
+    assert.strictEqual(b.cards[0].status.owedState, null);
+
+    const f = await s.api('POST', '/api/feedback', { target: 'lieutenant:ada', text: 'ping' });
+    const fc = await s.api('POST', '/api/feedback', { target: 'card:pay', text: 'ping card' });
+    b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatQueued, true);
+    assert.strictEqual(b.cards[0].status.owedState, 'queued');
+
+    // ack both messages: main chat pickup and card pickup are independent bits
+    await s.api('POST', '/api/feed/ack', { seq: Math.max(f.body.seq, fc.body.seq) });
+    b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.lieutenants[0].chatQueued, false);
+    assert.strictEqual(b.cards[0].status.owedState, 'seen');
+  } finally {
+    await s.stop();
   }
 });
 

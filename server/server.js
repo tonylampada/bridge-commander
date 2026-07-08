@@ -525,15 +525,38 @@ function lastThreadReadMs(target, user) {
   const ts = r && r.threads && r.threads[target];
   return ts ? Date.parse(ts) : 0;
 }
-function cardStatus(card, user) {
+// owed splits into a tri-state, because "unanswered" hides two very different
+// situations: the captain's message may still sit PENDING in the owner's queue
+// (unacked kind:'message' item — the lieutenant never saw it), or the lieutenant
+// drained it and simply hasn't replied yet. owedState says which:
+//   'queued' = owed AND a pending message item targets this thread (unseen)
+//   'seen'   = owed, no pending item (drained; the reply is owed for real)
+//   null     = not owed
+// `pendingMsgs` is the precomputed Set of targets with a pending message item
+// (one queue scan per serialization); absent, it is derived for this card alone.
+function pendingMessageTargets() {
+  const set = new Set();
+  for (const lt of queueIds()) {
+    for (const it of pendingItems(lt)) if (it.kind === 'message' && it.target) set.add(it.target);
+  }
+  return set;
+}
+function cardStatus(card, user, pendingMsgs) {
   const thread = card.thread || [];
   const last = thread.length ? thread[thread.length - 1] : null;
   const owed = !!(last && last.author === 'user'); // latest thread message is the captain's, unanswered
+  let owedState = null;
+  if (owed) {
+    const queued = pendingMsgs
+      ? pendingMsgs.has('card:' + card.id)
+      : pendingItems(card.owner).some((it) => it.kind === 'message' && it.target === 'card:' + card.id);
+    owedState = queued ? 'queued' : 'seen';
+  }
   const readMs = lastThreadReadMs('card:' + card.id, user);
   let unread = false;
   for (const m of thread) if (m.author !== 'user' && Date.parse(m.ts) > readMs) { unread = true; break; }
   if (!unread) for (const e of card.events || []) if (e.level === 1 && Date.parse(e.ts) > readMs) { unread = true; break; }
-  return { worker: derivedWorker(card), owed, unread };
+  return { worker: derivedWorker(card), owed, owedState, unread };
 }
 // Last REAL activity on a card, derived (never persisted). A card's mutable
 // `updated` is bumped by incidental/system writes too — a status-lease refresh or
@@ -549,8 +572,8 @@ function cardActivity(card) {
 }
 // Serialization view: cards go out with the derived `status` and `activity`
 // attached; the stored board keeps only the raw lease.
-function publicCard(card, user) {
-  return Object.assign({}, card, { status: cardStatus(card, user), activity: cardActivity(card) });
+function publicCard(card, user, pendingMsgs) {
+  return Object.assign({}, card, { status: cardStatus(card, user, pendingMsgs), activity: cardActivity(card) });
 }
 // The served board carries the EFFECTIVE kinds map (built-ins merged under the
 // registered entries); the stored board keeps only the registered map.
@@ -559,7 +582,15 @@ function publicCard(card, user) {
 // the old stream.
 const BOOT_ID = process.pid + '-' + Date.now();
 function publicBoard(user) {
-  return Object.assign({}, board, { boot: BOOT_ID, kinds: effectiveKinds(), cards: board.cards.map((c) => publicCard(c, user)) });
+  const pendingMsgs = pendingMessageTargets(); // one queue scan for the whole payload
+  return Object.assign({}, board, {
+    boot: BOOT_ID,
+    kinds: effectiveKinds(),
+    cards: board.cards.map((c) => publicCard(c, user, pendingMsgs)),
+    // chatQueued mirrors owedState:'queued' for a lieutenant's MAIN chat (the UI
+    // derives main-chat owed client-side; the seen/unseen bit only lives here).
+    lieutenants: board.lieutenants.map((l) => Object.assign({}, l, { chatQueued: pendingMsgs.has('lieutenant:' + l.id) })),
+  });
 }
 
 // status.set — the ONLY writer of card.status.worker.
@@ -1943,6 +1974,7 @@ const server = http.createServer(async (req, res) => {
       const r = commitAck(seq, ackOwner || null);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       nudged.delete(r.lieutenant); // handled: a fresh append nudges anew
+      broadcast(); // the ack moved owedState queued→seen; the UI must see the flip
       return sendJson(res, 200, r);
     }
 

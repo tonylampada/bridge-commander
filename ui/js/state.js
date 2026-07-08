@@ -71,19 +71,26 @@ export function cardRecency(c) { return (c && (c.activity || c.updated)) || ''; 
 export function cardStatus(c) {
   return (c && c.status) || { worker: { id: null, state: 'absent' }, owed: false, unread: false };
 }
-// owed on a target: cards carry the server-derived status.owed; a lieutenant's
-// main chat uses the same latest-message rule, derived here from the doc.
-export function targetOwed(target) {
+// owed on a target, as a tri-state: null (nothing owed), 'queued' (the message
+// is durably in the lieutenant's inbox but NOT yet drained — unseen), or 'seen'
+// (drained; the lieutenant is actively on the hook for a reply). Cards carry the
+// server-derived status.owedState; a lieutenant's main chat uses the same
+// latest-message rule derived here plus the server's chatQueued bit.
+export function targetOwedState(target) {
   const lt = /^lieutenant:(.+)$/.exec(target || '');
   if (lt) {
     const l = lieutenant(lt[1]);
     const ch = (l && l.chat) || [];
     const last = ch[ch.length - 1];
-    return !!(last && last.author === USER);
+    if (!(last && last.author === USER)) return null;
+    return l.chatQueued ? 'queued' : 'seen';
   }
   const c = card((target || '').slice(5));
-  return !!c && !!cardStatus(c).owed;
+  const st = c && cardStatus(c);
+  if (!st || !st.owed) return null;
+  return st.owedState || 'seen'; // older server payload: owed only — assume seen
 }
+export function targetOwed(target) { return !!targetOwedState(target); }
 // "may be stuck": owed with no lieutenant reply for longer than the stale
 // threshold. Purely client-derived from thread timestamps; the periodic
 // re-render refreshes it.
