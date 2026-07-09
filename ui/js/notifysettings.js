@@ -2,7 +2,7 @@
 // section of the settings panel, and the driver that turns new board events
 // into toasts/sounds. Mirrors voice.js's localStorage + gesture-unlock pattern.
 import { kindEmoji } from './state.js';
-import { defaultCategoryPolicy, policyFor, selectNewEvents } from './notifypolicy.js';
+import { defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages } from './notifypolicy.js';
 import * as sound from './sound.js';
 import * as toast from './toast.js';
 
@@ -48,18 +48,26 @@ function setOverride(cat, patch) {
   saveSettings();
 }
 
-// ---------- driver: new events -> toast/sound ----------
-// mirrors voice.js's trackMessages: first call just seeds the seen-set (no
-// firing), thereafter each genuinely-new event resolves its policy.
+// ---------- driver: new events + chat messages -> toast/sound ----------
+// mirrors voice.js's trackMessages: first call just seeds both seen-sets (no
+// firing), thereafter each genuinely-new event/message resolves its policy.
 let firstLoad = true;
 const seen = new Set();
+const seenMsgs = new Set();
 export function trackEvents(doc) {
   if (!doc) return;
   const events = selectNewEvents(seen, doc);
+  const messages = selectNewMessages(seenMsgs, doc);
   if (firstLoad) { firstLoad = false; return; }
   for (const e of events) {
     const p = policyFor(e.kind, e.level, settings);
     if (p.toast) toast.push({ emoji: kindEmoji(e.kind), text: e.text, cardTitle: e.cardTitle, actor: e.actor, card: e.card });
+    if (p.sound && p.sound !== 'none') sound.play(p.sound);
+  }
+  for (const m of messages) {
+    if (m.author === 'user') continue; // never notify the captain of his own messages
+    const p = policyFor('reply', 1, settings);
+    if (p.toast) toast.push({ emoji: '💬', text: m.text, cardTitle: m.cardTitle, actor: m.author, card: m.card });
     if (p.sound && p.sound !== 'none') sound.play(p.sound);
   }
 }

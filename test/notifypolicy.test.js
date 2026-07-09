@@ -6,9 +6,9 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let categorize, defaultCategoryPolicy, policyFor, selectNewEvents;
+let categorize, defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages;
 test.before(async () => {
-  ({ categorize, defaultCategoryPolicy, policyFor, selectNewEvents } =
+  ({ categorize, defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'notifypolicy.js')).href));
 });
 
@@ -96,4 +96,41 @@ test('selectNewEvents: a doc with a brand-new higher-seq event returns just that
   const out = selectNewEvents(seen, doc);
   assert.deepStrictEqual(out.map((e) => e.seq), [5]);
   assert.ok(seen.has(5));
+});
+
+test('selectNewMessages: returns new messages from both lieutenant chat and card threads, ascending by ts, and mutates the seen set', () => {
+  const doc = {
+    lieutenants: [{ id: 'l1', chat: [{ ts: 3, author: 'l1', text: 'hey' }] }],
+    cards: [{ id: 'c1', title: 'Card 1', thread: [{ ts: 1, author: 'user', text: 'hi' }, { ts: 2, author: 'l1', text: 'ok' }] }],
+  };
+  const seen = new Set();
+  const first = selectNewMessages(seen, doc);
+  assert.deepStrictEqual(first.map((m) => m.ts), [1, 2, 3]);
+  assert.strictEqual(first[0].card, 'c1');
+  assert.strictEqual(first[0].cardTitle, 'Card 1');
+  assert.strictEqual(first[2].card, undefined); // lieutenant chat has no card
+  assert.strictEqual(seen.size, 3);
+});
+
+test('selectNewMessages: a second call with the same doc returns nothing (dedup)', () => {
+  const doc = { cards: [{ id: 'c1', title: 'Card 1', thread: [{ ts: 1, author: 'user', text: 'hi' }] }] };
+  const seen = new Set();
+  selectNewMessages(seen, doc);
+  const second = selectNewMessages(seen, doc);
+  assert.deepStrictEqual(second, []);
+});
+
+test('selectNewMessages: a brand-new message on the next doc returns just that one', () => {
+  const doc1 = { cards: [{ id: 'c1', title: 'Card 1', thread: [{ ts: 1, author: 'user', text: 'hi' }] }] };
+  const seen = new Set();
+  selectNewMessages(seen, doc1);
+  const doc2 = { cards: [{ id: 'c1', title: 'Card 1', thread: [{ ts: 1, author: 'user', text: 'hi' }, { ts: 2, author: 'l1', text: 'reply' }] }] };
+  const second = selectNewMessages(seen, doc2);
+  assert.deepStrictEqual(second.map((m) => m.text), ['reply']);
+});
+
+test('selectNewMessages: does not filter by author itself — that filtering is the driver\'s job', () => {
+  const doc = { cards: [{ id: 'c1', title: 'Card 1', thread: [{ ts: 1, author: 'user', text: 'hi' }] }] };
+  const out = selectNewMessages(new Set(), doc);
+  assert.deepStrictEqual(out.map((m) => m.author), ['user']);
 });
