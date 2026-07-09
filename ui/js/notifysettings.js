@@ -104,7 +104,7 @@ function rowFor(cat) {
   for (const n of sound.SOUND_NAMES) {
     const o = document.createElement('option');
     o.value = n;
-    o.textContent = n;
+    o.textContent = sound.SOUND_LABELS[n] || n;
     sel.appendChild(o);
   }
   sel.value = eff.sound;
