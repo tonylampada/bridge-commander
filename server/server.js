@@ -840,10 +840,11 @@ function readAttachmentMeta(id) {
 // decoded Buffer (size already enforced by the caller).
 function storeAttachment(name, mime, data) {
   const id = newAttachmentId();
-  const stored = id + '__' + safeUploadName(name);
+  const safe = safeUploadName(name);
+  const stored = id + '__' + safe;
   fs.writeFileSync(path.join(UPLOADS_DIR, stored), data);
   const meta = {
-    id, name: safeUploadName(name), mime: String(mime || 'application/octet-stream').slice(0, 200),
+    id, name: safe, mime: String(mime || 'application/octet-stream').slice(0, 200),
     size: data.length, stored, created: now(),
   };
   fs.writeFileSync(attachmentSidecar(id), JSON.stringify(meta));
@@ -863,14 +864,6 @@ function resolveAttachments(list) {
     if (meta) out.push({ id: meta.id, name: meta.name, mime: meta.mime, size: meta.size, path: meta.path });
   }
   return out;
-}
-// One-line agent-facing rendering of a message's attachments: absolute path +
-// mime per file. Without the PATH in the drain/thread text the agent can't Read
-// the file — this is the whole point of B.
-function attachmentsLine(atts) {
-  if (!Array.isArray(atts) || !atts.length) return '';
-  const parts = atts.map((a) => (a.path || '') + (a.mime ? ' (' + a.mime + ')' : ''));
-  return atts.length + ' attachment' + (atts.length > 1 ? 's' : '') + ': ' + parts.join(', ');
 }
 function findCard(id) { return board.cards.find((c) => c.id === id); }
 // Chat targets: lieutenant:<id> (main chat) | card:<id> (card thread).
@@ -1892,10 +1885,16 @@ const server = http.createServer(async (req, res) => {
       if (!meta) return sendJson(res, 404, { error: 'unknown attachment' });
       let data;
       try { data = fs.readFileSync(meta.path); } catch (e) { return sendJson(res, 404, { error: 'unreadable' }); }
+      // Uploaded bytes are untrusted content served from the board's own origin.
+      // nosniff pins the stored Content-Type (no MIME sniffing into executable
+      // types); the sandbox CSP neutralizes scripts if an HTML/SVG upload is
+      // navigated to as a document — inline <img> subresources are unaffected.
       res.writeHead(200, {
         'Content-Type': meta.mime || 'application/octet-stream',
         'Content-Length': data.length,
         'Cache-Control': 'private, max-age=31536000, immutable',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': 'sandbox',
       });
       return res.end(data);
     }

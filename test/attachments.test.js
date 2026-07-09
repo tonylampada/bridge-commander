@@ -31,6 +31,9 @@ test('upload → stored + served with the right Content-Type and correct size', 
     const res = await fetch(s.base + '/api/attachments/' + up.body.id);
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.headers.get('content-type'), 'text/plain');
+    // untrusted content served from our own origin: sniffing off + sandboxed
+    assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.strictEqual(res.headers.get('content-security-policy'), 'sandbox');
     assert.strictEqual(await res.text(), payload);
   } finally {
     await s.stop();

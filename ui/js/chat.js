@@ -449,10 +449,10 @@ async function send() {
   sendBtn.classList.add('sending');
   inputEl.readOnly = true; // the pending text must stay exactly what was sent
   try {
-    // Upload each staged file first (A), then post the message with the returned
-    // attachment metas (the server re-resolves them authoritatively by id).
-    const metas = [];
-    for (const p of atts) metas.push(await api.uploadAttachment(p.file));
+    // Upload the staged files first (A) — concurrently, since they're
+    // independent — then post the message with the returned attachment metas
+    // (the server re-resolves them authoritatively by id).
+    const metas = await Promise.all(atts.map((p) => api.uploadAttachment(p.file)));
     await api.feedback(target, text, metas);
     // With text, wait for its echo; attachments-only has no text to match, so the
     // 200 is the confirmation (the SSE board push renders the bubble a beat later).

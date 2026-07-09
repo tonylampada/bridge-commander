@@ -223,35 +223,46 @@ async function openArtifact(uri) {
 // content, everything else downloads. Served straight from /api/attachments/:id
 // (never /api/artifact — an attachment need not be a promoted card artifact).
 const TEXTY_MIME = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|yaml|csv|x-www-form-urlencoded)|image\/svg)/;
+const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const TEXT_EXT = /\.(md|markdown|txt|log|json|ya?ml|csv|js|ts|py|sh|css|html?)$/i;
 export async function openAttachment(att) {
   const url = '/api/attachments/' + encodeURIComponent(att.id);
-  avReset(att.name || att.id, att.name);
+  const name = att.name || '';
+  avReset(name || att.id, name);
   avDownload.href = url;
-  avDownload.setAttribute('download', att.name || 'file');
+  avDownload.setAttribute('download', name || 'file');
   avDownload.hidden = false;
-  const isImg = isImageMime(att.mime) || /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i.test(att.name || '');
-  if (isImg) {
-    avBody.hidden = true;
-    avImgWrap.hidden = false;
-    avImg.src = url;
-    avImg.alt = att.name || '';
-    return;
-  }
-  if (TEXTY_MIME.test(String(att.mime || '')) || /\.(md|markdown|txt|log|json|ya?ml|csv|js|ts|py|sh|css|html?)$/i.test(att.name || '')) {
+  const showImage = () => { avBody.hidden = true; avImgWrap.hidden = false; avImg.src = url; avImg.alt = name; };
+  const showText = (text) => {
+    if (MD_EXT.test(name)) { avBody.className = 'md'; avBody.innerHTML = md(text); }
+    else { avBody.className = ''; avBody.textContent = text; }
+  };
+  const mime = String(att.mime || '');
+  // Decide from mime/extension when possible; a promoted artifact carries only
+  // {uri, label}, so its mime may be unknown — then consult the served
+  // Content-Type before falling back to a download.
+  if (isImageMime(mime) || (!mime && IMG_EXT.test(name))) return showImage();
+  if (TEXTY_MIME.test(mime) || (!mime && TEXT_EXT.test(name))) {
     avBody.textContent = 'loading…';
     try {
       const r = await fetch(url);
       if (!r.ok) throw new Error('HTTP ' + r.status);
-      const text = await r.text();
-      if (MD_EXT.test(att.name || '')) { avBody.className = 'md'; avBody.innerHTML = md(text); }
-      else { avBody.className = ''; avBody.textContent = text; }
-    } catch (e) {
-      avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)';
-    }
+      showText(await r.text());
+    } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
     return;
   }
-  // binary: no inline preview — offer the download and say so
-  avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.';
+  if (mime) { avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.'; return; }
+  // Unknown mime AND an undecided name (e.g. a promoted image with a custom
+  // label): ask the server what it is, then render accordingly.
+  avBody.textContent = 'loading…';
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const ct = (r.headers.get('content-type') || '').split(';')[0];
+    if (isImageMime(ct)) return showImage();
+    if (TEXTY_MIME.test(ct)) return showText(await r.text());
+    avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.';
+  } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
 }
 export function closeArtifact() { avOverlay.hidden = true; }
 export function artifactOpen() { return !avOverlay.hidden; }
