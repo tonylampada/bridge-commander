@@ -64,24 +64,35 @@ export const SOUND_LABELS = { 'chime':'Chime','ding':'Ding','bell-tower':'Bell T
 
 // Fail silently on any audio hazard (no context, suspended and can't resume,
 // unknown name) — this is called from the SSE event path and must never throw.
+// Chrome starts (and re-suspends, e.g. on tab background) the AudioContext in
+// 'suspended' state; scheduling a tone into a suspended context is silently
+// dropped, so resume first and only schedule once it's actually running.
 export function play(name) {
   if (!name || name === 'none') return;
   const fn = PALETTE[name];
   if (!fn) return;
   const c = ensureCtx();
   if (!c) return;
-  try {
-    if (c.state === 'suspended') c.resume().catch(() => {});
-    fn(c.currentTime + 0.01);
-  } catch (e) {}
+  const run = () => { try { fn(c.currentTime + 0.02); } catch (e) {} };
+  if (c.state === 'suspended') { c.resume().then(run).catch(() => {}); }
+  else run();
 }
 
-// Global gesture primer: the first click/keydown anywhere unlocks the audio
-// context ahead of time, so the FIRST real notification (which rides no
-// gesture of its own) can still play instead of being silently dropped.
+// Global gesture primer: the first gesture anywhere unlocks the audio context
+// ahead of time, so the FIRST real notification (which rides no gesture of
+// its own) can still play instead of being silently dropped. Attached in the
+// capture phase (runs before target handlers) across several gesture types,
+// because the board's first click is often a control like the gear icon that
+// calls stopPropagation() — a bubble-phase window listener would miss it.
 function primeOnGesture() {
   const c = ensureCtx();
   if (c && c.state === 'suspended') c.resume().catch(() => {});
+  for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.removeEventListener(ev, primeOnGesture, true);
 }
-window.addEventListener('click', primeOnGesture, { once: true, passive: true });
-window.addEventListener('keydown', primeOnGesture, { once: true, passive: true });
+for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.addEventListener(ev, primeOnGesture, { capture: true, passive: true });
+
+// Re-resume proactively on refocus so the next notification after a
+// backgrounded tab isn't the one that eats the resume latency.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
+});
