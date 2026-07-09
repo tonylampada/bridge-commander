@@ -2,32 +2,48 @@
 // NO DOM, NO WebAudio, NO side effects at import: safe for node --test to import
 // directly. Kept separate from state.js/sound.js/toast.js so the policy itself
 // stays trivially unit-testable.
+//
+// The captain asked for 4 semantic buckets instead of one row per event kind
+// (server/server.js's BUILTIN_KINDS is a couple dozen entries and growing —
+// too many toggles to reason about). categorize() is the single place that
+// maps a kind name to a bucket; everything downstream only ever deals with
+// the 4 buckets.
 
-// Kinds that mean "the captain needs to act right now" get the loud alert tone,
-// regardless of what the server's built-in kinds map calls them today — this
-// list is deliberately name-based (not level-based) so it still applies if a
-// lieutenant later registers a custom kind under one of these names.
-const RED_KINDS = new Set(['failed', 'needs-you', 'needs-captain', 'blocked', 'worker-died']);
-// Level-1 kinds about a worker going quiet/away get a duller double-tap instead
-// of the bright chime used for ordinary good-news level-1 events.
-const KNOCK_KINDS = new Set(['worker-stalled', 'worker-stopped']);
+const DONE_KINDS = new Set(['worker-done', 'landed', 'handoff', 'done']);
+const CHAT_KINDS = new Set(['reply', 'question', 'message']);
+const ERROR_KINDS = new Set(['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled']);
 
-// Out-of-box behavior for a kind with no saved override.
-export function defaultsFor(kind, level) {
-  if (level === 2) return { toast: false, sound: 'none' };
-  if (RED_KINDS.has(kind)) return { toast: true, sound: 'alert' };
-  if (KNOCK_KINDS.has(kind)) return { toast: true, sound: 'knock' };
-  return { toast: true, sound: 'chime' };
+// Maps a kind (+ level, currently unused but kept for symmetry with the old
+// per-kind API and in case a future kind needs level to disambiguate) to one
+// of the 4 semantic categories. Anything not explicitly listed — including
+// level-2 chatter like created/moved/ordered/started/signal — falls into
+// 'other', which is OFF by default: the captain said this bucket "não deve
+// ser importante".
+export function categorize(kind, level) {
+  if (DONE_KINDS.has(kind)) return 'done';
+  if (CHAT_KINDS.has(kind)) return 'chat';
+  if (ERROR_KINDS.has(kind)) return 'error';
+  return 'other';
 }
 
-// Resolve a kind's effective policy: saved per-kind override on top of the
-// level default, honoring the master on/off switch. A kind absent from
-// settings.kinds falls through to its level default, so newly registered
-// kinds behave sensibly with zero configuration.
+// Out-of-box behavior per category.
+export function defaultCategoryPolicy() {
+  return {
+    done: { toast: true, sound: 'chime' },
+    chat: { toast: true, sound: 'ding' },
+    error: { toast: true, sound: 'alert' },
+    other: { toast: false, sound: 'none' },
+  };
+}
+
+// Resolve a kind's effective policy: categorize it, then apply the saved
+// per-category override on top of that category's default, honoring the
+// master on/off switch.
 export function policyFor(kind, level, settings) {
   if (!settings || settings.master === false) return { toast: false, sound: 'none' };
-  const base = defaultsFor(kind, level);
-  const override = settings.kinds && settings.kinds[kind];
+  const cat = categorize(kind, level);
+  const base = defaultCategoryPolicy()[cat];
+  const override = settings.categories && settings.categories[cat];
   if (!override) return base;
   return {
     toast: override.toast !== undefined ? override.toast : base.toast,

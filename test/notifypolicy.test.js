@@ -6,53 +6,70 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let defaultsFor, policyFor, selectNewEvents;
+let categorize, defaultCategoryPolicy, policyFor, selectNewEvents;
 test.before(async () => {
-  ({ defaultsFor, policyFor, selectNewEvents } =
+  ({ categorize, defaultCategoryPolicy, policyFor, selectNewEvents } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'notifypolicy.js')).href));
 });
 
-test('defaultsFor: red level-1 kinds get alert + toast', () => {
-  for (const kind of ['failed', 'needs-you', 'blocked', 'worker-died']) {
-    assert.deepStrictEqual(defaultsFor(kind, 1), { toast: true, sound: 'alert' });
+test('categorize: work-finished kinds map to done', () => {
+  for (const kind of ['worker-done', 'landed', 'handoff', 'done']) {
+    assert.strictEqual(categorize(kind, 1), 'done');
   }
 });
 
-test('defaultsFor: other level-1 kinds get a toast + non-none sound', () => {
-  for (const kind of ['done', 'handoff', 'question', 'worker-stalled', 'worker-stopped', 'something-new']) {
-    const d = defaultsFor(kind, 1);
-    assert.strictEqual(d.toast, true);
-    assert.notStrictEqual(d.sound, 'none');
+test('categorize: lieutenant-message kinds map to chat', () => {
+  for (const kind of ['reply', 'question', 'message']) {
+    assert.strictEqual(categorize(kind, 1), 'chat');
   }
 });
 
-test('defaultsFor: level-2 kinds are silent regardless of name', () => {
-  for (const kind of ['progress', 'pr-opened', 'worker-linked', 'failed']) {
-    assert.deepStrictEqual(defaultsFor(kind, 2), { toast: false, sound: 'none' });
+test('categorize: needs-captain-now kinds map to error', () => {
+  for (const kind of ['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled']) {
+    assert.strictEqual(categorize(kind, 1), 'error');
   }
 });
 
-test('policyFor: a saved per-kind override wins over the level default', () => {
-  const settings = { master: true, kinds: { done: { toast: false, sound: 'ding' } } };
-  assert.deepStrictEqual(policyFor('done', 1, settings), { toast: false, sound: 'ding' });
+test('categorize: everything else, including unknown kinds, maps to other', () => {
+  for (const kind of ['created', 'moved', 'started', 'brand-new-kind']) {
+    assert.strictEqual(categorize(kind, 2), 'other');
+  }
+});
+
+test('defaultCategoryPolicy: done/chat/error toast on with non-none sounds', () => {
+  const d = defaultCategoryPolicy();
+  for (const cat of ['done', 'chat', 'error']) {
+    assert.strictEqual(d[cat].toast, true);
+    assert.notStrictEqual(d[cat].sound, 'none');
+  }
+});
+
+test('defaultCategoryPolicy: other is toast off + no sound', () => {
+  const d = defaultCategoryPolicy();
+  assert.deepStrictEqual(d.other, { toast: false, sound: 'none' });
+});
+
+test('policyFor: a saved category override wins over its default', () => {
+  const settings = { master: true, categories: { done: { toast: false, sound: 'ding' } } };
+  assert.deepStrictEqual(policyFor('worker-done', 1, settings), { toast: false, sound: 'ding' });
 });
 
 test('policyFor: a partial override only replaces the given field', () => {
-  const settings = { master: true, kinds: { done: { sound: 'blip' } } };
-  const p = policyFor('done', 1, settings);
+  const settings = { master: true, categories: { done: { sound: 'blip' } } };
+  const p = policyFor('landed', 1, settings);
   assert.strictEqual(p.sound, 'blip');
-  assert.strictEqual(p.toast, true); // falls through to the level default
+  assert.strictEqual(p.toast, true); // falls through to the category default
 });
 
 test('policyFor: master:false suppresses everything, override or not', () => {
-  const settings = { master: false, kinds: { failed: { toast: true, sound: 'alert' } } };
+  const settings = { master: false, categories: { error: { toast: true, sound: 'alert' } } };
   assert.deepStrictEqual(policyFor('failed', 1, settings), { toast: false, sound: 'none' });
 });
 
-test('policyFor: an unknown kind with no override falls through to its level default', () => {
-  const settings = { master: true, kinds: {} };
-  assert.deepStrictEqual(policyFor('brand-new-kind', 1, settings), defaultsFor('brand-new-kind', 1));
-  assert.deepStrictEqual(policyFor('brand-new-kind', 2, settings), { toast: false, sound: 'none' });
+test('policyFor: an event whose category has no override uses that category default', () => {
+  const settings = { master: true, categories: {} };
+  assert.deepStrictEqual(policyFor('question', 1, settings), defaultCategoryPolicy().chat);
+  assert.deepStrictEqual(policyFor('created', 2, settings), defaultCategoryPolicy().other);
 });
 
 test('selectNewEvents: returns only unseen seqs ascending and mutates the seen set', () => {

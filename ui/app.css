@@ -379,10 +379,6 @@ body.resizing { user-select: none; cursor: col-resize; }
 .ns-row select:hover { border-color: var(--accent2); color: var(--accent); }
 .ns-row .ns-prev { border: 1px solid var(--line); border-radius: 6px; color: var(--faint); font-size: 11px; padding: 1px 6px; flex: none; }
 .ns-row .ns-prev:hover { color: var(--accent); border-color: var(--accent2); }
-details.ns-quiet { margin-top: 2px; }
-details.ns-quiet summary { color: var(--faint); font-size: 10.5px; cursor: pointer; padding: 3px 0; user-select: none; }
-details.ns-quiet summary:hover { color: var(--dim); }
-details.ns-quiet .ns-row { margin-top: 4px; }
 
 /* ---------- notification toasts ---------- */
 #toast-stack {

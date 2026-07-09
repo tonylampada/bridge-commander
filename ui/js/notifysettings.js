@@ -1,21 +1,32 @@
 // notifysettings.js — persisted notification settings, the "notifications"
 // section of the settings panel, and the driver that turns new board events
 // into toasts/sounds. Mirrors voice.js's localStorage + gesture-unlock pattern.
-import { kinds, kindEmoji } from './state.js';
-import { defaultsFor, policyFor, selectNewEvents } from './notifypolicy.js';
+import { kindEmoji } from './state.js';
+import { defaultCategoryPolicy, policyFor, selectNewEvents } from './notifypolicy.js';
 import * as sound from './sound.js';
 import * as toast from './toast.js';
 
-const KEY = 'bc-notif-settings';
+// New key: the old per-kind blob (bc-notif-settings) is simply ignored, no
+// migration — the settings shape changed too much to translate meaningfully.
+const KEY = 'bc-notify2';
+
+// One row per category, not per kind — the captain said per-kind was too
+// many options. Order here is render order.
+const CATEGORIES = [
+  { key: 'done', emoji: '✅', label: 'Card finished' },
+  { key: 'chat', emoji: '💬', label: 'New chat message' },
+  { key: 'error', emoji: '💥', label: 'Something went wrong' },
+  { key: 'other', emoji: '🔔', label: 'Everything else' },
+];
 
 function loadSettings() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY));
     if (raw && typeof raw === 'object') {
-      return { master: raw.master !== false, volume: typeof raw.volume === 'number' ? raw.volume : 0.7, kinds: Object.assign({}, raw.kinds) };
+      return { master: raw.master !== false, volume: typeof raw.volume === 'number' ? raw.volume : 0.7, categories: Object.assign({}, raw.categories) };
     }
   } catch (e) {}
-  return { master: true, volume: 0.7, kinds: {} };
+  return { master: true, volume: 0.7, categories: {} };
 }
 const settings = loadSettings();
 sound.setVolume(settings.volume);
@@ -24,16 +35,16 @@ function saveSettings() {
   try { localStorage.setItem(KEY, JSON.stringify(settings)); } catch (e) {}
 }
 
-function effective(kind, level) {
-  const ov = settings.kinds[kind] || {};
-  const base = defaultsFor(kind, level);
+function effective(cat) {
+  const ov = settings.categories[cat] || {};
+  const base = defaultCategoryPolicy()[cat];
   return {
     toast: ov.toast !== undefined ? ov.toast : base.toast,
     sound: ov.sound !== undefined ? ov.sound : base.sound,
   };
 }
-function setOverride(kind, patch) {
-  settings.kinds[kind] = Object.assign({}, settings.kinds[kind], patch);
+function setOverride(cat, patch) {
+  settings.categories[cat] = Object.assign({}, settings.categories[cat], patch);
   saveSettings();
 }
 
@@ -68,25 +79,25 @@ function renderMaster() {
 masterBtn.onclick = () => { settings.master = !settings.master; saveSettings(); renderMaster(); };
 volumeInput.oninput = () => { settings.volume = parseFloat(volumeInput.value); sound.setVolume(settings.volume); saveSettings(); };
 
-function rowFor(kind, level) {
+function rowFor(cat) {
   const row = document.createElement('div');
   row.className = 'ns-row';
 
   const em = document.createElement('span');
   em.className = 'ns-em';
-  em.textContent = kindEmoji(kind) || '·';
+  em.textContent = cat.emoji;
 
   const name = document.createElement('span');
   name.className = 'ns-name';
-  name.textContent = kind;
+  name.textContent = cat.label;
 
-  const eff = effective(kind, level);
+  const eff = effective(cat.key);
 
   const cb = document.createElement('input');
   cb.type = 'checkbox';
   cb.title = 'show toast';
   cb.checked = eff.toast;
-  cb.onchange = () => setOverride(kind, { toast: cb.checked });
+  cb.onchange = () => setOverride(cat.key, { toast: cb.checked });
 
   const sel = document.createElement('select');
   sel.title = 'sound';
@@ -97,7 +108,7 @@ function rowFor(kind, level) {
     sel.appendChild(o);
   }
   sel.value = eff.sound;
-  sel.onchange = () => setOverride(kind, { sound: sel.value });
+  sel.onchange = () => setOverride(cat.key, { sound: sel.value });
 
   const prev = document.createElement('button');
   prev.type = 'button';
@@ -110,30 +121,10 @@ function rowFor(kind, level) {
   return row;
 }
 
-let lastListHtml = null;
 function renderList() {
   if (listEl.contains(document.activeElement)) return; // don't clobber an in-progress edit
-  const km = kinds();
-  const entries = Object.keys(km).map((k) => ({ kind: k, level: km[k].level === 2 ? 2 : 1 }));
-  entries.sort((a, b) => a.kind.localeCompare(b.kind));
-  const lvl1 = entries.filter((e) => e.level === 1);
-  const lvl2 = entries.filter((e) => e.level === 2);
-
-  const tmp = document.createElement('div');
-  for (const e of lvl1) tmp.appendChild(rowFor(e.kind, e.level));
-  if (lvl2.length) {
-    const det = document.createElement('details');
-    det.className = 'ns-quiet';
-    const sum = document.createElement('summary');
-    sum.textContent = 'quiet events (' + lvl2.length + ')';
-    det.appendChild(sum);
-    for (const e of lvl2) det.appendChild(rowFor(e.kind, e.level));
-    tmp.appendChild(det);
-  }
-  if (lastListHtml === tmp.innerHTML) return; // same kinds set — leave live rows/interactions alone
-  lastListHtml = tmp.innerHTML;
   listEl.textContent = '';
-  while (tmp.firstChild) listEl.appendChild(tmp.firstChild);
+  for (const cat of CATEGORIES) listEl.appendChild(rowFor(cat));
 }
 
 export function renderNotifSettings() {
