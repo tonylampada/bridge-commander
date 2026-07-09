@@ -6,9 +6,9 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let categorize, defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages;
+let categorize, defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages, shouldSuppressChat;
 test.before(async () => {
-  ({ categorize, defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages } =
+  ({ categorize, defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages, shouldSuppressChat } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'notifypolicy.js')).href));
 });
 
@@ -133,4 +133,29 @@ test('selectNewMessages: does not filter by author itself — that filtering is 
   const doc = { cards: [{ id: 'c1', title: 'Card 1', thread: [{ ts: 1, author: 'user', text: 'hi' }] }] };
   const out = selectNewMessages(new Set(), doc);
   assert.deepStrictEqual(out.map((m) => m.author), ['user']);
+});
+
+test('shouldSuppressChat: focused + chatVisible + matching openTarget suppresses', () => {
+  const ctx = { focused: true, chatVisible: true, openTarget: 'card:c1' };
+  assert.strictEqual(shouldSuppressChat('card:c1', ctx), true);
+});
+
+test('shouldSuppressChat: a different open conversation does not suppress', () => {
+  const ctx = { focused: true, chatVisible: true, openTarget: 'card:c2' };
+  assert.strictEqual(shouldSuppressChat('card:c1', ctx), false);
+});
+
+test('shouldSuppressChat: chat not visible (mobile on board tab) does not suppress', () => {
+  const ctx = { focused: true, chatVisible: false, openTarget: 'card:c1' };
+  assert.strictEqual(shouldSuppressChat('card:c1', ctx), false);
+});
+
+test('shouldSuppressChat: tab not focused does not suppress, even with a matching target', () => {
+  const ctx = { focused: false, chatVisible: true, openTarget: 'card:c1' };
+  assert.strictEqual(shouldSuppressChat('card:c1', ctx), false);
+});
+
+test('shouldSuppressChat: null openTarget does not suppress', () => {
+  const ctx = { focused: true, chatVisible: true, openTarget: null };
+  assert.strictEqual(shouldSuppressChat('card:c1', ctx), false);
 });

@@ -106,3 +106,9 @@ export function selectNewMessages(seenSet, doc) {
   }
   return out;
 }
+
+// True when a chat message for `scope` should NOT notify because the captain is
+// already looking at that exact conversation. ctx: { focused, openTarget, chatVisible }.
+export function shouldSuppressChat(scope, ctx) {
+  return !!(ctx && ctx.focused && ctx.chatVisible && ctx.openTarget && ctx.openTarget === scope);
+}
