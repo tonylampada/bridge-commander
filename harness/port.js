@@ -21,6 +21,21 @@
 //
 // Adding a harness = implementing the seven verbs and registering it here
 // (or shipping it as a builtin module). Nothing else.
+//
+// OPTIONAL capability verbs: beyond the seven REQUIRED verbs a harness MAY
+// expose extra verbs for features not every harness can honor. They are
+// deliberately NOT validated here — adding one to VERBS would force every
+// harness (the fake included) to implement it and break validation. The
+// server capability-checks at the call site (`typeof impl.openPane ===
+// 'function'`) and degrades gracefully when the verb is absent. Current
+// optional verbs (pane viewing — the UI's 👁 peek):
+//   openPane(ref, { onFrame, intervalMs?, lines? }) -> { close() }
+//       deliver the pane's CURRENT RENDERED SCREEN as successive frames:
+//       onFrame(frameString) fires whenever the content changes (identical
+//       frames are skipped); a frame MAY carry ANSI SGR escapes. close()
+//       stops delivery and releases resources. All async-safe.
+//   paneSnapshot(ref, { lines? }) -> Promise<string>
+//       one-shot capture — the initial paint / non-streaming fallback.
 
 const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnEnd'];
 

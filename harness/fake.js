@@ -194,6 +194,52 @@ function kill(ref) {
   if (marker) { try { fs.unlinkSync(marker); } catch { /* already gone */ } }
 }
 
+// ---------- pane viewing (OPTIONAL capability verbs — see port.js) ----------
+// openPane emits deterministic counter frames on the interval — each frame
+// differs from the last, so change-detecting consumers always deliver — letting
+// server tests assert subscribe → frames → teardown without tmux. In
+// file-backed mode every open/close also appends to <key>.pane.jsonl, so a
+// WATCHING test process can assert refcounting (one open, one close) across
+// the process boundary.
+//   BC_FAKE_PANE_MS   default frame interval (callers' intervalMs still wins)
+//   BC_FAKE_NO_PANE   hides both verbs — the "harness without pane support"
+function logPane(session, event) {
+  const dir = fakeStateDir();
+  if (!dir) return;
+  fs.appendFileSync(path.join(dir, session + '.pane.jsonl'),
+    JSON.stringify({ ts: new Date().toISOString(), session, event }) + '\n');
+}
+
+function openPane(ref, opts = {}) {
+  const key = refKey(ref);
+  const onFrame = typeof opts.onFrame === 'function' ? opts.onFrame : () => {};
+  const intervalMs = opts.intervalMs > 0 ? opts.intervalMs
+    : (parseInt(process.env.BC_FAKE_PANE_MS, 10) > 0 ? parseInt(process.env.BC_FAKE_PANE_MS, 10) : 1000);
+  let n = 0;
+  let closed = false;
+  const emit = () => {
+    if (closed) return;
+    n += 1;
+    try { onFrame('fake pane ' + key + ' — frame ' + n + '\n'); } catch { /* subscriber's problem */ }
+  };
+  logPane(key, 'open');
+  const timer = setInterval(emit, intervalMs);
+  timer.unref?.();
+  emit(); // immediate first frame
+  return {
+    close() {
+      if (closed) return;
+      closed = true;
+      clearInterval(timer);
+      logPane(key, 'close');
+    },
+  };
+}
+
+async function paneSnapshot(ref) {
+  return 'fake pane ' + refKey(ref) + ' — snapshot\n';
+}
+
 // --- test helpers ---
 
 function transcript(ref) {
@@ -204,4 +250,11 @@ function reset() {
   sessions.clear();
 }
 
-module.exports = { spawn, send, alive, resumable, resume, onTurnEnd, kill, transcript, reset };
+const impl = { spawn, send, alive, resumable, resume, onTurnEnd, kill, transcript, reset };
+// Pane verbs are OPTIONAL by contract; BC_FAKE_NO_PANE simulates a harness
+// that never implemented them (capability-absent degradation under test).
+if (!process.env.BC_FAKE_NO_PANE) {
+  impl.openPane = openPane;
+  impl.paneSnapshot = paneSnapshot;
+}
+module.exports = impl;
