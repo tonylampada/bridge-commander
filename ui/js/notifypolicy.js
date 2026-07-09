@@ -76,3 +76,33 @@ export function selectNewEvents(seenSet, doc) {
   }
   return out;
 }
+
+// The unified chat/thread stream over a board doc: lieutenant chat + every
+// card's thread, ascending by ts. Mirrors voice.js's trackMessages walk, but
+// as a plain-doc function so it can live here alongside selectNewEvents.
+function docMessages(doc) {
+  const out = [];
+  for (const l of (doc && doc.lieutenants) || []) {
+    for (const m of l.chat || []) out.push(Object.assign({ scope: 'lieutenant:' + l.id }, m));
+  }
+  for (const c of (doc && doc.cards) || []) {
+    for (const m of c.thread || []) out.push(Object.assign({ scope: 'card:' + c.id, card: c.id, cardTitle: c.title }, m));
+  }
+  out.sort((a, b) => a.ts - b.ts);
+  return out;
+}
+
+// Returns the chat/thread messages in `doc` not yet in `seenSet` (ascending
+// by ts), and mutates `seenSet` to include them. Symmetric with
+// selectNewEvents: a pure "what's new" diff that does NOT filter by author —
+// the driver decides whether the captain's own messages should notify.
+export function selectNewMessages(seenSet, doc) {
+  const out = [];
+  for (const m of docMessages(doc)) {
+    const k = m.scope + '|' + m.ts + '|' + m.author + '|' + m.text;
+    if (seenSet.has(k)) continue;
+    seenSet.add(k);
+    out.push({ scope: m.scope, author: m.author, text: m.text, ts: m.ts, card: m.card, cardTitle: m.cardTitle });
+  }
+  return out;
+}
