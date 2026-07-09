@@ -6,6 +6,7 @@ import { trackMessages } from './voice.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, closeOwnerMenu, ownerMenuOpen } from './detail.js';
+import { closePane, paneOpen } from './pane.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
 import './resize.js'; // draggable side-panel widths
@@ -103,6 +104,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === '/' && !inField) { e.preventDefault(); filterInput.focus(); return; }
   if (e.key === 'Escape') {
     if (artifactOpen()) closeArtifact();
+    else if (paneOpen()) closePane();
     else if (newCardOpen()) closeNewCard();
     else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();

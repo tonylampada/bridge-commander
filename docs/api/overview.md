@@ -114,6 +114,17 @@ The server speaks ONLY this port. v0 ships the `claude` implementation (plus a f
 Harness working state (session ids, prompts, turn-end logs) lives in the workspace's
 `.bridge-command/harness/` — never global; spawned session names are unique per workspace.
 
+**Optional capability verbs.** Beyond the seven REQUIRED verbs a harness MAY expose extra
+verbs for features not every harness can honor. The port never validates them (requiring
+one would force every harness, `fake` included, to implement it); the server
+capability-checks at the call site (`typeof impl.openPane === 'function'`) and degrades
+gracefully when the verb is absent. Current optional verbs (pane viewing — the UI's 👁 peek):
+
+| Verb | Signature | Called by | Purpose |
+|---|---|---|---|
+| `harness.openPane` | `ref, {onFrame, intervalMs?, lines?} → {close()}` | ⚙️ pane hub | stream the pane's rendered screen as change-detected frames (strings, MAY carry ANSI SGR) — served to the captain over a dedicated per-target SSE (`GET /api/cards/:id/pane/stream`, `GET /api/lieutenants/:id/pane/stream`), ref-counted so N viewers share ONE feed and the last disconnect releases it; harness lacks the verb → `unsupported`, nothing to watch → `no-pane`, concurrent-pane cap → `busy` (all clean SSE events, never an HTTP error) |
+| `harness.paneSnapshot` | `ref, {lines?} → string` | ⚙️ pane hub | one-shot capture for the stream's initial paint |
+
 ## Invariants
 
 1. **Board is truth.** No shadow files, no mirror: cards + charters + queues in `.bridge-command/` ARE the state. Agent conversation memory is a cache; restart of any session is a non-event.

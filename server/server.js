@@ -673,9 +673,93 @@ function broadcast() {
   const payload = 'event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n';
   for (const res of sseClients) res.write(payload);
 }
+
+// ---------- pane hub (👁 peek: live pane frames over a per-target SSE) ----------
+// The harness port's OPTIONAL openPane capability, ref-counted per pane key:
+// the FIRST subscriber for a key opens ONE harness pane feed, every frame fans
+// out to that key's SSE clients, and the LAST disconnect closes the feed. A
+// dedicated per-target stream, never /api/events — per-card frames must not
+// spam every board client. The server owns ref resolution (card → its worker's
+// ref, lieutenant → its ref); the harness owns how a pane is actually watched.
+// Guards are clean SSE events then close (never a 500, never a hang):
+//   unsupported — the ref's harness exposes no openPane
+//   no-pane     — nothing to watch (unknown target, card not Working, no worker,
+//                 no live session, or the open itself failed)
+//   busy        — the concurrent-pane cap (bounds child-process load) is hit
+const PANE_MAX = parseInt(process.env.BC_PANE_MAX, 10) > 0 ? parseInt(process.env.BC_PANE_MAX, 10) : 8;
+const panes = new Map(); // paneKey -> { clients: Set<res>, handle, last }
+function paneKey(ref) { return ref.harness + '/' + ref.session + (ref.window ? ':' + ref.window : ''); }
+function paneWrite(res, event, data) {
+  res.write('event: ' + event + '\ndata: ' + JSON.stringify(data === undefined ? {} : data) + '\n\n');
+}
+function paneStream(req, res, ref, reason) {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  if (!ref) { paneWrite(res, 'no-pane', { reason }); return res.end(); }
+  let impl;
+  try { impl = harnessFor(ref); }
+  catch (e) { paneWrite(res, 'no-pane', { reason: String((e && e.message) || e) }); return res.end(); }
+  if (typeof impl.openPane !== 'function') {
+    paneWrite(res, 'unsupported', { harness: ref.harness });
+    return res.end();
+  }
+  const key = paneKey(ref);
+  let hub = panes.get(key);
+  if (!hub) {
+    if (panes.size >= PANE_MAX) { paneWrite(res, 'busy', { max: PANE_MAX }); return res.end(); }
+    hub = { clients: new Set(), handle: null, last: null };
+    panes.set(key, hub);
+    // openPane may be async (the port's verbs all may be); frames can only
+    // start after it resolves, so subscribers added meanwhile just wait. If
+    // everyone left before it resolved, close the freshly opened feed.
+    Promise.resolve()
+      .then(() => impl.openPane(ref, {
+        onFrame: (frame) => {
+          hub.last = String(frame);
+          for (const c of hub.clients) paneWrite(c, 'frame', hub.last);
+        },
+      }))
+      .then((handle) => {
+        if (panes.get(key) === hub) { hub.handle = handle; return; }
+        try { handle && typeof handle.close === 'function' && handle.close(); } catch (e) { /* already gone */ }
+      })
+      .catch((e) => {
+        if (panes.get(key) !== hub) return;
+        panes.delete(key);
+        for (const c of hub.clients) {
+          paneWrite(c, 'no-pane', { reason: 'open failed: ' + String((e && e.message) || e) });
+          c.end();
+        }
+      });
+  }
+  hub.clients.add(res);
+  // Immediate paint: late joiners get the hub's last frame; the first
+  // subscriber gets a one-shot snapshot when the harness offers one and the
+  // live feed hasn't delivered yet (a real frame arriving first wins).
+  if (hub.last != null) paneWrite(res, 'frame', hub.last);
+  else if (typeof impl.paneSnapshot === 'function') {
+    Promise.resolve()
+      .then(() => impl.paneSnapshot(ref))
+      .then((snap) => {
+        if (hub.last == null && hub.clients.has(res) && typeof snap === 'string') paneWrite(res, 'frame', snap);
+      })
+      .catch(() => { /* the interval frame will paint instead */ });
+  }
+  req.on('close', () => {
+    hub.clients.delete(res);
+    if (hub.clients.size) return;
+    panes.delete(key); // last subscriber gone: release the harness feed
+    try { hub.handle && typeof hub.handle.close === 'function' && hub.handle.close(); }
+    catch (e) { /* closing a dead pane is a no-op */ }
+  });
+}
+
 // Named ping (not an SSE comment): comments are invisible to EventSource, so
-// the client's staleness watchdog couldn't see the stream is alive.
-setInterval(() => { for (const res of sseClients) res.write('event: ping\ndata: {}\n\n'); }, 25000).unref();
+// the client's staleness watchdog couldn't see the stream is alive. Pane
+// streams piggyback on the same ping so proxies don't drop them either.
+setInterval(() => {
+  for (const res of sseClients) res.write('event: ping\ndata: {}\n\n');
+  for (const hub of panes.values()) for (const res of hub.clients) res.write('event: ping\ndata: {}\n\n');
+}, 25000).unref();
 
 // ---------- helpers ----------
 function sendJson(res, code, obj) {
@@ -2071,6 +2155,33 @@ const server = http.createServer(async (req, res) => {
       nudged.delete(r.lieutenant); // handled: a fresh append nudges anew
       broadcast(); // the ack advances the seen cursor too (drain normally beat it here)
       return sendJson(res, 200, r);
+    }
+
+    // ----- pane streams (👁 peek — per-target SSE; see the pane hub above) -----
+    // The HTTP connection's lifetime IS the subscription: connect to watch,
+    // disconnect to release (refcounted). Ref resolution happens HERE — the
+    // route knows cards and lieutenants, the hub knows refs, the harness knows
+    // the rest. Every guard is an SSE event, not an HTTP error: the client is
+    // an EventSource, which can't read error bodies.
+    const paneRoute = /^\/api\/(cards|lieutenants)\/([^/]+)\/pane\/stream$/.exec(p);
+    if (paneRoute && req.method === 'GET') {
+      const id = decodeURIComponent(paneRoute[2]);
+      let ref = null;
+      let reason = '';
+      if (paneRoute[1] === 'cards') {
+        const card = findCard(id);
+        const w = card && findWorker(card.id);
+        if (!card) reason = 'unknown card: ' + id;
+        else if (card.column !== 'working') reason = 'card is not Working';
+        else if (!w) reason = 'no worker bound to ' + id;
+        else ref = w.ref;
+      } else {
+        const lt = findLieutenant(id);
+        if (!lt) reason = 'unknown lieutenant: ' + id;
+        else if (!isHarnessRef(lt.ref)) reason = 'lieutenant has no live session';
+        else ref = lt.ref;
+      }
+      return paneStream(req, res, ref, reason);
     }
 
     // ----- SSE -----

@@ -144,6 +144,14 @@ async function capture(target, lines = 60) {
   return out === null ? '' : out;
 }
 
+// captureStyled(target, lines) — bounded pane capture WITH ANSI styling (-e
+// keeps SGR colors/bold) and scrollback depth (-S -N): the raw material for
+// pane frames (openPane / paneSnapshot). Unlike capture(), an unreadable pane
+// returns null — callers must tell "pane gone" from "pane blank".
+function captureStyled(target, lines = 200) {
+  return tryTmux('capture-pane', '-e', '-p', '-t', target, '-S', `-${lines}`);
+}
+
 // sendLiteral(target, text) — put text into the composer WITHOUT submitting.
 // Single-line text goes via `send-keys -l`. Multi-line text goes via a tmux
 // buffer paste in bracketed-paste mode (-p) so embedded newlines land as part
@@ -200,6 +208,7 @@ module.exports = {
   composerState,
   paneIsBusy,
   capture,
+  captureStyled,
   sendLiteral,
   sendKey,
   submit,

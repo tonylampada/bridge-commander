@@ -14,6 +14,35 @@ Seven verbs, nothing else:
 | `onTurnEnd` | `(ref, hook) → unsubscribe()` | turn-boundary detection, push not poll |
 
 All verbs may be async. Zero dependencies — plain Node (>= 18; uses `node:test`, `fetch`).
+Beyond the seven, a harness MAY expose **optional capability verbs** — see below.
+
+## Optional capability verbs (pane viewing)
+
+Optional verbs are features not every harness can honor, so `port.js` never
+validates them — adding one to the required list would force every harness
+(the `fake` included) to implement it and break validation. The server
+capability-checks at the call site (`typeof impl.openPane === 'function'`)
+and degrades gracefully when the verb is absent (the pane endpoints answer
+`unsupported`). Current optional verbs:
+
+| Verb | Signature | Purpose |
+|---|---|---|
+| `openPane` | `(ref, {onFrame, intervalMs?, lines?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
+| `paneSnapshot` | `(ref, {lines?}) → Promise<string>` | one-shot capture — the initial paint / non-streaming fallback |
+
+`intervalMs` defaults to ~1000, `lines` (scrollback depth) to ~200. A frame is
+a string that MAY carry ANSI SGR escapes (colors/bold).
+
+The claude implementation polls `capture-pane -e` — deliberately **rendered
+frames, not a `pipe-pane` byte stream**: the target is a full-screen TUI that
+repaints in place, so raw pty bytes would need a client-side terminal emulator
+(a dependency we won't add), while `capture-pane` returns the already-composed
+screen and keeps the client a plain `<pre>`. When the pane disappears it emits
+a final `\n[pane gone]` frame and stops. The fake emits deterministic counter
+frames (file-backed mode logs open/close to `<key>.pane.jsonl` for
+cross-process refcount assertions); `BC_FAKE_NO_PANE=1` hides both verbs to
+test capability-absent degradation, `BC_FAKE_PANE_MS` overrides its default
+frame interval.
 
 ## HarnessRef
 

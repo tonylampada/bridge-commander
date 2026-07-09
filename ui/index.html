@@ -168,6 +168,20 @@
   </form>
 </div>
 
+<!-- pane peek drawer (👁): a worker's / lieutenant's terminal, live over SSE -->
+<div id="pane-overlay" hidden>
+  <div id="pane-modal">
+    <div class="pane-head">
+      <span class="pane-live" id="pane-live" title="not streaming"></span>
+      <span class="pane-live-lbl">live</span>
+      <span class="pane-title" id="pane-title"></span>
+      <button id="pane-close" title="close">✕</button>
+    </div>
+    <pre id="pane-body"></pre>
+    <div id="pane-msg" hidden></div>
+  </div>
+</div>
+
 <!-- artifact viewer -->
 <div id="av-overlay" hidden>
   <div id="av-modal">

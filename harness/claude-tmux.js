@@ -410,7 +410,62 @@ function onTurnEnd(ref, hook, opts = {}) {
   };
 }
 
+// ---------- pane viewing (OPTIONAL capability verbs — see port.js) ----------
+// openPane(ref, { onFrame, intervalMs?, lines? }) -> { close() }
+// Streams the pane's CURRENT RENDERED SCREEN as successive frames: every
+// intervalMs the pane is captured with ANSI styling and scrollback, and
+// onFrame(frame) fires only when the content changed since the last frame.
+// close() stops delivery and releases the interval.
+//
+// Deliberately rendered frames via capture-pane, NOT a pipe-pane byte stream:
+// the target (claude) is a full-screen TUI that repaints in place, so raw pty
+// bytes would need a client-side terminal emulator (xterm.js — a dependency we
+// will not add). capture-pane returns the already-composed screen, works for
+// any TUI, and keeps the client a plain <pre>.
+function openPane(ref, opts = {}) {
+  const onFrame = typeof opts.onFrame === 'function' ? opts.onFrame : () => {};
+  const intervalMs = opts.intervalMs > 0 ? opts.intervalMs : 1000;
+  const lines = opts.lines > 0 ? opts.lines : 200;
+  const target = paneTarget(ref.session, ref.window);
+  let last = null;
+  let closed = false;
+  let busy = false; // never overlap captures — a slow tmux must not stack children
+
+  async function tick() {
+    if (closed || busy) return;
+    busy = true;
+    try {
+      if (!(await paneExists(ref.session, ref.window))) {
+        close();
+        try { onFrame('\n[pane gone]'); } catch { /* subscriber's problem */ }
+        return;
+      }
+      const frame = await t.captureStyled(target, lines);
+      if (closed || frame === null || frame === last) return;
+      last = frame;
+      try { onFrame(frame); } catch { /* a throwing subscriber must not kill the feed */ }
+    } finally {
+      busy = false;
+    }
+  }
+
+  const timer = setInterval(tick, intervalMs);
+  timer.unref?.();
+  tick(); // immediate first frame — the subscriber paints without waiting a tick
+  function close() { closed = true; clearInterval(timer); }
+  return { close };
+}
+
+// paneSnapshot(ref, { lines? }) -> Promise<string> — one-shot styled capture
+// (initial paint / non-streaming fallback). Empty string when unreadable.
+async function paneSnapshot(ref, opts = {}) {
+  const lines = opts.lines > 0 ? opts.lines : 200;
+  const out = await t.captureStyled(paneTarget(ref.session, ref.window), lines);
+  return out === null ? '' : out;
+}
+
 // installHooks is exported beyond the seven port verbs so `bc-axi init` can
 // install the workspace-level Stop hook (session-agnostic; the server dedupes
-// turn-end POSTs by session_id).
-module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks };
+// turn-end POSTs by session_id). openPane/paneSnapshot are OPTIONAL capability
+// verbs (port.js) — pane viewing; every tmux specific of the feature lives here.
+module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks, openPane, paneSnapshot };
