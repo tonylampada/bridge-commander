@@ -6,6 +6,7 @@ import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged } fr
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
+import { openCardPane, openLieutenantPane } from './pane.js';
 
 const laneEl = document.getElementById('lane');
 const boardEl = document.getElementById('board');
@@ -39,6 +40,7 @@ function ltCardHtml(l) {
     '<span class="lt-name">' + esc(l.name || l.id) + '</span>' +
     ind +
     '<span class="lt-counts">' + mine.length + (working ? ' · 🔨' + working : '') + '</span>' +
+    '<button class="lt-peek" title="watch this lieutenant\'s terminal live">👁</button>' +
     '<button class="lt-menu" title="lieutenant actions">⋯</button>' +
     (unread ? '<span class="badge-n">' + (unread > 99 ? '99+' : unread) + '</span>' : '') +
     '</div>';
@@ -51,6 +53,7 @@ function renderLane() {
   laneEl.querySelectorAll('.lt-card').forEach((el) => {
     el.onclick = (e) => {
       if (e.target.closest('.lt-menu')) { e.stopPropagation(); openLtMenu(el.dataset.id, e.clientX, e.clientY); return; }
+      if (e.target.closest('.lt-peek')) { e.stopPropagation(); openLieutenantPane(el.dataset.id); return; }
       openLieutenantChat(el.dataset.id);
     };
     el.oncontextmenu = (e) => { e.preventDefault(); toggleFilter('owner', el.dataset.id); };
@@ -138,6 +141,8 @@ function tileHtml(c) {
     '<span class="grow"></span>' +
     (hasLink ? '<span class="t-ind" title="has link">📎</span>' : '') +
     (msgs ? '<span class="t-ind" title="' + msgs + ' messages">💬' + msgs + '</span>' : '') +
+    // 👁 peek: every Working card can be watched live (its worker's terminal)
+    (c.column === 'working' ? '<button class="t-peek" title="watch this worker\'s terminal live">👁</button>' : '') +
     agoSpanHtml(cardRecency(c), 't-ago') +
     '</div></div>';
 }
@@ -181,6 +186,7 @@ function wire() {
       if (pressFired) { pressFired = false; return; } // long-press already handled
       const t = e.target;
       if (t.closest('a')) return; // PR chip / link: let the anchor navigate, don't open detail
+      if (t.closest('.t-peek')) { openCardPane(el.dataset.id); return; }
       if (t.classList.contains('label')) { toggleFilter('label', t.dataset.label); return; }
       const own = t.closest('.t-owner');
       if (own) { toggleFilter('owner', own.dataset.owner); return; }

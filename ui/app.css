@@ -574,6 +574,44 @@ a.a-uri { color: var(--accent); }
 #lt-create { background: var(--accent2); border-radius: 7px; color: #eaf6ff; padding: 6px 15px; font-size: 12.5px; }
 #lt-create:hover { background: var(--accent); color: #06222f; }
 
+/* ---------- pane peek drawer (👁: live terminal view) ---------- */
+#pane-overlay {
+  position: fixed; inset: 0; z-index: 92; background: rgba(4, 7, 11, .6);
+  display: flex; align-items: center; justify-content: center; backdrop-filter: blur(2px);
+}
+#pane-modal {
+  width: min(1000px, calc(100vw - 28px)); height: min(660px, 86vh); display: flex; flex-direction: column;
+  background: #0a0c11; border: 1px solid var(--line2); border-radius: 14px;
+  box-shadow: var(--shadow); animation: pop-in .15s ease-out; overflow: hidden;
+}
+.pane-head {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 10px 14px;
+  border-bottom: 1px solid var(--line); background: var(--bg2);
+}
+.pane-live { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; transition: background .2s; }
+.pane-live.on { background: var(--ok); box-shadow: 0 0 7px var(--ok); animation: worker-pulse 1.5s ease-in-out infinite; }
+.pane-live-lbl { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; flex: none; }
+.pane-live.on + .pane-live-lbl { color: var(--ok); }
+.pane-title { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pane-close { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; }
+#pane-close:hover { color: var(--text); }
+/* the terminal surface: mono, whole-screen frames, no wrapping — the frame IS
+   the rendered screen, so it scrolls in both axes instead of reflowing */
+#pane-body {
+  flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px;
+  font-family: var(--mono); font-size: 11.5px; line-height: 1.4; color: #c9d4e0;
+  white-space: pre; overscroll-behavior: contain;
+}
+#pane-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 13px; padding: 24px; text-align: center; }
+/* 👁 affordances: hover-revealed on the tile foot and the lieutenant chip */
+.tile .t-peek { color: var(--faint); font-size: 12px; line-height: 1; padding: 0 2px; border-radius: 5px; opacity: 0; flex: none; transition: opacity .12s, color .12s; }
+.tile:hover .t-peek { opacity: 1; }
+.tile .t-peek:hover { color: var(--accent); background: var(--accent-soft); }
+.lt-card .lt-peek { color: var(--faint); font-size: 12px; line-height: 1; padding: 0 3px; border-radius: 5px; opacity: 0; flex: none; transition: opacity .12s, color .12s; }
+.lt-card:hover .lt-peek { opacity: 1; }
+.lt-card .lt-peek:hover { color: var(--accent); background: var(--accent-soft); }
+@media (hover: none) { .tile .t-peek, .lt-card .lt-peek { opacity: .6; } } /* touch: always visible */
+
 /* ---------- artifact viewer ---------- */
 #av-overlay {
   position: fixed; inset: 0; z-index: 95; background: rgba(4, 7, 11, .6);
@@ -652,6 +690,8 @@ a.a-uri { color: var(--accent); }
   #board { flex-direction: row; gap: 10px; padding: 10px; scroll-snap-type: x mandatory; -webkit-overflow-scrolling: touch; }
   .column { flex: 0 0 min(300px, 86vw); max-width: none; scroll-snap-align: start; }
   #detail { width: 100vw; border-left: none; }
+  /* the peek drawer goes full-screen — a terminal needs every column it can get */
+  #pane-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: none; }
   .attr .v { max-width: 150px; }
   #notif-panel { top: 48px; }
   #settings-panel { top: 48px; }
