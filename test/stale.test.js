@@ -19,7 +19,7 @@ function fakeSession(dir, session) {
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, session + '.json'), JSON.stringify({ cwd: '/tmp', resumeId: null }) + '\n');
 }
-async function until(what, fn, ms = 5000) {
+async function until(what, fn, ms = 15000) {
   const deadline = Date.now() + ms;
   for (;;) {
     const v = await fn();

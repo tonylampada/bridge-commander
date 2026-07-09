@@ -23,6 +23,7 @@ const BUILTINS = {
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
+  'worker-stalled': { emoji: '🐢', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
