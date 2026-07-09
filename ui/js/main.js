@@ -3,6 +3,8 @@ import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, 
 import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
+import { trackEvents, renderNotifSettings } from './notifysettings.js';
+import { onOpenCard as toastOnOpenCard } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, closeOwnerMenu, ownerMenuOpen } from './detail.js';
@@ -13,6 +15,7 @@ import './resize.js'; // draggable side-panel widths
 
 chatOnOpenCard(openDetail);
 notifOnOpenCard(openDetail);
+toastOnOpenCard(openDetail);
 
 // ---------- header: filter ----------
 const filterInput = document.getElementById('filter');
@@ -67,7 +70,7 @@ gearBtn.onclick = (e) => {
   e.stopPropagation();
   spEl.hidden = !spEl.hidden;
   gearBtn.classList.toggle('on', !spEl.hidden);
-  if (!spEl.hidden) { S.notifOpen = false; renderLabelManager(); render(); }
+  if (!spEl.hidden) { S.notifOpen = false; renderLabelManager(); renderNotifSettings(); render(); }
 };
 document.addEventListener('click', (e) => {
   if (!spEl.hidden && !spEl.contains(e.target) && e.target !== gearBtn) {
@@ -131,7 +134,7 @@ onRender(() => {
   renderNotifications();
   renderTabs();
   if (pickerIsOpen()) renderPicker();
-  if (!spEl.hidden) renderLabelManager();
+  if (!spEl.hidden) { renderLabelManager(); renderNotifSettings(); }
   // fill the [data-ago] spans the panels above left empty (see util.js: time
   // text stays out of the compared markup so it never forces a rebuild)
   refreshAgoLabels();
@@ -155,6 +158,7 @@ function applyBoard(doc) {
   serverBoot = doc.boot || serverBoot;
   S.doc = doc;
   trackMessages(S.doc);
+  trackEvents(S.doc);
   render();
 }
 function refetchBoard() {
