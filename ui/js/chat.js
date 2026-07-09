@@ -4,9 +4,10 @@
 // premium composer.
 import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
-import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged } from './util.js';
+import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime } from './util.js';
 import { md } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
+import { openAttachment } from './detail.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -78,16 +79,42 @@ backBtn.onclick = backToMain;
 openBtn.onclick = () => { if (S.chatMode && S.chatMode.mode === 'card' && detailOpener) detailOpener(S.chatMode.id); };
 
 // ---------- feed rendering ----------
-function msgHtml(m) {
+// A message's attachments: images render inline (click → full-size viewer),
+// non-images render as a file chip (click → open/download). In a card thread a
+// small 📌 promotes the file to the open card's artifacts (deliberate — the
+// upload itself never did). All handlers are delegated on the feed (see below),
+// so the markup only carries data-* ids; nothing is interpolated into a handler.
+function attachmentsHtml(atts, promote) {
+  if (!Array.isArray(atts) || !atts.length) return '';
+  return '<div class="atts">' + atts.map((a) => {
+    const url = '/api/attachments/' + encodeURIComponent(a.id);
+    const meta = 'data-att-id="' + esc(a.id) + '" data-att-mime="' + esc(a.mime || '') + '" data-att-name="' + esc(a.name || '') + '"';
+    const pin = promote ? '<button type="button" class="att-pin" ' + meta + ' title="add to card artifacts" aria-label="add to card artifacts">📌</button>' : '';
+    if (isImageMime(a.mime)) {
+      return '<div class="att att-img">' +
+        '<img class="att-thumb" src="' + esc(url) + '" alt="' + esc(a.name || '') + '" loading="lazy" data-att-open ' + meta + '>' +
+        pin + '</div>';
+    }
+    return '<div class="att att-file">' +
+      '<span class="att-open" data-att-open ' + meta + ' title="' + esc(a.name || '') + '">' +
+      '<span class="att-ico">📄</span>' +
+      '<span class="att-nm">' + esc(a.name || 'file') + '</span>' +
+      '<span class="att-sz">' + esc(fmtSize(a.size)) + '</span>' +
+      '</span>' + pin + '</div>';
+  }).join('') + '</div>';
+}
+function msgHtml(m, promote) {
   const mine = m.author === USER;
-  const body = mine
+  const hasText = !!(m.text && m.text.trim());
+  const body = !hasText ? '' : (mine
     ? '<div class="md pre">' + esc(m.text) + '</div>'
-    : '<div class="md">' + md(m.text) + '</div>';
+    : '<div class="md">' + md(m.text) + '</div>');
+  const atts = attachmentsHtml(m.attachments, promote);
   const who = mine ? '' : esc(m.author) + ' · ';
   // speak button only on lieutenant bubbles; 🔊 icon, no message text in markup
   const speakBtn = mine ? '' :
     '<button class="msg-speak" type="button" data-speak title="read this message aloud" aria-label="read this message aloud">🔊</button>';
-  return '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body +
+  return '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body + atts +
     '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
 }
 function typingHtml(state, name) {
@@ -172,11 +199,13 @@ export function renderChat() {
     setHtmlIfChanged(titleEl, '💬 chat');
     inputEl.placeholder = 'create a lieutenant to start…';
     inputEl.disabled = true;
+    attachBtn.disabled = true;
     if (feed.key !== '') feedEl.innerHTML = '<div class="empty">no lieutenants yet — add one above the board to start commanding</div>';
     feed = { key: '', blocks: [], tail: '' };
     return;
   }
   inputEl.disabled = false;
+  attachBtn.disabled = false;
   const isCard = S.chatMode.mode === 'card';
   const c = isCard ? card(S.chatMode.id) : null;
   const lt = currentLieutenant();
@@ -204,7 +233,7 @@ export function renderChat() {
     const day = m.ts ? dayLabel(m.ts) : '';
     let h = '';
     if (day && day !== lastDay) { h += '<div class="feed-day">' + esc(day) + '</div>'; lastDay = day; }
-    blocks.push({ html: h + msgHtml(m), msg: m.author === USER ? null : m });
+    blocks.push({ html: h + msgHtml(m, isCard), msg: m.author === USER ? null : m });
   };
   if (isCard) {
     for (const m of c.thread || []) push(m);
@@ -276,12 +305,105 @@ function maybeMarkRead(c, target) {
   api.markThreadRead(target).catch(() => { lastMarked = { target: '', ts: '' }; });
 }
 
+// ---------- attachment interaction (delegated on the feed) ----------
+// One listener for every rendered message: open a file/image, or promote it to
+// the open card's artifacts. Delegation survives the append/rebuild fast-path
+// without any per-message re-wiring.
+feedEl.addEventListener('click', (e) => {
+  const pin = e.target.closest('.att-pin');
+  if (pin) {
+    e.stopPropagation();
+    promoteAttachment({ id: pin.dataset.attId, name: pin.dataset.attName, mime: pin.dataset.attMime }, pin);
+    return;
+  }
+  const open = e.target.closest('[data-att-open]');
+  if (open) {
+    e.stopPropagation();
+    openAttachment({ id: open.dataset.attId, name: open.dataset.attName, mime: open.dataset.attMime });
+  }
+});
+// 📌 promote — card threads only. The action is only rendered in a card thread,
+// but re-check S.chatMode so a stale click can never promote to the wrong place.
+async function promoteAttachment(att, btn) {
+  if (!(S.chatMode && S.chatMode.mode === 'card')) return;
+  const cardId = S.chatMode.id;
+  btn.disabled = true;
+  try {
+    await api.addArtifact(cardId, 'attachment://' + att.id, att.name || '');
+    btn.textContent = '✅';
+    btn.title = 'added to card artifacts';
+    setTimeout(() => { btn.textContent = '📌'; btn.disabled = false; btn.title = 'add to card artifacts'; }, 1400);
+  } catch (err) {
+    btn.disabled = false;
+    btn.title = 'failed: ' + err.message;
+  }
+}
+
 // ---------- composer ----------
 // The input clears ONLY once the message is confirmed delivered AND visible in
 // the chat timeline; until then the text is the captain's only copy. On failure
 // it stays in the composer with an error indication — never silently eaten.
 const sendBtn = document.querySelector('#chat-form button[type=submit]');
 const sendErrEl = document.getElementById('chat-send-err');
+const fileInput = document.getElementById('chat-file');
+const attachBtn = document.getElementById('chat-attach');
+const attsEl = document.getElementById('chat-atts');
+
+// Pending (not-yet-uploaded) files staged in the composer. Each is uploaded on
+// send; until then they show as removable chips and are the captain's only copy.
+let pendingAtts = []; // { file, key }
+let attSeq = 0;
+function addPendingFiles(files) {
+  for (const f of files) { if (f) pendingAtts.push({ file: f, key: ++attSeq }); }
+  renderPendingAtts();
+}
+function renderPendingAtts() {
+  if (!pendingAtts.length) { attsEl.hidden = true; attsEl.textContent = ''; return; }
+  attsEl.hidden = false;
+  attsEl.textContent = '';
+  for (const p of pendingAtts) {
+    const chip = document.createElement('span');
+    chip.className = 'att-chip';
+    const isImg = isImageMime(p.file.type);
+    const nm = document.createElement('span');
+    nm.className = 'att-chip-nm';
+    nm.textContent = (isImg ? '🖼 ' : '📄 ') + (p.file.name || 'file');
+    const sz = document.createElement('span');
+    sz.className = 'att-chip-sz';
+    sz.textContent = fmtSize(p.file.size);
+    const x = document.createElement('button');
+    x.type = 'button'; x.className = 'att-chip-x'; x.textContent = '✕'; x.title = 'remove';
+    x.onclick = () => { pendingAtts = pendingAtts.filter((q) => q !== p); renderPendingAtts(); };
+    chip.append(nm, sz, x);
+    attsEl.appendChild(chip);
+  }
+}
+attachBtn.onclick = () => fileInput.click();
+fileInput.onchange = () => { if (fileInput.files && fileInput.files.length) addPendingFiles([...fileInput.files]); fileInput.value = ''; };
+// drag-and-drop onto the composer
+const composerEl = document.getElementById('chat-form');
+['dragenter', 'dragover'].forEach((ev) => composerEl.addEventListener(ev, (e) => {
+  if (inputEl.disabled) return;
+  e.preventDefault(); composerEl.classList.add('drag');
+}));
+['dragleave', 'drop'].forEach((ev) => composerEl.addEventListener(ev, (e) => {
+  e.preventDefault();
+  if (ev === 'dragleave' && composerEl.contains(e.relatedTarget)) return;
+  composerEl.classList.remove('drag');
+}));
+composerEl.addEventListener('drop', (e) => {
+  if (inputEl.disabled) return;
+  const files = e.dataTransfer && e.dataTransfer.files;
+  if (files && files.length) addPendingFiles([...files]);
+});
+// paste-image from the clipboard (screenshots)
+inputEl.addEventListener('paste', (e) => {
+  const items = e.clipboardData && e.clipboardData.items;
+  if (!items) return;
+  const files = [];
+  for (const it of items) { if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
+  if (files.length) { e.preventDefault(); addPendingFiles(files); }
+});
 
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
 
@@ -319,16 +441,25 @@ async function send() {
   const target = currentTarget();
   if (!target) return;
   const text = inputEl.value.trim();
-  if (!text) return;
+  const atts = pendingAtts.slice();
+  if (!text && !atts.length) return; // nothing to send
   sending = true;
   clearSendError();
   sendBtn.disabled = true;
   sendBtn.classList.add('sending');
   inputEl.readOnly = true; // the pending text must stay exactly what was sent
   try {
-    await api.feedback(target, text);
-    if (!(await waitForEcho(target, text))) throw new Error('sent, but no echo from the server');
+    // Upload each staged file first (A), then post the message with the returned
+    // attachment metas (the server re-resolves them authoritatively by id).
+    const metas = [];
+    for (const p of atts) metas.push(await api.uploadAttachment(p.file));
+    await api.feedback(target, text, metas);
+    // With text, wait for its echo; attachments-only has no text to match, so the
+    // 200 is the confirmation (the SSE board push renders the bubble a beat later).
+    if (text && !(await waitForEcho(target, text))) throw new Error('sent, but no echo from the server');
     inputEl.value = '';
+    pendingAtts = [];
+    renderPendingAtts();
   } catch (e) {
     setSendError(e.message);
   } finally {

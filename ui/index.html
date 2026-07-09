@@ -82,7 +82,10 @@
     </div>
     <div id="chat-feed"></div>
     <div id="chat-send-err" hidden></div>
+    <div id="chat-atts" hidden></div>
     <form id="chat-form" class="composer">
+      <input id="chat-file" type="file" multiple hidden>
+      <button type="button" id="chat-attach" class="composer-attach" title="attach files (images & any type)">📎</button>
       <textarea id="chat-input" rows="1" placeholder="message your lieutenant…" autocomplete="off"></textarea>
       <button type="submit" title="send">➤</button>
     </form>
@@ -193,8 +196,9 @@
 <!-- artifact viewer -->
 <div id="av-overlay" hidden>
   <div id="av-modal">
-    <div class="av-head"><span class="av-name" id="av-name"></span><button id="av-close" title="close">✕</button></div>
+    <div class="av-head"><span class="av-name" id="av-name"></span><a id="av-download" title="download" hidden>⬇</a><button id="av-close" title="close">✕</button></div>
     <pre id="av-body"></pre>
+    <div id="av-img-wrap" hidden><img id="av-img" alt=""></div>
   </div>
 </div>
 

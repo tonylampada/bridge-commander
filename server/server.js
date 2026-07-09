@@ -50,6 +50,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 // The harness port — the ONLY seam the server speaks to agent sessions through
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
@@ -84,6 +85,13 @@ const ARCHIVE_FILE = path.join(STATE_DIR, 'archive.jsonl');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const QUEUE_DIR = path.join(STATE_DIR, 'queue');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
+// Chat file uploads. Lives under the workspace .bridge-command/ (already
+// git-ignored). NOTE: this dir grows unbounded — an upload is never garbage
+// collected here; a prune policy (age/size cap, orphan sweep) can come later.
+// Each file is stored as <id>__<safeName> with a sidecar <id>.json holding its
+// metadata (name/mime/size), so GET can serve the right Content-Type and the
+// stored name can never be spoofed by the request path.
+const UPLOADS_DIR = path.join(STATE_DIR, 'uploads');
 const UI_DIR = path.join(__dirname, '..', 'ui');
 // Harness working state (session ids, prompts, turn-end logs) lives in the
 // WORKSPACE, never in the harness's global last-resort dir — two boards on one
@@ -91,6 +99,11 @@ const UI_DIR = path.join(__dirname, '..', 'ui');
 const HARNESS_STATE_DIR = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
 fs.mkdirSync(QUEUE_DIR, { recursive: true });
 fs.mkdirSync(HARNESS_STATE_DIR, { recursive: true });
+fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+
+// Upload size cap (decoded bytes). Over-cap uploads are rejected 413.
+const UPLOAD_MAX_BYTES = parseInt(process.env.BC_UPLOAD_MAX_BYTES, 10) > 0
+  ? parseInt(process.env.BC_UPLOAD_MAX_BYTES, 10) : 10 * 1024 * 1024;
 
 const DEFAULT_PORT = 4780;
 
@@ -775,6 +788,90 @@ function readBody(req) {
     req.on('error', reject);
   });
 }
+// Larger-capped body reader for the base64 upload transport: the 10 MB decoded
+// cap becomes ~13.4 MB of base64 + JSON overhead, well past readBody's 8 MB
+// guard. Rejects with .code 413 past the cap so the caller can answer correctly.
+function readBodyUpto(req, max) {
+  return new Promise((resolve, reject) => {
+    let len = 0; const chunks = [];
+    req.on('data', (c) => {
+      len += c.length;
+      if (len > max) { const e = new Error('body too large'); e.code = 413; reject(e); req.destroy(); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', reject);
+  });
+}
+
+// ---------- chat attachments (uploads) ----------
+// Filename sanitization: keep a readable tail but strip anything that could
+// escape the uploads dir or confuse a shell/browser — path separators, control
+// chars, leading dots. The <id> prefix guarantees uniqueness, so a collapsed or
+// empty name is harmless (falls back to "file").
+function safeUploadName(name) {
+  const base = String(name || '').split(/[\\/]/).pop() || '';
+  const cleaned = base.replace(/[\x00-\x1f\x7f]/g, '').replace(/[^A-Za-z0-9._-]/g, '_')
+    .replace(/^\.+/, '').slice(0, 120);
+  return cleaned || 'file';
+}
+function newAttachmentId() {
+  for (;;) {
+    const id = crypto.randomBytes(8).toString('hex');
+    if (!fs.existsSync(path.join(UPLOADS_DIR, id + '.json'))) return id;
+  }
+}
+function attachmentSidecar(id) { return path.join(UPLOADS_DIR, id + '.json'); }
+// Read the stored metadata for an id, or null. The id must be a bare token —
+// path traversal (slashes, dots) can never reach the filesystem.
+function readAttachmentMeta(id) {
+  if (!/^[a-f0-9]{8,}$/.test(String(id || ''))) return null;
+  try {
+    const meta = JSON.parse(fs.readFileSync(attachmentSidecar(id), 'utf8'));
+    if (!meta || typeof meta !== 'object' || meta.id !== id || typeof meta.stored !== 'string') return null;
+    // The absolute on-disk path, resolved strictly within the uploads dir.
+    const file = path.join(UPLOADS_DIR, meta.stored);
+    if (path.dirname(path.resolve(file)) !== path.resolve(UPLOADS_DIR)) return null;
+    meta.path = file;
+    return meta;
+  } catch (e) { return null; }
+}
+// Persist an uploaded file + sidecar; returns the public meta. `data` is the
+// decoded Buffer (size already enforced by the caller).
+function storeAttachment(name, mime, data) {
+  const id = newAttachmentId();
+  const stored = id + '__' + safeUploadName(name);
+  fs.writeFileSync(path.join(UPLOADS_DIR, stored), data);
+  const meta = {
+    id, name: safeUploadName(name), mime: String(mime || 'application/octet-stream').slice(0, 200),
+    size: data.length, stored, created: now(),
+  };
+  fs.writeFileSync(attachmentSidecar(id), JSON.stringify(meta));
+  return meta;
+}
+// Resolve a client-supplied attachment list to AUTHORITATIVE metas by id: the
+// client only names ids, the server reads name/mime/size/path from its own
+// sidecar so a message can never inject an arbitrary path or spoofed metadata.
+// Unknown ids are dropped. The stored form carries the absolute `path` so the
+// agent (drain/thread) and the UI (id → /api/attachments/:id) both resolve it.
+function resolveAttachments(list) {
+  if (!Array.isArray(list)) return [];
+  const out = [];
+  for (const a of list.slice(0, 20)) {
+    const id = a && (typeof a === 'string' ? a : a.id);
+    const meta = readAttachmentMeta(id);
+    if (meta) out.push({ id: meta.id, name: meta.name, mime: meta.mime, size: meta.size, path: meta.path });
+  }
+  return out;
+}
+// One-line agent-facing rendering of a message's attachments: absolute path +
+// mime per file. Without the PATH in the drain/thread text the agent can't Read
+// the file — this is the whole point of B.
+function attachmentsLine(atts) {
+  if (!Array.isArray(atts) || !atts.length) return '';
+  const parts = atts.map((a) => (a.path || '') + (a.mime ? ' (' + a.mime + ')' : ''));
+  return atts.length + ' attachment' + (atts.length > 1 ? 's' : '') + ': ' + parts.join(', ');
+}
 function findCard(id) { return board.cards.find((c) => c.id === id); }
 // Chat targets: lieutenant:<id> (main chat) | card:<id> (card thread).
 function threadFor(target) {
@@ -994,6 +1091,56 @@ function patchCard(card, body) {
   card.updated = now();
   registerCardLabels();
   return { ok: true };
+}
+
+// ---------- promote to artifact (the DELIBERATE tool — chat upload ≠ artifact) ----------
+// Add/remove a curated deliverable on card.attributes.artifacts [{uri, label}].
+// This is the ONLY path (besides the investigation auto-attach) that puts an
+// entry there — a chat upload alone never does. Idempotent by uri, mirroring the
+// investigation auto-attach shape. A bare filesystem path is normalized to a
+// file:// absolute uri; attachment:// and http(s):// / file:// uris pass through.
+function normalizeArtifactUri(raw) {
+  const s = String(raw || '').trim();
+  if (!s) return '';
+  if (/^(attachment|https?|file):\/\//.test(s)) return s;
+  return 'file://' + path.resolve(s);
+}
+function cardArtifactAdd(card, body) {
+  const uri = normalizeArtifactUri(body && body.uri);
+  if (!uri) return { error: 'uri required (attachment://id | file://path | path)' };
+  if (!Array.isArray(card.attributes.artifacts)) card.attributes.artifacts = [];
+  const label = String((body && body.label) || '').slice(0, 200);
+  const existing = card.attributes.artifacts.find((a) => a && a.uri === uri);
+  if (existing) {
+    if (label && existing.label !== label) { existing.label = label; card.updated = now(); }
+    return { ok: true, artifact: existing, unchanged: !label || existing.label === label };
+  }
+  // Default label: an attachment's stored name (nicer than its opaque id), else
+  // the uri's basename.
+  let defLabel = uriBasenameServer(uri);
+  const am = /^attachment:\/\/(.+)$/.exec(uri);
+  if (am) { const meta = readAttachmentMeta(am[1]); if (meta) defLabel = meta.name; }
+  const art = label ? { uri, label } : { uri, label: defLabel };
+  card.attributes.artifacts.push(art);
+  card.events.push(mkEvent({ text: 'artifact added: ' + (art.label || uri), actor: (body && body.actor) || 'agent', level: 2 }, {}));
+  card.updated = now();
+  return { ok: true, artifact: art };
+}
+function cardArtifactRemove(card, body) {
+  const uri = normalizeArtifactUri(body && body.uri);
+  if (!uri) return { error: 'uri required' };
+  const arts = Array.isArray(card.attributes.artifacts) ? card.attributes.artifacts : [];
+  const next = arts.filter((a) => !(a && a.uri === uri));
+  const removed = next.length !== arts.length;
+  card.attributes.artifacts = next;
+  if (removed) card.updated = now();
+  return { ok: true, removed };
+}
+// Server-side twin of ui/js/util.js uriBasename — the artifact's display name.
+function uriBasenameServer(uri) {
+  const s = String(uri).replace(/[?#].*$/, '').replace(/\/+$/, '');
+  const i = s.lastIndexOf('/');
+  return i >= 0 ? s.slice(i + 1) : s;
 }
 
 function readArchive() {
@@ -1698,13 +1845,59 @@ const server = http.createServer(async (req, res) => {
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
         c.attributes.artifacts.some((a) => a && a.uri === uri));
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
-      const file = uri.startsWith('file://') ? uri.slice('file://'.length) : uri;
+      // A promoted chat attachment (attachment://id) resolves to its stored file
+      // via the sidecar; file:// / bare paths read directly.
+      let file = uri.startsWith('file://') ? uri.slice('file://'.length) : uri;
+      let name = path.basename(file);
+      const am = /^attachment:\/\/(.+)$/.exec(uri);
+      if (am) {
+        const meta = readAttachmentMeta(am[1]);
+        if (!meta) return sendJson(res, 404, { error: 'unknown attachment' });
+        file = meta.path; name = meta.name;
+      }
       let data;
       try { data = fs.readFileSync(file); }
       catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
       if (data.length > 2e6) return sendJson(res, 413, { error: 'file too large to preview' });
       if (data.includes(0)) return sendJson(res, 415, { error: 'binary file' });
-      return sendJson(res, 200, { name: path.basename(file), content: data.toString('utf8') });
+      return sendJson(res, 200, { name, content: data.toString('utf8') });
+    }
+
+    // ----- chat attachments (uploads) -----
+    // POST: base64 upload transport (zero-dep). Decode, size-cap (413), sanitize,
+    // store under <STATE_DIR>/uploads with a sidecar; return {id, uri, ...}.
+    if (route === 'POST /api/attachments') {
+      let raw;
+      try { raw = await readBodyUpto(req, Math.ceil(UPLOAD_MAX_BYTES * 1.4) + 65536); }
+      catch (e) {
+        if (e.code === 413) return sendJson(res, 413, { error: 'upload too large (max ' + UPLOAD_MAX_BYTES + ' bytes)' });
+        throw e;
+      }
+      const body = JSON.parse(raw || '{}');
+      const b64 = String(body.dataBase64 || '');
+      if (!b64) return sendJson(res, 400, { error: 'dataBase64 required' });
+      let data;
+      try { data = Buffer.from(b64, 'base64'); } catch (e) { data = null; }
+      if (!data || !data.length) return sendJson(res, 400, { error: 'bad base64 data' });
+      if (data.length > UPLOAD_MAX_BYTES) return sendJson(res, 413, { error: 'upload too large (max ' + UPLOAD_MAX_BYTES + ' bytes)' });
+      const meta = storeAttachment(body.name, body.mime, data);
+      return sendJson(res, 200, { id: meta.id, uri: 'attachment://' + meta.id, name: meta.name, mime: meta.mime, size: meta.size });
+    }
+    // GET: stream the stored bytes with the stored Content-Type. Backs both the
+    // inline <img> and file downloads. Strictly within the uploads dir; unknown
+    // id → 404 (readAttachmentMeta rejects any traversal in the id).
+    const attRoute = /^\/api\/attachments\/([^/]+)$/.exec(p);
+    if (attRoute && req.method === 'GET') {
+      const meta = readAttachmentMeta(decodeURIComponent(attRoute[1]));
+      if (!meta) return sendJson(res, 404, { error: 'unknown attachment' });
+      let data;
+      try { data = fs.readFileSync(meta.path); } catch (e) { return sendJson(res, 404, { error: 'unreadable' }); }
+      res.writeHead(200, {
+        'Content-Type': meta.mime || 'application/octet-stream',
+        'Content-Length': data.length,
+        'Cache-Control': 'private, max-age=31536000, immutable',
+      });
+      return res.end(data);
     }
 
     // ----- lieutenants -----
@@ -1838,7 +2031,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, card: publicCard(r.card, 'user'), event: r.event });
     }
-    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|park|worker\/signal|worker\/done|worker\/send|worker\/pause))?$/.exec(p);
+    const cardRoute = /^\/api\/cards\/([^/]+)(\/(move|events|archive|status|start|park|artifacts|worker\/signal|worker\/done|worker\/send|worker\/pause))?$/.exec(p);
     if (cardRoute) {
       const card = findCard(decodeURIComponent(cardRoute[1]));
       if (!card) return sendJson(res, 404, { error: 'unknown card: ' + decodeURIComponent(cardRoute[1]) });
@@ -1914,6 +2107,20 @@ const server = http.createServer(async (req, res) => {
         saveBoard(); broadcast();
         return sendJson(res, 200, r);
       }
+      // promote-to-artifact — the deliberate tool. POST adds, DELETE removes an
+      // entry on card.attributes.artifacts. A chat upload alone never lands here.
+      if (sub === 'artifacts' && req.method === 'POST') {
+        const r = cardArtifactAdd(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, artifact: r.artifact, card: publicCard(card, 'user') });
+      }
+      if (sub === 'artifacts' && req.method === 'DELETE') {
+        const r = cardArtifactRemove(card, JSON.parse(await readBody(req) || '{}'));
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, removed: r.removed, card: publicCard(card, 'user') });
+      }
       return sendJson(res, 405, { error: 'method not allowed' });
     }
 
@@ -1975,7 +2182,8 @@ const server = http.createServer(async (req, res) => {
       const thread = threadFor(target);
       if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text_md || body.text || '');
-      if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
+      const attachments = resolveAttachments(body.attachments);
+      if (!text.trim() && !attachments.length) return sendJson(res, 400, { error: 'text or attachments required' });
       // Default author, most-identified first: explicit body.author; then the
       // CALLER resolved from its tmux session (like drain/ack — so a lieutenant
       // posting to another's chat or card is stamped as itself, not the target);
@@ -1985,6 +2193,7 @@ const server = http.createServer(async (req, res) => {
       const sess = body.session ? String(body.session) : '';
       const caller = sess ? board.lieutenants.find((l) => l.ref && l.ref.session === sess) : null;
       const msg = { author: String(body.author || (caller && caller.name) || (lt && lt.name) || 'agent').slice(0, 60), text, ts: now() };
+      if (attachments.length) msg.attachments = attachments;
       thread.push(msg);
       const m = /^card:(.+)$/.exec(target);
       if (m) {
@@ -1999,7 +2208,8 @@ const server = http.createServer(async (req, res) => {
           // the owner's name). Captain messages ride /api/feedback, never here.
           const fromOwner = !!(caller && caller.id === card.owner);
           if (!fromOwner && msg.author !== 'user') {
-            queuePush(card.owner, { kind: 'worker-said', card: card.id, target, author: msg.author, text: text.slice(0, 2000) });
+            queuePush(card.owner, { kind: 'worker-said', card: card.id, target, author: msg.author,
+              text: text.slice(0, 2000), attachments });
           }
         }
       } else {
@@ -2016,13 +2226,17 @@ const server = http.createServer(async (req, res) => {
       const thread = threadFor(target);
       if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text || '');
-      if (!text.trim()) return sendJson(res, 400, { error: 'text required' });
+      const attachments = resolveAttachments(body.attachments);
+      if (!text.trim() && !attachments.length) return sendJson(res, 400, { error: 'text or attachments required' });
       const lt = targetLieutenant(target);
       if (!lt) return sendJson(res, 404, { error: 'no lieutenant behind target: ' + target });
       // Write-ahead delivery: the QueueItem lands FIRST; the send-keys wake half
-      // of delivery arrives in a later phase. A dead session loses nothing.
-      const item = queuePush(lt.id, { kind: 'message', target, text });
+      // of delivery arrives in a later phase. A dead session loses nothing. The
+      // attachments (with absolute paths) ride the queue item so drain surfaces
+      // the file paths to the agent.
+      const item = queuePush(lt.id, { kind: 'message', target, text, attachments });
       const msg = { author: 'user', text, ts: now() };
+      if (attachments.length) msg.attachments = attachments;
       thread.push(msg);
       const m = /^card:(.+)$/.exec(target);
       if (m) {

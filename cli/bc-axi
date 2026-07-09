@@ -43,6 +43,7 @@ const opts = {
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
   mode: null, briefFile: null, resume: false, outcome: null, model: null, park: false,
+  uri: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -79,10 +80,13 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--resume') opts.resume = true;
   else if (a === '--park') opts.park = true;
   else if (a === '--outcome') opts.outcome = argv[++i];
+  else if (a === '--uri') opts.uri = argv[++i];
   else positional.push(a);
 }
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
 if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker') && positional.length) cmd = cmd + ' ' + positional.shift();
+// Three-word verb: `card artifact add|rm`.
+if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
 // ---------- workspace resolution ----------
 function findWorkspace(start) {
@@ -155,6 +159,13 @@ function parseAttrs(list) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function hhmm(iso) { try { return new Date(iso).toISOString().slice(5, 16).replace('T', ' '); } catch (e) { return ''; } }
 const TARGET_RE = /^(lieutenant:.+|card:.+)$/;
+// Agent-facing attachment lines: the ABSOLUTE local path per file, so the agent
+// can Read it. Images are flagged so the agent knows they're viewable inline.
+function attachmentLines(atts) {
+  if (!Array.isArray(atts) || !atts.length) return [];
+  return atts.map((a) => 'attachment: ' + (a.path || ('attachment://' + a.id)) +
+    (a.mime ? ' (' + a.mime + ')' : '') + (a.name && a.name !== (a.path || '').split('/').pop() ? ' — ' + a.name : ''));
+}
 
 // ---------- server ----------
 // ensureServer — boot the workspace server detached when down (idempotent).
@@ -382,7 +393,10 @@ async function cmdShow() {
   }
   if ((c.thread || []).length) {
     console.log('\n--- thread ---');
-    for (const m of c.thread) console.log(hhmm(m.ts) + '  ' + m.author + ': ' + m.text.replace(/\n/g, '\n    '));
+    for (const m of c.thread) {
+      console.log(hhmm(m.ts) + '  ' + m.author + ': ' + (m.text || '').replace(/\n/g, '\n    '));
+      for (const line of attachmentLines(m.attachments)) console.log('    ' + line);
+    }
   }
 }
 
@@ -402,7 +416,10 @@ async function cmdThread() {
     msgs = c.thread || [];
   }
   if (opts.json) return console.log(JSON.stringify(msgs, null, 2));
-  for (const m of msgs) console.log(hhmm(m.ts) + '  ' + m.author + ': ' + m.text.replace(/\n/g, '\n    '));
+  for (const m of msgs) {
+    console.log(hhmm(m.ts) + '  ' + m.author + ': ' + (m.text || '').replace(/\n/g, '\n    '));
+    for (const line of attachmentLines(m.attachments)) console.log('    ' + line);
+  }
 }
 
 async function cmdArchived() {
@@ -512,6 +529,27 @@ async function cmdRestore() {
   if (opts.kind) body.kind = opts.kind;
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/restore', body);
   console.log('restored ' + id + ' in ' + r.card.column);
+}
+
+// ---------- promote to artifact (the deliberate tool) ----------
+// A chat upload is NOT a card artifact — this is how a file becomes one, on the
+// lieutenant's judgment. Idempotent by uri.
+async function cmdArtifactAdd() {
+  const id = positional[0];
+  if (!id || !opts.uri) {
+    die('usage: bc-axi card artifact add <card-id> --uri <attachment://id | file://path | path> [--label L]\n' +
+      '  Promote a file to the card\'s curated artifacts list (deliberate — a chat upload alone never does this).');
+  }
+  const body = { uri: opts.uri, actor: opts.actor || 'agent' };
+  if (opts.labels.length) body.label = opts.labels[0]; // --label L
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/artifacts', body);
+  console.log('artifact -> ' + id + ': ' + (r.artifact ? (r.artifact.label + ' (' + r.artifact.uri + ')') : opts.uri));
+}
+async function cmdArtifactRemove() {
+  const id = positional[0];
+  if (!id || !opts.uri) die('usage: bc-axi card artifact rm <card-id> --uri <attachment://id | file://path | path>');
+  const r = await request('DELETE', '/api/cards/' + encodeURIComponent(id) + '/artifacts', { uri: opts.uri, actor: opts.actor || 'agent' });
+  console.log((r.removed ? 'removed' : 'not present') + ' artifact -> ' + id + ': ' + opts.uri);
 }
 
 // ---------- card.start / workers (F5) ----------
@@ -736,6 +774,7 @@ async function cmdDrain() {
     }
     console.log('#' + it.seq + '  ' + head);
     if (it.text) console.log(indent(it.text));
+    for (const line of attachmentLines(it.attachments)) console.log(indent(line));
     if (hint) console.log('    -> ' + hint);
     console.log('');
   }
@@ -816,6 +855,7 @@ const commands = {
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
   'card start': cmdStart, 'card park': cmdCardPark,
+  'card artifact add': cmdArtifactAdd, 'card artifact rm': cmdArtifactRemove,
   'worker signal': cmdWorkerSignal, 'worker done': cmdWorkerDone, 'worker send': cmdWorkerSend,
   'worker pause': cmdWorkerPause,
   show: cmdShow, // alias for card show
@@ -883,6 +923,10 @@ if (!commands[cmd]) {
     '  card park <card-id>                    move a Working card whose worker is absent or DEAD back\n' +
     '                                         to Backlog (liveness re-checked server-side; a live\n' +
     '                                         worker refuses — pause it instead). Timeline event\n' +
+    '  card artifact add <card-id> --uri <attachment://id | file://path | path> [--label L]\n' +
+    '                                         promote a file to the card\'s curated artifacts list\n' +
+    '                                         (deliberate — a chat upload alone never does this). Idempotent\n' +
+    '  card artifact rm <card-id> --uri <...>  remove an artifact entry by uri\n' +
     '  worker send <card-id> "<instructions>" [--text-file f|-]\n' +
     '                                         hand a LIVE worker new instructions: typed into its\n' +
     '                                         session with verified submission (run by the lieutenant)\n' +
