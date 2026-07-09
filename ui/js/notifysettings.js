@@ -1,10 +1,18 @@
 // notifysettings.js — persisted notification settings, the "notifications"
 // section of the settings panel, and the driver that turns new board events
 // into toasts/sounds. Mirrors voice.js's localStorage + gesture-unlock pattern.
-import { kindEmoji } from './state.js';
-import { defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages } from './notifypolicy.js';
+import { S, kindEmoji } from './state.js';
+import { defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages, shouldSuppressChat } from './notifypolicy.js';
 import * as sound from './sound.js';
 import * as toast from './toast.js';
+
+// Mirrors ui/app.css's mobile breakpoint (`@media (max-width: 760px)`) that
+// collapses the board/chat columns into tabs. Below it, the chat panel is only
+// on screen when the captain has the chat tab selected.
+const DESKTOP_MQ = '(min-width: 761px)';
+function isChatVisible() {
+  return (typeof window !== 'undefined' && window.matchMedia && window.matchMedia(DESKTOP_MQ).matches) || S.view === 'chat';
+}
 
 // New key: the old per-kind blob (bc-notif-settings) is simply ignored, no
 // migration — the settings shape changed too much to translate meaningfully.
@@ -66,9 +74,14 @@ export function trackEvents(doc) {
   }
   for (const m of messages) {
     if (m.author === 'user') continue; // never notify the captain of his own messages
+    const ctx = {
+      focused: (typeof document !== 'undefined') && (document.hasFocus ? document.hasFocus() : !document.hidden),
+      openTarget: S.chatMode ? S.chatMode.mode + ':' + S.chatMode.id : null,
+      chatVisible: isChatVisible(),
+    };
     const p = policyFor('reply', 1, settings);
-    if (p.toast) toast.push({ emoji: '💬', text: m.text, cardTitle: m.cardTitle, actor: m.author, card: m.card });
-    if (p.sound && p.sound !== 'none') sound.play(p.sound);
+    if (p.toast && !shouldSuppressChat(m.scope, ctx)) toast.push({ emoji: '💬', text: m.text, cardTitle: m.cardTitle, actor: m.author, card: m.card });
+    if (p.sound && p.sound !== 'none') sound.play(p.sound); // ALWAYS — captain: "mantém o som"
   }
 }
 
