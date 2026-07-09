@@ -17,7 +17,7 @@
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
 //             workers:  [{card, ref, worktree: {path, tool}, branch?, project,
-//                         spawnedAt, done?, outcome?, flagged?, paused?, lastTurnEnd?, turns?}],
+//                         spawnedAt, done?, outcome?, flagged?, paused?, lastTurnEnd?, lastSignalAt?, turns?}],
 //             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
 //                        created, updated, threadStart, pendingOrder,
 //                        status: {worker: null|{id, state, expires}},  // lease; only status.set writes it
@@ -245,6 +245,7 @@ const BUILTIN_KINDS = {
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
+  'worker-stalled': { emoji: '🐢', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
@@ -863,7 +864,7 @@ function moveCard(card, body, actorDefault) {
   card.updated = now();
   if (from === 'working') {
     const w = findWorker(card.id);
-    if (w) delete w.stopNotified; // leaving Working ends the stop-state
+    if (w) { delete w.stopNotified; delete w.staleNotified; } // leaving Working ends the stop/stale-state
   }
   // A move is a deliberate act: it always lands on the timeline. Default kind:
   // a lieutenant move is a handoff (level 1 from the kinds map — rings the
@@ -1117,6 +1118,7 @@ async function doStartCard(card, body) {
     delete existing.outcome;
     delete existing.flagged;
     delete existing.stopNotified;
+    delete existing.staleNotified;
     delete existing.paused; // a revived worker is watched again
     enterWorking(card, 'worker ' + workerName(ref) + ' resumed in ' + existing.worktree.path);
     return { worker: existing, resumed: true };
@@ -1197,7 +1199,11 @@ function workerSignal(card, body) {
   const text = String((body && body.text) || '').trim();
   if (!text) return { error: 'text required' };
   const w = findWorker(card.id);
-  if (w) delete w.stopNotified; // a fresh signal starts a fresh stop-state
+  if (w) {
+    delete w.stopNotified; // a fresh signal starts a fresh stop-state
+    delete w.staleNotified;
+    w.lastSignalAt = now(); // a milestone is real activity: resets the stale clock
+  }
   const ev = mkEvent({ text: text.slice(0, 2000), actor: (body && body.actor) || 'worker' }, { kind: 'signal' });
   card.events.push(ev);
   card.updated = now();
@@ -1215,7 +1221,7 @@ function workerDone(card, body) {
   const outcome = String((body && body.outcome) || '').trim();
   if (!outcome) return { error: 'outcome required' };
   const w = findWorker(card.id);
-  if (w) { w.done = true; w.outcome = outcome.slice(0, 2000); delete w.flagged; delete w.stopNotified; }
+  if (w) { w.done = true; w.outcome = outcome.slice(0, 2000); delete w.flagged; delete w.stopNotified; delete w.staleNotified; }
   const urls = outcome.match(PR_URL_RE) || [];
   if (urls.length) {
     if (!Array.isArray(card.attributes.prs)) card.attributes.prs = [];
@@ -1289,6 +1295,7 @@ async function pauseWorker(card, body) {
   }
   w.paused = now(); // BEFORE the kill: the death must never look like a crash
   delete w.stopNotified;
+  delete w.staleNotified;
   try {
     await harnessFor(w.ref).kill(w.ref);
   } catch (e) {
@@ -1336,7 +1343,7 @@ async function parkCard(card, body) {
   card.column = 'backlog';
   card.pendingOrder = null;
   card.updated = now();
-  if (w) delete w.stopNotified; // leaving Working ends the stop-state
+  if (w) { delete w.stopNotified; delete w.staleNotified; } // leaving Working ends the stop/stale-state
   const ev = mkEvent({
     actor: (body && body.actor) || 'agent',
     text: 'parked (worker ' + (w ? workerName(w.ref) + (w.paused ? ', paused' : ', dead') : 'absent') + '): '
@@ -1359,6 +1366,14 @@ async function parkCard(card, body) {
 //   worker done      -> nothing to watch (the done QueueItem already landed).
 const SUPERVISE_MS = process.env.BC_SUPERVISE_INTERVAL_MS !== undefined
   ? parseInt(process.env.BC_SUPERVISE_INTERVAL_MS, 10) : 30000;
+// The alive-but-hung gap: a worker stuck inside a single turn (e.g. an
+// infinite tool loop) emits NONE of the three end-of-life signals — alive()
+// stays true (no worker-died), the turn never ends (no worker-stopped), and
+// done is never reached. Long silence on a Working card is the only tell.
+// 30min default: the brief cadence is a milestone every 10–30min, so a
+// healthy worker resets the clock well inside the window.
+const BC_WORKER_STALE_SECS = process.env.BC_WORKER_STALE_SECS !== undefined
+  ? parseInt(process.env.BC_WORKER_STALE_SECS, 10) : 1800;
 const respawnAttempts = new Map(); // lieutenant id -> consecutive failed respawns
 let supervising = false;
 async function superviseTick() {
@@ -1430,6 +1445,29 @@ async function superviseTick() {
       if (w.done || w.flagged || w.paused) continue;
       let up = false;
       try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+      // Staleness watchdog (alive-but-hung): checked BEFORE the alive
+      // early-continue, only for a genuinely live, unpaused worker on a
+      // Working card. One item per stall (staleNotified mirrors the
+      // stopNotified lifecycle); any real activity — signal, turn-end,
+      // resume — re-arms it.
+      if (up && !w.paused && BC_WORKER_STALE_SECS > 0 && !w.staleNotified) {
+        const card = findCard(w.card);
+        if (card && card.column === 'working') {
+          const stamps = [w.spawnedAt, w.lastTurnEnd, w.lastSignalAt]
+            .map((t) => (t ? Date.parse(t) : NaN)).filter((n) => !Number.isNaN(n));
+          const lastActivity = stamps.length ? Math.max(...stamps) : 0;
+          if (lastActivity && Date.now() - lastActivity > BC_WORKER_STALE_SECS * 1000) {
+            w.staleNotified = true;
+            const mins = Math.round((Date.now() - lastActivity) / 60000);
+            const text = 'worker ' + workerName(w.ref) + ' alive but silent for '
+              + mins + 'min (no signal/turn-end) — may be hung';
+            card.events.push(mkEvent({ text, actor: 'server' }, { kind: 'worker-stalled' }));
+            card.updated = now();
+            queuePush(card.owner, { kind: 'worker-stalled', card: card.id, text });
+            changed = true;
+          }
+        }
+      }
       // paused re-checked after the await: a pause landing mid-tick (marked,
       // then killed while alive() was in flight) must not read as a crash.
       if (up || w.paused) continue;
