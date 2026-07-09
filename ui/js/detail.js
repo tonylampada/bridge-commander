@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename, setHtmlIfChanged } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename, setHtmlIfChanged, isImageMime } from './util.js';
 import { md } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -176,14 +176,34 @@ bodyInput.onkeydown = (e) => {
 const avOverlay = document.getElementById('av-overlay');
 const avName = document.getElementById('av-name');
 const avBody = document.getElementById('av-body');
+const avImgWrap = document.getElementById('av-img-wrap');
+const avImg = document.getElementById('av-img');
+const avDownload = document.getElementById('av-download');
 const MD_EXT = /\.(md|markdown)$/i;
+// Reset the shared overlay to a clean text-mode state (used by both openers).
+function avReset(name, uri) {
+  avName.textContent = name;
+  avName.title = uri || name;
+  avImgWrap.hidden = true;
+  avImg.removeAttribute('src');
+  avBody.hidden = false;
+  avBody.className = '';
+  avDownload.hidden = true;
+  avOverlay.hidden = false;
+}
 async function openArtifact(uri) {
   const name = uriBasename(uri) || uri;
-  avName.textContent = name;
-  avName.title = uri;
-  avBody.className = ''; // plain until content lands
+  avReset(name, uri);
   avBody.textContent = 'loading…';
-  avOverlay.hidden = false;
+  // A promoted chat attachment resolves through the attachment viewer (images
+  // preview inline, text shows content, binary downloads) rather than the
+  // text-only /api/artifact path.
+  const am = /^attachment:\/\/(.+)$/.exec(uri);
+  if (am) {
+    const c = card(S.openCardId);
+    const at = c && (c.attributes || {}).artifacts && (c.attributes.artifacts.find((a) => a && a.uri === uri));
+    return openAttachment({ id: am[1], name: (at && at.label) || name, mime: '' });
+  }
   try {
     const r = await api.artifact(uri);
     if (MD_EXT.test(name)) {
@@ -198,6 +218,51 @@ async function openArtifact(uri) {
     avBody.className = '';
     avBody.textContent = '⚠ no preview — ' + e.message; // binary / too large / unreadable
   }
+}
+// Open a chat attachment: images preview inline, text-ish types show their
+// content, everything else downloads. Served straight from /api/attachments/:id
+// (never /api/artifact — an attachment need not be a promoted card artifact).
+const TEXTY_MIME = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|yaml|csv|x-www-form-urlencoded)|image\/svg)/;
+const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const TEXT_EXT = /\.(md|markdown|txt|log|json|ya?ml|csv|js|ts|py|sh|css|html?)$/i;
+export async function openAttachment(att) {
+  const url = '/api/attachments/' + encodeURIComponent(att.id);
+  const name = att.name || '';
+  avReset(name || att.id, name);
+  avDownload.href = url;
+  avDownload.setAttribute('download', name || 'file');
+  avDownload.hidden = false;
+  const showImage = () => { avBody.hidden = true; avImgWrap.hidden = false; avImg.src = url; avImg.alt = name; };
+  const showText = (text) => {
+    if (MD_EXT.test(name)) { avBody.className = 'md'; avBody.innerHTML = md(text); }
+    else { avBody.className = ''; avBody.textContent = text; }
+  };
+  const mime = String(att.mime || '');
+  // Decide from mime/extension when possible; a promoted artifact carries only
+  // {uri, label}, so its mime may be unknown — then consult the served
+  // Content-Type before falling back to a download.
+  if (isImageMime(mime) || (!mime && IMG_EXT.test(name))) return showImage();
+  if (TEXTY_MIME.test(mime) || (!mime && TEXT_EXT.test(name))) {
+    avBody.textContent = 'loading…';
+    try {
+      const r = await fetch(url);
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      showText(await r.text());
+    } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
+    return;
+  }
+  if (mime) { avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.'; return; }
+  // Unknown mime AND an undecided name (e.g. a promoted image with a custom
+  // label): ask the server what it is, then render accordingly.
+  avBody.textContent = 'loading…';
+  try {
+    const r = await fetch(url);
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const ct = (r.headers.get('content-type') || '').split(';')[0];
+    if (isImageMime(ct)) return showImage();
+    if (TEXTY_MIME.test(ct)) return showText(await r.text());
+    avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.';
+  } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
 }
 export function closeArtifact() { avOverlay.hidden = true; }
 export function artifactOpen() { return !avOverlay.hidden; }

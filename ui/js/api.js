@@ -24,7 +24,25 @@ export const api = {
     Object.assign({ column, actor: 'user' }, text ? { text } : {})),
   patchCard: (id, patch) => j('PATCH', '/api/cards/' + encodeURIComponent(id), patch),
   archiveCard: (id, reason) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/archive', { actor: 'user', reason }),
-  feedback: (target, text) => j('POST', '/api/feedback', { target, text }),
+  feedback: (target, text, attachments) => j('POST', '/api/feedback',
+    Object.assign({ target, text }, attachments && attachments.length ? { attachments } : {})),
+  // upload a File → {id, uri, name, mime, size}. base64 is the zero-dep transport.
+  uploadAttachment: (file) => new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(new Error('could not read ' + (file.name || 'file')));
+    fr.onload = () => {
+      const s = String(fr.result);
+      const i = s.indexOf(',');
+      const dataBase64 = i >= 0 ? s.slice(i + 1) : s; // strip the data:...;base64, prefix
+      j('POST', '/api/attachments', {
+        name: file.name || 'file', mime: file.type || 'application/octet-stream', dataBase64,
+      }).then(resolve, reject);
+    };
+    fr.readAsDataURL(file);
+  }),
+  addArtifact: (id, uri, label) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/artifacts',
+    Object.assign({ uri, actor: 'user' }, label ? { label } : {})),
+  removeArtifact: (id, uri) => j('DELETE', '/api/cards/' + encodeURIComponent(id) + '/artifacts', { uri, actor: 'user' }),
   markNotifRead: (seqs) => j('POST', '/api/notifications/read', { user: 'user', seqs }),
   markAllNotifRead: () => j('POST', '/api/notifications/read', { user: 'user', all: true }),
   markThreadRead: (target) => j('POST', '/api/read', { user: 'user', target }),

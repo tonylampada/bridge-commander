@@ -77,6 +77,15 @@ export function prChipHtml(pr, withState) {
     ' title="' + esc(pr.url) + ' (' + state + ')">' + esc(label) + '</a>';
 }
 
+// human file size (chat attachment chips)
+export function fmtSize(n) {
+  n = Number(n) || 0;
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(n < 10240 ? 1 : 0) + ' KB';
+  return (n / (1024 * 1024)).toFixed(n < 10485760 ? 1 : 0) + ' MB';
+}
+export function isImageMime(m) { return /^image\//.test(String(m || '')); }
+
 // last path segment of a uri/path (query/hash stripped) — the artifact display name
 export function uriBasename(uri) {
   const s = String(uri).replace(/[?#].*$/, '').replace(/\/+$/, '');
