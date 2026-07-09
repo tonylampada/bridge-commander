@@ -714,6 +714,11 @@ async function cmdDrain() {
       const sess = (c && c.attributes && c.attributes.session) || '<session>';
       head = 'WORKER STOPPED — ' + cardBit(it.card);
       hint = 'worker stopped without reporting — peek its session (tmux attach -t ' + sess + ') or steer it, then act';
+    } else if (it.kind === 'worker-stalled') {
+      const c = cards.find((x) => x.id === it.card);
+      const sess = (c && c.attributes && c.attributes.session) || '<session>';
+      head = 'WORKER STALLED — ' + cardBit(it.card);
+      hint = 'worker alive but silent — it may be hung: peek its session (tmux attach -t ' + sess + '), steer it (bc-axi worker send ' + it.card + ' --text-file <f|->), or pause and resume later (bc-axi worker pause ' + it.card + ' [--park]); then narrate what you found on the card timeline (bc-axi event ' + it.card + ' --level 2 --text-file -) — a legit long wait is fine, a SILENT one is not';
     } else if (it.kind === 'worker-died') {
       head = 'WORKER DIED — ' + cardBit(it.card);
       hint = 'the worker session died without done: resume it (bc-axi card start ' + it.card + ' --resume) or park the card back to backlog (bc-axi card park ' + it.card + ')';
