@@ -198,12 +198,32 @@ async function openArtifact(uri) {
   // A promoted chat attachment resolves through the attachment viewer (images
   // preview inline, text shows content, binary downloads) rather than the
   // text-only /api/artifact path.
+  const c = card(S.openCardId);
+  const at = c && (c.attributes || {}).artifacts && (c.attributes.artifacts.find((a) => a && a.uri === uri));
+  const title = (at && at.label) || name; // the curated label shows as the viewer title
+  avName.textContent = title;
   const am = /^attachment:\/\/(.+)$/.exec(uri);
   if (am) {
-    const c = card(S.openCardId);
-    const at = c && (c.attributes || {}).artifacts && (c.attributes.artifacts.find((a) => a && a.uri === uri));
     return openAttachment({ id: am[1], name: (at && at.label) || name, mime: '' });
   }
+  // Non-attachment artifact (file:// / bare path). Dispatch by extension: an
+  // image renders inline from the raw byte serve; text/markdown keeps the text
+  // preview; a known binary offers a download instead of "no preview".
+  const rawUrl = '/api/artifact?uri=' + encodeURIComponent(uri) + '&raw=1';
+  const offerDownload = (msg) => {
+    avBody.hidden = false; avImgWrap.hidden = true; avImg.removeAttribute('src');
+    avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
+    avBody.className = ''; avBody.textContent = msg;
+  };
+  if (IMG_EXT.test(name)) {
+    avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
+    avBody.hidden = true; avImgWrap.hidden = false; avImg.src = rawUrl; avImg.alt = title;
+    return;
+  }
+  if (BIN_EXT.test(name)) return offerDownload('No inline preview for this file type. Use ⬇ to download.');
+  // Text / markdown (or unknown) → the existing text preview. A genuine binary
+  // (null bytes → 415) or over-cap text (413, "too large") falls through to a
+  // download offer, carrying the server's message.
   try {
     const r = await api.artifact(uri);
     if (MD_EXT.test(name)) {
@@ -215,8 +235,7 @@ async function openArtifact(uri) {
       avBody.textContent = r.content; // non-markdown: plain preformatted text
     }
   } catch (e) {
-    avBody.className = '';
-    avBody.textContent = '⚠ no preview — ' + e.message; // binary / too large / unreadable
+    offerDownload('⚠ no preview — ' + e.message + ' (use ⬇ to download)'); // binary / too large / unreadable
   }
 }
 // Open a chat attachment: images preview inline, text-ish types show their
@@ -225,6 +244,8 @@ async function openArtifact(uri) {
 const TEXTY_MIME = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|yaml|csv|x-www-form-urlencoded)|image\/svg)/;
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
 const TEXT_EXT = /\.(md|markdown|txt|log|json|ya?ml|csv|js|ts|py|sh|css|html?)$/i;
+// Known binaries — never worth a text preview; offer a download straight away.
+const BIN_EXT = /\.(pdf|zip|gz|tgz|tar|xlsx?|docx?|pptx?|bin|exe|dmg|iso|mp4|mov|webm|mp3|wav|ogg|flac|woff2?|ttf|otf|parquet|pkl|npz|so|dll|wasm|class|jar)$/i;
 export async function openAttachment(att) {
   const url = '/api/attachments/' + encodeURIComponent(att.id);
   const name = att.name || '';

@@ -104,6 +104,18 @@ fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 // Upload size cap (decoded bytes). Over-cap uploads are rejected 413.
 const UPLOAD_MAX_BYTES = parseInt(process.env.BC_UPLOAD_MAX_BYTES, 10) > 0
   ? parseInt(process.env.BC_UPLOAD_MAX_BYTES, 10) : 10 * 1024 * 1024;
+// Raw-artifact byte serve cap. Images/binaries are delivered as bytes to an
+// <img>/download (not inlined as text), so this is far larger than the text
+// preview cap; over-cap → 413.
+const ARTIFACT_MAX_BYTES = parseInt(process.env.BC_ARTIFACT_MAX_BYTES, 10) > 0
+  ? parseInt(process.env.BC_ARTIFACT_MAX_BYTES, 10) : 25 * 1024 * 1024;
+// Extension → Content-Type for raw artifact byte serving. Images render inline
+// in the viewer; pdf may render inline; everything else downloads.
+const ARTIFACT_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif',
+  '.pdf': 'application/pdf',
+};
 
 const DEFAULT_PORT = 4780;
 
@@ -1830,11 +1842,13 @@ const server = http.createServer(async (req, res) => {
       const items = notificationItems(url.searchParams.get('user'));
       return sendJson(res, 200, { items, unread: items.filter((e) => !e.read).length });
     }
-    // Artifact preview: text content of a local artifact, for the UI's popup
-    // viewer. Only a uri listed verbatim in some live card's attributes.artifacts
-    // is servable — never an arbitrary file read.
+    // Artifact serve, for the UI's popup viewer. Only a uri listed verbatim in
+    // some live card's attributes.artifacts is servable — never an arbitrary
+    // file read. Default (no raw): TEXT content of the file. raw=1: the raw
+    // bytes with a real Content-Type, backing the inline <img> and downloads.
     if (route === 'GET /api/artifact') {
       const uri = url.searchParams.get('uri') || '';
+      const raw = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
         c.attributes.artifacts.some((a) => a && a.uri === uri));
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
@@ -1842,11 +1856,47 @@ const server = http.createServer(async (req, res) => {
       // via the sidecar; file:// / bare paths read directly.
       let file = uri.startsWith('file://') ? uri.slice('file://'.length) : uri;
       let name = path.basename(file);
+      let attMime = '';
       const am = /^attachment:\/\/(.+)$/.exec(uri);
       if (am) {
         const meta = readAttachmentMeta(am[1]);
         if (!meta) return sendJson(res, 404, { error: 'unknown attachment' });
-        file = meta.path; name = meta.name;
+        file = meta.path; name = meta.name; attMime = meta.mime || '';
+      }
+      if (raw) {
+        // Byte mode. Only a real local file is servable: an attachment path is
+        // already vetted by readAttachmentMeta; a plain artifact must be a
+        // file:// absolute path with no traversal escaping it (path.resolve is
+        // idempotent on a clean absolute path — a `..` segment or a relative
+        // path changes it, so it is rejected).
+        if (!am) {
+          if (!uri.startsWith('file://')) return sendJson(res, 400, { error: 'not a file artifact' });
+          if (path.resolve(file) !== file) return sendJson(res, 400, { error: 'unsafe artifact path' });
+        }
+        let st;
+        try { st = fs.statSync(file); }
+        catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+        if (!st.isFile()) return sendJson(res, 404, { error: 'not a file' });
+        if (st.size > ARTIFACT_MAX_BYTES) return sendJson(res, 413, { error: 'artifact too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
+        const ext = path.extname(name).toLowerCase();
+        const ctype = am ? (attMime || 'application/octet-stream') : (ARTIFACT_MIME[ext] || 'application/octet-stream');
+        // Images and pdf may render inline in the browser; other binaries
+        // download. Same hardening as the attachments serve: nosniff pins the
+        // Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
+        // is navigated to as a document (inline <img> subresources unaffected).
+        const inline = /^image\//.test(ctype) || ctype === 'application/pdf';
+        let data;
+        try { data = fs.readFileSync(file); }
+        catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+        res.writeHead(200, {
+          'Content-Type': ctype,
+          'Content-Length': data.length,
+          'Cache-Control': 'private, max-age=31536000, immutable',
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Security-Policy': 'sandbox',
+          'Content-Disposition': (inline ? 'inline' : 'attachment') + '; filename="' + name.replace(/["\\\r\n]/g, '_') + '"',
+        });
+        return res.end(data);
       }
       let data;
       try { data = fs.readFileSync(file); }
