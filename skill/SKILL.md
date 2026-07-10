@@ -25,12 +25,8 @@ and the captain can always `tmux attach` to it.)
 
 ## 2. Confirm you are in the intended workspace directory
 
-Before initializing, run `pwd` and confirm it is the directory the captain meant to turn
-into a workspace. Your cwd can drift from the tmux session's start dir, and `init` uses cwd
-by default — initializing the wrong directory (e.g. `$HOME`) is the single most common init
-mistake. If `pwd` is not the intended workspace, either `cd` into it or pass
-`--workspace <dir>` explicitly. `init` echoes the resolved target and whether it is NEW;
-read that banner and stop if the workspace is wrong.
+Run `pwd` first: `init` uses cwd by default, and initializing the wrong dir (e.g. `$HOME`) is
+the classic mistake. If it isn't the intended workspace, `cd` in or pass `--workspace <dir>`.
 
 ## 3. Initialize the workspace (idempotent)
 
