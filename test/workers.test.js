@@ -440,3 +440,60 @@ test('card start --resume refuses a brief and points at worker send (API + CLI)'
     assert.match(cli.stderr, /worker send rez/);
   } finally { await teardown(); }
 });
+
+// The new-card modal stores an optional harness/model hint on the card
+// (attributes.harness / attributes.model). card.start honors them as a
+// FALLBACK: an explicit CLI --harness/--model still wins. Observed through a
+// 'recfake' harness preloaded into the server process (test/recording-harness.js
+// via NODE_OPTIONS) that captures the extraArgs card.start builds — the harness
+// port (harness/) itself stays untouched.
+test('card start honors card.attributes.harness/.model as a fallback; explicit body wins', async () => {
+  const recFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bc-rec-')), 'extraargs.json');
+  const preload = path.join(__dirname, 'recording-harness.js');
+  const { s, teardown } = await boot({
+    NODE_OPTIONS: '--require ' + preload,
+    BC_REC_EXTRAARGS: recFile,
+  });
+  const readExtra = () => JSON.parse(fs.readFileSync(recFile, 'utf8')).extraArgs;
+  const clearExtra = () => { try { fs.unlinkSync(recFile); } catch (e) {} };
+  try {
+    // (a) fallback: no body harness/model → the card's stored hint is used.
+    // recfake is reachable ONLY via attributes.harness, so its extraArgs file
+    // being written proves the harness fallback fired; the --model proves the
+    // model fallback fired.
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Hint A', id: 'hint-a',
+      attributes: { repo: 'proj', harness: 'recfake', model: 'stored-model' },
+    }));
+    clearExtra();
+    let r = await s.api('POST', '/api/cards/hint-a/start', {});
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual(readExtra(), ['--model', 'stored-model']);
+
+    // (b) explicit body.model overrides the stored attributes.model.
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Hint B', id: 'hint-b',
+      attributes: { repo: 'proj', harness: 'recfake', model: 'stored-model' },
+    }));
+    clearExtra();
+    r = await s.api('POST', '/api/cards/hint-b/start', { model: 'cli-model' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual(readExtra(), ['--model', 'cli-model']);
+
+    // (c) explicit body.harness overrides attributes.harness. attributes names
+    // the plain 'fake' (which never writes the extraArgs file); body picks
+    // recfake — the file IS written, proving body.harness won. No body.model,
+    // so attributes.model still supplies the fallback --model.
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Hint C', id: 'hint-c',
+      attributes: { repo: 'proj', harness: 'fake', model: 'stored-model' },
+    }));
+    clearExtra();
+    r = await s.api('POST', '/api/cards/hint-c/start', { harness: 'recfake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.deepStrictEqual(readExtra(), ['--model', 'stored-model']);
+  } finally {
+    await teardown();
+    fs.rmSync(path.dirname(recFile), { recursive: true, force: true });
+  }
+});

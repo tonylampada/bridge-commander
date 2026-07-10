@@ -1369,7 +1369,9 @@ async function doStartCard(card, body) {
   const project = findProject(String(repoAttr));
   if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path> --mode <mode>)' };
 
-  const harnessName = String((body && body.harness) || readConfig().harness || 'claude');
+  // Harness precedence: explicit CLI --harness wins, then the card's stored
+  // hint (attributes.harness, set from the new-card modal), then config/default.
+  const harnessName = String((body && body.harness) || (card.attributes && card.attributes.harness) || readConfig().harness || 'claude');
   let impl;
   try { impl = getHarness(harnessName); } catch (e) { return { error: String((e && e.message) || e) }; }
 
@@ -1406,7 +1408,10 @@ async function doStartCard(card, body) {
   });
   const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
   const extraArgs = [];
-  if (body && body.model) extraArgs.push('--model', String(body.model));
+  // Model precedence mirrors harness: explicit --model wins, else the card's
+  // stored hint (attributes.model, set from the new-card modal).
+  const modelHint = (body && body.model) || (card.attributes && card.attributes.model);
+  if (modelHint) extraArgs.push('--model', String(modelHint));
   if (body && body.effort) extraArgs.push('--effort', String(body.effort));
   if (extraArgs.length) spawnOpts.extraArgs = extraArgs;
   let ref;
