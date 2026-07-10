@@ -20,7 +20,7 @@ through per-card chat threads — from anywhere, phone included.
 
 ```sh
 # bridge-commander (server + CLI + skill — the whole repo installs as one skill)
-npx skills add tonylampada/bridge-commander -g
+npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander run clones the full tool
 
 # dependencies
 curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh

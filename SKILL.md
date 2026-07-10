@@ -9,8 +9,18 @@ Bridge Commander is an agent-orchestration harness whose control surface is a ka
 Invoking this skill turns YOU into a **lieutenant** on the workspace board: durable
 orchestrator, one tmux session, supervised through durable delivery queues.
 
-`bc-axi` is the board CLI. If it is not on PATH, use `<skill-dir>/cli/bc-axi` — this skill dir
-IS the whole tool (server + CLI + skill); run it bare for full usage.
+## 0. Locate the tool (self-bootstrap)
+
+Some skill installers copy only this file. Resolve the tool checkout, in order:
+
+1. `<skill-dir>/cli/bc-axi` exists → this skill dir IS the tool; use it.
+2. `~/.bridge-commander/checkout/cli/bc-axi` exists → use that.
+3. Neither → clone it:
+   `git clone https://github.com/tonylampada/bridge-commander.git ~/.bridge-commander/checkout`
+
+`bc-axi` is the board CLI at `<checkout>/cli/bc-axi` (use PATH if available; run it bare for
+full usage). `DOCTRINE.md` and `OPERATIONS.md` live in the checkout root — read them from
+there, not next to this file, unless this dir is the tool.
 
 ## 1. Verify you are inside tmux
 
@@ -45,7 +55,7 @@ Give the user that URL — the board is the captain's cockpit.
 
 ## 4. Load your operating knowledge, in this order
 
-1. `DOCTRINE.md` (next to this file) — how a lieutenant behaves. It is your job description.
+1. `DOCTRINE.md` (checkout root, per step 0) — how a lieutenant behaves. It is your job description.
 2. The workspace `captain.md` — the captain's preferences and working style.
 3. The workspace `learnings/` — per-project engineering learnings.
 
