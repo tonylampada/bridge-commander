@@ -1,9 +1,9 @@
-# Bridge Command — Conceptual API (DNA)
+# Bridge Commander — Conceptual API (DNA)
 
 > This IS the spec the implementation follows. A disagreement between this document and
 > the code is a bug in one of them — change deliberately, never let them drift.
 
-Bridge Command is an agent-orchestration **harness** whose control surface is a kanban board.
+Bridge Commander is an agent-orchestration **harness** whose control surface is a kanban board.
 The captain pilots N **lieutenants** — orchestrator agents, one tmux session each, shown as a
 horizontal lane above the columns — and every unit of work is a card owned by exactly one
 lieutenant. Lieutenants never implement; they delegate each started card to a **worker**
@@ -17,7 +17,7 @@ orchestration doctrine distills firstmate. New project — inspiration, not reus
 ## The board
 
 One board per **workspace** (the directory where the skill was initialized; holds state in
-`.bridge-command/`, config, shared memory, and cloned projects). Fixed column frame:
+`.bridge-commander/`, config, shared memory, and cloned projects). Fixed column frame:
 
 📋 Backlog → 🔨 Working → 👀 Your review → 🤝 Peer review
 
@@ -61,7 +61,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 
 | Operation | Signature | Who | When |
 |---|---|---|---|
-| `workspace.init` | `dir → workspace` | ⚓ (the founding agent) | skill invoked in a fresh dir, **inside tmux** (refuses outside, with instruction); creates `.bridge-command/`, boots the server, registers the caller as the first lieutenant — the "teleport" |
+| `workspace.init` | `dir → workspace` | ⚓ (the founding agent) | skill invoked in a fresh dir, **inside tmux** (refuses outside, with instruction); creates `.bridge-commander/`, boots the server, registers the caller as the first lieutenant — the "teleport" |
 | `workspace.addProject` | `url \| path, mode → project` | ⚓ | captain asks to bring a repo into the workspace |
 | `lieutenant.create` | `charter → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + charter as launch prompt |
 | `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first — never reassign); kills its session, removes it and its queue, loud level-1 event |
@@ -93,7 +93,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `worker.signal` | `card, text` | 🛠️ | real milestones (branch, tests green, PR open) → level-2 event + QueueItem to the owner |
-| `worker.done` | `card, outcome` | 🛠️ | worker finished: event + QueueItem wake the owner; the card stays Working until the lieutenant verifies and hands off. PR URLs in the outcome populate the card's `prs` (the PR watch takes it from there); an investigation's report (`.bridge-command/reports/<card>.md` by convention) is attached as an artifact |
+| `worker.done` | `card, outcome` | 🛠️ | worker finished: event + QueueItem wake the owner; the card stays Working until the lieutenant verifies and hands off. PR URLs in the outcome populate the card's `prs` (the PR watch takes it from there); an investigation's report (`.bridge-commander/reports/<card>.md` by convention) is attached as an artifact |
 | worker stop | — | ⚙️ turn-end | a worker turn-end IS the stop signal: card still Working and no `done` → immediate `worker-stopped` QueueItem to the owner + level-2 event (coalesced — one per stop, not per turn). After `done`, turn-ends only update counters |
 | worker death | — | ⚙️ supervision loop | a worker ref dead without `done` → `worker-died` QueueItem to the owner + level-2 event; the card stays Working, flagged — the owner resumes (`card.start --resume`) or moves it back |
 
@@ -112,7 +112,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 The server speaks ONLY this port. v0 ships the `claude` implementation (plus a file-backed
 `fake` for tests); adding a harness is implementing these seven verbs, nothing else.
 Harness working state (session ids, prompts, turn-end logs) lives in the workspace's
-`.bridge-command/harness/` — never global; spawned session names are unique per workspace.
+`.bridge-commander/harness/` — never global; spawned session names are unique per workspace.
 
 **Optional capability verbs.** Beyond the seven REQUIRED verbs a harness MAY expose extra
 verbs for features not every harness can honor. The port never validates them (requiring
@@ -127,7 +127,7 @@ gracefully when the verb is absent. Current optional verbs (pane viewing — the
 
 ## Invariants
 
-1. **Board is truth.** No shadow files, no mirror: cards + charters + queues in `.bridge-command/` ARE the state. Agent conversation memory is a cache; restart of any session is a non-event.
+1. **Board is truth.** No shadow files, no mirror: cards + charters + queues in `.bridge-commander/` ARE the state. Agent conversation memory is a cache; restart of any session is a non-event.
 2. **Lieutenants never write to projects.** Every change reaches a project through a worker in an isolated worktree, shipped by the project's delivery mode.
 3. **Working ⇔ unfinished task, which SHOULD have a live worker.** The only way into Working is `card.start`, spawning the worker atomically. A Working card may lose its worker only by accident (process died, machine rebooted) — the server flags it and queues the owner; a wound to heal, never a state to create deliberately.
 4. **One owner, for life.** Every card belongs to exactly one lieutenant, fixed at birth — no reassignment; moving work between lieutenants = archive + recreate. The captain converses only with lieutenants (card threads included). `tmux attach` on a predictable session name (`bc-*`; the founding lieutenant keeps its own session name) is the escape hatch, not a channel.

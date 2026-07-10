@@ -29,7 +29,7 @@ async function until(what, fn, ms = 15000) {
   }
 }
 function seedBoard(dir, board) {
-  const sd = path.join(dir, '.bridge-command');
+  const sd = path.join(dir, '.bridge-commander');
   fs.mkdirSync(sd, { recursive: true });
   fs.writeFileSync(path.join(sd, 'board.json'), JSON.stringify(Object.assign({
     title: 'seeded', seq: 0, lieutenants: [], cards: [], events: [], labels: [], reads: {}, kinds: {},

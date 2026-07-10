@@ -140,7 +140,7 @@ test('lieutenant.retire: refuses with owned cards; else kills session, removes q
     });
     await s.api('POST', '/api/cards', { title: 'Held', id: 'held', owner: 'ret' });
     await s.api('POST', '/api/feedback', { target: 'lieutenant:ret', text: 'note' });
-    const queueFile = path.join(s.dir, '.bridge-command', 'queue', 'ret.jsonl');
+    const queueFile = path.join(s.dir, '.bridge-commander', 'queue', 'ret.jsonl');
     assert.ok(fs.existsSync(queueFile), 'queue file exists before retire');
 
     // refused while the lieutenant owns non-archived cards

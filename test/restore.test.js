@@ -8,7 +8,7 @@ const path = require('node:path');
 const { startServerWithLieutenant, withOwner, LT, runCli } = require('./helper');
 
 function archiveRecords(s) {
-  return fs.readFileSync(path.join(s.dir, '.bridge-command', 'archive.jsonl'), 'utf8')
+  return fs.readFileSync(path.join(s.dir, '.bridge-commander', 'archive.jsonl'), 'utf8')
     .split('\n').filter(Boolean).map((l) => JSON.parse(l));
 }
 
@@ -105,7 +105,7 @@ test('a snapshot frozen in Working restores into Backlog (never workerless Worki
   const nowIso = new Date().toISOString();
   const s = await startServerWithLieutenant({
     seed(dir) {
-      const sd = path.join(dir, '.bridge-command');
+      const sd = path.join(dir, '.bridge-commander');
       fs.mkdirSync(sd, { recursive: true });
       fs.writeFileSync(path.join(sd, 'archive.jsonl'), JSON.stringify({
         ts: nowIso, actor: 'user', reason: 'killed',

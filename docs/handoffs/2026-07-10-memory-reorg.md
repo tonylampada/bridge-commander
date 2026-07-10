@@ -1,12 +1,12 @@
 # Handoff — memory reorg (2026-07-10)
 
-For: Tony's review of https://github.com/tonylampada/bridge-command/pull/25 (already merged &
+For: Tony's review of https://github.com/tonylampada/bridge-commander/pull/25 (already merged &
 deployed under yolo — this documents what happened and what deserves a skeptical read).
 Written by lieutenant monica at session end.
 
 ## The story
 
-The captain asked for a critical analysis of the Bridge Command memory files — the workspace's
+The captain asked for a critical analysis of the Bridge Commander memory files — the workspace's
 `AGENTS.md`/`captain.md`/`learnings/` and the skill itself — through the lens of the
 `writing-great-skills` skill. The analysis found three diseases across ~23 KB in 6 files:
 
@@ -30,7 +30,7 @@ that motivated the brief.js change.
 
 ## What landed
 
-- **PR https://github.com/tonylampada/bridge-command/pull/25** (this repo, merged, deployed):
+- **PR https://github.com/tonylampada/bridge-commander/pull/25** (this repo, merged, deployed):
   - `server/brief.js` — Process-safety ground rule now in EVERY worker brief (capture pid via
     `$!`, only signal `$PID`, never pgrep/pkill/kill by pattern — a worker once froze itself
     this way). Pinned by new `test/brief.test.js`.
@@ -41,7 +41,7 @@ that motivated the brief.js change.
     a merged PR, the stale-UI trap, orphan-tmux respawn recovery, dev/test notes.
   - `skill/SKILL.md` — step 2 slimmed to 2 lines.
 - **Workspace commit** `roboflow-commander@8d24f20` — `captain.md` 3.5→1.4 KB (only
-  Tony-specific preferences), `learnings/bridge-command-operations.md` 7→1 KB (only
+  Tony-specific preferences), `learnings/bridge-commander-operations.md` 7→1 KB (only
   install-specific facts: port, upload env var, bc-axi path, iOS quirk, papercut pointer).
 
 Verification done: full diff read (exactly the 5 briefed files; `harness/` and
@@ -64,7 +64,7 @@ restarted (pid changed, status 200, env preserved), installed skill copy confirm
 
 ## Suggested skills (next session)
 
-- `bridge-command` — re-enter the workspace as lieutenant (the doctrine/OPERATIONS just changed;
+- `bridge-commander` — re-enter the workspace as lieutenant (the doctrine/OPERATIONS just changed;
   the next lieutenant boots with the new text).
 - `writing-great-skills` — if the review prompts another editing pass on the skill docs.
 - `spleak2me` — if the captain wants the review findings turned into another guided-reading page.

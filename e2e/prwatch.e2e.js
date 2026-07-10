@@ -142,7 +142,7 @@ async function stepCase(name, fn) {
         assert.strictEqual(gh('repo', 'view', login + '/' + SCRATCH, '--json', 'visibility', '-q', '.visibility'), 'PRIVATE');
       } catch (e) {
         gh('repo', 'create', login + '/' + SCRATCH, '--private', '--add-readme',
-          '--description', 'bridge-command e2e scratch repo');
+          '--description', 'bridge-commander e2e scratch repo');
         await until('fresh repo visible', async () => {
           try { return gh('repo', 'view', login + '/' + SCRATCH, '--json', 'visibility', '-q', '.visibility') === 'PRIVATE'; }
           catch (e2) { return false; }

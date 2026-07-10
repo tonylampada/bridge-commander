@@ -1,4 +1,4 @@
-# Bridge Command
+# Bridge Commander
 
 Agent-orchestration harness whose control surface is a kanban board. The captain (you, in a
 browser) pilots N **lieutenants** — durable orchestrator agents — and every unit of work is a
@@ -16,8 +16,8 @@ How it works inside: [ARCHITECTURE.md](ARCHITECTURE.md). The conceptual API
 ## Install
 
 ```sh
-git clone https://github.com/tonylampada/bridge-command.git
-ln -s "$(pwd)/bridge-command/skill" ~/.claude/skills/bridge-command
+git clone https://github.com/tonylampada/bridge-commander.git
+ln -s "$(pwd)/bridge-commander/skill" ~/.claude/skills/bridge-commander
 ```
 
 Optionally put `cli/bc-axi` on PATH; everything also works via its absolute path.
@@ -53,9 +53,9 @@ those modes have no skill dependency.
    tmux new -s myfleet
    ```
 
-2. **Launch your agent inside it and invoke the skill** (run `claude`, then `/bridge-command`).
+2. **Launch your agent inside it and invoke the skill** (run `claude`, then `/bridge-commander`).
    The skill agrees a lieutenant name with you and runs `bc-axi init --name "<name>"`, which
-   bootstraps `.bridge-command/`, boots the board server detached, registers the caller as the
+   bootstraps `.bridge-commander/`, boots the board server detached, registers the caller as the
    founding lieutenant, and scaffolds workspace memory (`AGENTS.md`, `captain.md`, `learnings/`).
 
 3. **Open the printed board URL** (default `http://localhost:4780/`) — the captain's cockpit.
@@ -68,7 +68,7 @@ Run `bc-axi` bare for full CLI usage, or start the server by hand:
 
 ## Configuration
 
-Per-workspace config lives in `.bridge-command/config.json`:
+Per-workspace config lives in `.bridge-commander/config.json`:
 
 | Key | Default | Meaning |
 |---|---|---|
@@ -86,7 +86,7 @@ Env knobs (set on the server process):
 | `BC_UPLOAD_MAX_BYTES` | `10485760` | per-file chat upload cap |
 | `BC_WORKER_TTL_SECS` | `600` | card status lease TTL — `working`/`needs-you` decays to `idle` past it |
 | `BC_WORKTREE_TOOL` | auto | `treehouse` \| `git` — worker worktree provisioning |
-| `BC_HARNESS_STATE` | `~/.bridge-command/harness` | harness state dir (prompts, session ids, turn-end logs) |
+| `BC_HARNESS_STATE` | `~/.bridge-commander/harness` | harness state dir (prompts, session ids, turn-end logs) |
 | `BC_GH_CMD` | `gh` | gh binary used by the PR watch |
 | `BC_TURNEND_URL` | — | default callback URL baked into installed turn-end hooks |
 | `BC_SEND_RETRIES` / `BC_SEND_SLEEP_MS` | `3` / `400` | verified-submit tuning for `harness.send` |

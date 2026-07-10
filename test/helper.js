@@ -1,5 +1,5 @@
 'use strict';
-// Test helper — boots a bridge-command server against a fresh temp WORKSPACE
+// Test helper — boots a bridge-commander server against a fresh temp WORKSPACE
 // on an ephemeral port, and tears it down cleanly. Node built-ins only.
 //
 // Run the suite with:
@@ -34,7 +34,7 @@ function freePort() {
 }
 
 // startServer({ dir?, port?, env?, seed? }) -> { dir, port, base, api, stop, child }
-//   dir: the WORKSPACE (state lives in <dir>/.bridge-command)
+//   dir: the WORKSPACE (state lives in <dir>/.bridge-commander)
 //   seed: optional (dir) => {} callback to pre-populate state before the server boots
 async function startServer(opts = {}) {
   const dir = opts.dir || fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));

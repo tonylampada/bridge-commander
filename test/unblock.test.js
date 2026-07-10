@@ -140,7 +140,7 @@ test('async window is guarded: same-card double start and duplicate in-flight pr
     assert.deepStrictEqual(statuses, [200, 409], JSON.stringify([a.body, b.body]));
     const loser = a.status === 409 ? a : b;
     assert.match(loser.body.error, /already in progress|already Working/);
-    const disk = JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-command', 'board.json'), 'utf8'));
+    const disk = JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-commander', 'board.json'), 'utf8'));
     assert.strictEqual(disk.workers.filter((w) => w.card === 'one').length, 1, 'exactly one worker bound');
 
     // two concurrent adds of the SAME project name: exactly one clone lands

@@ -6,7 +6,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { startServer, startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
 
-function archivePath(s) { return path.join(s.dir, '.bridge-command', 'archive.jsonl'); }
+function archivePath(s) { return path.join(s.dir, '.bridge-commander', 'archive.jsonl'); }
 
 test('card create: defaults, slug ids, created event, owner + type validated', async () => {
   const s = await startServerWithLieutenant();

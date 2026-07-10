@@ -33,7 +33,7 @@ async function until(what, fn, ms = 5000) {
   }
 }
 function seedBoard(dir, board) {
-  const sd = path.join(dir, '.bridge-command');
+  const sd = path.join(dir, '.bridge-commander');
   fs.mkdirSync(sd, { recursive: true });
   fs.writeFileSync(path.join(sd, 'board.json'), JSON.stringify(Object.assign({
     title: 'seeded', seq: 0, lieutenants: [], cards: [], events: [], labels: [], reads: {}, kinds: {},
@@ -101,7 +101,7 @@ test('non-resumable respawn relaunches with charter + owned cards + pending queu
           threadStart: null, pendingOrder: null, events: [], thread: [],
         }],
       });
-      const qdir = path.join(dir, '.bridge-command', 'queue');
+      const qdir = path.join(dir, '.bridge-commander', 'queue');
       fs.mkdirSync(qdir, { recursive: true });
       fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
         JSON.stringify({ seq: 1, ts: nowIso, lieutenant: 'ada', kind: 'message', text: 'pending one' }) + '\n');
@@ -170,7 +170,7 @@ test('wake heartbeat: a live lieutenant with pending items is woken by the sweep
       });
       // Seeded straight into the queue file: no queuePush ran, so no wake was
       // ever scheduled — exactly the missed-wake shape the sweep must heal.
-      const qdir = path.join(dir, '.bridge-command', 'queue');
+      const qdir = path.join(dir, '.bridge-commander', 'queue');
       fs.mkdirSync(qdir, { recursive: true });
       fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
         JSON.stringify({ seq: 1, ts: nowIso, lieutenant: 'ada', kind: 'message', text: 'unseen all night' }) + '\n');
@@ -211,7 +211,7 @@ test('wake heartbeat: a stale nudge lapses after BC_WAKE_TTL_MS and the sweep re
           ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-ada' },
         }],
       });
-      const qdir = path.join(dir, '.bridge-command', 'queue');
+      const qdir = path.join(dir, '.bridge-commander', 'queue');
       fs.mkdirSync(qdir, { recursive: true });
       fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
         JSON.stringify({ seq: 1, ts: nowIso, lieutenant: 'ada', kind: 'message', text: 'stuck wake' }) + '\n');

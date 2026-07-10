@@ -1,5 +1,5 @@
 'use strict';
-// Workspace bootstrapping: state under <workspace>/.bridge-command, fixed column
+// Workspace bootstrapping: state under <workspace>/.bridge-commander, fixed column
 // frame, config.json port, pidfile, isolation between workspaces.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -8,13 +8,13 @@ const os = require('node:os');
 const path = require('node:path');
 const { startServer, startServerWithLieutenant, withOwner, COLUMNS } = require('./helper');
 
-test('fresh board bootstraps empty with the fixed column frame, state under .bridge-command', async () => {
+test('fresh board bootstraps empty with the fixed column frame, state under .bridge-commander', async () => {
   const s = await startServer();
   try {
-    const stateDir = path.join(s.dir, '.bridge-command');
-    assert.ok(fs.existsSync(stateDir), '.bridge-command under the workspace');
+    const stateDir = path.join(s.dir, '.bridge-commander');
+    assert.ok(fs.existsSync(stateDir), '.bridge-commander under the workspace');
     assert.ok(fs.existsSync(path.join(stateDir, 'queue')), 'queue dir created');
-    // pidfile lands under .bridge-command and holds the server pid
+    // pidfile lands under .bridge-commander and holds the server pid
     const pidFile = path.join(stateDir, 'server.pid');
     assert.strictEqual(parseInt(fs.readFileSync(pidFile, 'utf8'), 10), s.child.pid);
     // config.json records the resolved port
@@ -39,7 +39,7 @@ test('fresh board bootstraps empty with the fixed column frame, state under .bri
 test('the column frame is fixed: no columns endpoint, board files cannot change it', async () => {
   const s = await startServer({
     seed: (dir) => {
-      const stateDir = path.join(dir, '.bridge-command');
+      const stateDir = path.join(dir, '.bridge-commander');
       fs.mkdirSync(stateDir, { recursive: true });
       // a hand-edited board file with a foreign frame is normalized back
       fs.writeFileSync(path.join(stateDir, 'board.json'), JSON.stringify({
@@ -65,8 +65,8 @@ test('mutations persist to board.json and survive a restart', async () => {
   try {
     const c = await s1.api('POST', '/api/cards', withOwner({ title: 'Persisted card' }));
     assert.strictEqual(c.status, 200);
-    const boardFile = path.join(dir, '.bridge-command', 'board.json');
-    assert.ok(fs.existsSync(boardFile), 'board.json written under .bridge-command');
+    const boardFile = path.join(dir, '.bridge-commander', 'board.json');
+    assert.ok(fs.existsSync(boardFile), 'board.json written under .bridge-commander');
     const onDisk = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
     assert.strictEqual(onDisk.cards.length, 1);
     assert.strictEqual(onDisk.lieutenants.length, 1);
