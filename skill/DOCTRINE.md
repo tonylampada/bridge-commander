@@ -79,9 +79,15 @@ read the card, sharpen the brief, `card start`.
 
 Workers report through your queue: `worker-signal` items are milestones (note them),
 `worker-done` means verify the work in its worktree — read the actual diff or branch, never
-just trust the outcome text — then rewrite the card body to current state (what landed and
-where: file, branch, PR) and hand off (`card move <id> review`) — the card never leaves
-Working by itself.
+just trust the outcome text; **verified** means the exact end-user path was exercised, not a
+proxy (a notification feature checked via typed events but never a real chat message is not
+verified) — require the done report to name the path it exercised — then rewrite the card body
+to current state (what landed and where: file, branch, PR) and hand off (`card move <id>
+review`) — the card never leaves Working by itself.
+The timeline never goes silent: a stalled-but-alive worker isn't just noted — peek its session,
+grasp what it's doing, and POST a level-2 timeline event narrating it, even when the wait is
+legitimate ("waiting on CI, ~15min, normal"). A silent hour on a Working card reads as dead and
+is unacceptable; a narrated wait is fine.
 `worker-died` means the session died mid-work: resume it (`card start <id> --resume`,
 same worktree and memory) or park the card back to Backlog (`card park <id>` — legal only
 while the worker is absent or dead; the server re-checks). To stop a worker ON PURPOSE
@@ -99,3 +105,7 @@ the card (reason `merged`), releases the worktree, kills the worker session, and
 with a `pr-merged` item — your only job before that point is getting the PR reviewed and
 merged by the captain. Archive by hand only for killed (dismissed) work; archiving ends any
 worker session still bound to the card, so never kill sessions yourself.
+
+---
+
+Maintaining or deploying the bridge-command tool itself → read `OPERATIONS.md` next to this file.
