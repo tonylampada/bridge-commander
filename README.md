@@ -1,70 +1,52 @@
 # Bridge Commander
 
-Agent-orchestration harness whose control surface is a kanban board. The captain (you, in a
-browser) pilots N **lieutenants** — durable orchestrator agents — and every unit of work is a
-card owned by exactly one of them. Lieutenants never implement: each started card gets a
-**worker** (one fresh agent, one tmux session, one isolated git worktree) that ships through
-the project's delivery mode, up to a real reviewed PR.
+Agent-orchestration harness whose control surface is a kanban board: the captain (you, in a
+browser) pilots **lieutenants** — durable orchestrator agents — who brief, supervise and verify
+**workers** (one fresh agent per card, in an isolated git worktree) that write the code and ship
+it up to a real reviewed PR. You glance at the board, drag cards to issue orders, and talk
+through per-card chat threads — from anywhere, phone included.
 
-Use it to delegate real engineering work to a fleet of agents and steer it from anywhere: you
-glance at the board, drag cards to issue orders, and talk through per-card chat threads; the
-lieutenants brief, supervise, and verify; the workers write the code.
+![the board](docs/img/board.png)
 
-How it works inside: [ARCHITECTURE.md](ARCHITECTURE.md). The conceptual API
-([docs/api/overview.md](docs/api/overview.md)) is the spec the implementation follows.
+## Quickstart
+
+- Open a tmux session in a directory, run your agent, invoke `/bridge-commander` — it becomes
+  the founding lieutenant and hands you the board URL.
+- Register your repos, then create cards and drag them to order work; chat with lieutenants on
+  the board.
+- Lieutenants start workers on cards; workers ship PRs; merged PRs archive themselves.
 
 ## Install
 
 ```sh
+# bridge-commander (server + CLI + skill)
 git clone https://github.com/tonylampada/bridge-commander.git
 ln -s "$(pwd)/bridge-commander/skill" ~/.claude/skills/bridge-commander
-```
 
-Optionally put `cli/bc-axi` on PATH; everything also works via its absolute path.
+# dependencies
+curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
+```
 
 ## Dependencies
 
-The server is dependency-free (plain Node, zero npm deps), but the harness drives real agent
-sessions and real PRs:
+- Node ≥ 18, `tmux`, `git`
+- [Claude Code](https://claude.com/claude-code), authenticated — the default agent harness
+- [GitHub CLI](https://cli.github.com/), authenticated — PR flows
+- [treehouse](https://github.com/kunchenguid/treehouse) — worker worktrees (optional; falls back to `git worktree`)
+- [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for `no-mistakes`-mode projects
+- [OpenAI Codex CLI](https://github.com/openai/codex) — only for `--harness codex` (optional)
 
-| Tool | Required? | Why |
-|---|---|---|
-| Node ≥ 18 | **yes** | runs the server and `bc-axi` |
-| `tmux` | **yes** | every lieutenant and worker lives in a tmux session |
-| `git` | **yes** | projects, worker worktrees, branches |
-| [Claude Code](https://claude.com/claude-code) (`claude`), authenticated | **yes** | the default agent harness for lieutenants and workers |
-| [GitHub CLI](https://cli.github.com/) (`gh`), authenticated | **yes** for PR flows | PR watch (auto-archive on merge) and the `direct-PR`/`no-mistakes` delivery modes; `local-only` projects work without it |
-| [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`), authenticated | optional | only for `--harness codex` workers/lieutenants |
-| [treehouse](https://github.com/kunchenguid/treehouse) | optional | worktree leasing for workers; auto-detected — without it, plain `git worktree` is used |
+## Run
 
-**Dependent skill:** projects registered with `--mode no-mistakes` generate worker briefs that
-invoke the user-level **`/no-mistakes`** skill. Install
-[no-mistakes](https://github.com/kunchenguid/no-mistakes) and run `no-mistakes init` in the
-project before using that mode, or register projects as `direct-PR` / `local-only` instead —
-those modes have no skill dependency.
+```sh
+mkdir myfleet && cd myfleet && tmux new -s myfleet
+claude   # then: /bridge-commander
+```
 
-## Run (the teleport)
-
-1. **Start a tmux session in your workspace directory** — the calling agent's tmux session
-   becomes the founding lieutenant's permanent address:
-
-   ```sh
-   mkdir myfleet && cd myfleet
-   tmux new -s myfleet
-   ```
-
-2. **Launch your agent inside it and invoke the skill** (run `claude`, then `/bridge-commander`).
-   The skill agrees a lieutenant name with you and runs `bc-axi init --name "<name>"`, which
-   bootstraps `.bridge-commander/`, boots the board server detached, registers the caller as the
-   founding lieutenant, and scaffolds workspace memory (`AGENTS.md`, `captain.md`, `learnings/`).
-
-3. **Open the printed board URL** (default `http://localhost:4780/`) — the captain's cockpit.
-   Talk to lieutenants through their chats and card threads; drag cards to issue orders. New
-   lieutenants are born from the lane's ＋ button; repos join via
-   `bc-axi project add <url|path> --mode no-mistakes|direct-PR|local-only`.
-
-Run `bc-axi` bare for full CLI usage, or start the server by hand:
-`node server/server.js <workspace> [--port N]`.
+Open the printed board URL (default `http://localhost:4780/`). Add repos with
+`bc-axi project add <url|path> --mode no-mistakes|direct-PR|local-only`. Run `bc-axi` bare for
+full CLI usage.
 
 ## Configuration
 
@@ -94,12 +76,12 @@ Env knobs (set on the server process):
 ### Network exposure
 
 The board has **no application-level auth** — whoever reaches the bind address fully controls
-the board, including starting workers (running code). Security = bind address + the network
-boundary in front of it:
+the board, including starting workers (running code):
 
 - **Default (recommended): loopback only** (`127.0.0.1`).
-- To expose over a private mesh (e.g. Tailscale), set `host` to that interface's address
-  (`--host` > `config.json` > loopback). A non-loopback bind also keeps a loopback listener so
-  local CLI/browser keep working. The mesh is your only auth boundary — only on a tailnet you
-  fully trust.
+- Private mesh (e.g. Tailscale): set `host` to that interface's address; a loopback listener is
+  kept alongside. The mesh is your only auth boundary.
 - **Never bind `0.0.0.0`.**
+
+How it works inside: [ARCHITECTURE.md](ARCHITECTURE.md). The conceptual API
+([docs/api/overview.md](docs/api/overview.md)) is the spec the implementation follows.
