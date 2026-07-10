@@ -25,11 +25,12 @@ so the machine needs:
 | [Claude Code](https://claude.com/claude-code) (`claude`), authenticated | **yes** | the default agent harness for lieutenants and workers |
 | [GitHub CLI](https://cli.github.com/) (`gh`), authenticated | **yes** for PR flows | PR watch (auto-archive on merge) and the `direct-PR`/`no-mistakes` delivery modes; `local-only` projects work without it |
 | [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`), authenticated | optional | only for `--harness codex` workers/lieutenants |
-| `treehouse` | optional | worktree leasing for workers; auto-detected — without it, plain `git worktree` is used |
+| [treehouse](https://github.com/kunchenguid/treehouse) | optional | worktree leasing for workers; auto-detected — without it, plain `git worktree` is used |
 
 **Dependent skill:** projects registered with `--mode no-mistakes` generate worker briefs that
 invoke the user-level **`/no-mistakes`** skill (validation pipeline → review → tests → push →
-PR → CI). Install it before using that mode, or register projects as `direct-PR` /
+PR → CI). Install [no-mistakes](https://github.com/kunchenguid/no-mistakes) and run
+`no-mistakes init` in the project before using that mode, or register projects as `direct-PR` /
 `local-only` instead — those modes have no skill dependency.
 
 ## Quickstart (the teleport)
