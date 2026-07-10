@@ -27,6 +27,20 @@ function migrateStateDir(ws, isLive) {
   return nu;
 }
 
+// A directory qualifies as a workspace only if it holds a REAL state dir — one
+// with config.json OR board.json. A bare `.bridge-commander/` (e.g. the harness
+// state home `~/.bridge-commander/` that holds only `harness/`) does NOT count,
+// so upward discovery never adopts $HOME as a phantom workspace. Checks both the
+// new and legacy state-dir names.
+function isWorkspace(dir) {
+  for (const name of [STATE_DIR_NAME, LEGACY_STATE_DIR_NAME]) {
+    const sd = path.join(dir, name);
+    if (fs.existsSync(path.join(sd, 'config.json')) ||
+        fs.existsSync(path.join(sd, 'board.json'))) return true;
+  }
+  return false;
+}
+
 // Resolve the workspace state dir: prefer the new name, accept the legacy one,
 // default to the new name for a fresh install.
 function resolveStateDir(ws) {
@@ -50,5 +64,5 @@ function migrateHomeStateDir(home) {
 
 module.exports = {
   STATE_DIR_NAME, LEGACY_STATE_DIR_NAME,
-  migrateStateDir, resolveStateDir, migrateHomeStateDir,
+  migrateStateDir, resolveStateDir, migrateHomeStateDir, isWorkspace,
 };

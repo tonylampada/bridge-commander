@@ -18,7 +18,7 @@ const { spawn, execFileSync } = require('child_process');
 
 const SELF_DIR = path.dirname(fs.realpathSync(process.argv[1]));
 const SERVER_JS = path.join(SELF_DIR, '..', 'server', 'server.js');
-const { STATE_DIR_NAME, LEGACY_STATE_DIR_NAME, migrateStateDir, resolveStateDir, migrateHomeStateDir } =
+const { STATE_DIR_NAME, LEGACY_STATE_DIR_NAME, migrateStateDir, resolveStateDir, migrateHomeStateDir, isWorkspace } =
   require(path.join(SELF_DIR, '..', 'server', 'statedir.js'));
 const DEFAULT_PORT = 4780;
 
@@ -93,12 +93,14 @@ if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.s
 
 // ---------- workspace resolution ----------
 // Discovery accepts BOTH the new and legacy state-dir names so a not-yet-migrated
-// install is still found; STATE_DIR resolution then prefers the new name.
+// install is still found; STATE_DIR resolution then prefers the new name. A bare
+// state dir does NOT qualify — isWorkspace() requires config.json or board.json,
+// so the harness state home (~/.bridge-commander/ holding only harness/) is
+// skipped and `init` under $HOME creates a real workspace instead of adopting it.
 function findWorkspace(start) {
   let dir = path.resolve(start);
   for (;;) {
-    if (fs.existsSync(path.join(dir, STATE_DIR_NAME)) ||
-        fs.existsSync(path.join(dir, LEGACY_STATE_DIR_NAME))) return dir;
+    if (isWorkspace(dir)) return dir;
     const up = path.dirname(dir);
     if (up === dir) return null;
     dir = up;
