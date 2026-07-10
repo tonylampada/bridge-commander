@@ -22,7 +22,9 @@
 const { execFile } = require('node:child_process');
 
 const BUSY_RE = /esc (to )?interrupt|Working\.\.\./i;
-const PROMPT_GLYPHS = new Set(['>', '❯' /* ❯ */, '$', '%', '#']);
+// '›' (U+203A) is codex's composer prompt; without it a cleared codex composer
+// would classify as pending and verified-submit would read every send as stuck.
+const PROMPT_GLYPHS = new Set(['>', '❯' /* ❯ */, '›' /* U+203A, codex */, '$', '%', '#']);
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
@@ -109,6 +111,19 @@ function stripGhost(line) {
   return out;
 }
 
+// classifyComposerLine(raw) -> 'empty' | 'pending' — the pure half of
+// composerState: classify one styled cursor-line capture after stripping
+// ghost text, box borders, prompt glyphs, and busy footers.
+function classifyComposerLine(raw) {
+  let s = stripGhost(raw.replace(/\n$/, ''));
+  // Strip composer box borders (claude/codex draw "│ … │"; some TUIs use ┃ or |).
+  s = s.replace(/[│┃|]/g, '').trim();
+  if (s === '') return 'empty';
+  if (PROMPT_GLYPHS.has(s)) return 'empty';
+  if (BUSY_RE.test(s)) return 'empty'; // busy footer landing on the cursor line
+  return 'pending';
+}
+
 // composerState(target) -> 'empty' | 'pending' | 'unknown'
 //   empty   — no pending input (blank, bare prompt glyph, busy footer, or only
 //             ghost text). Safe to inject; also the positive ack that a submit landed.
@@ -120,13 +135,7 @@ async function composerState(target) {
   const row = cy.trim();
   const raw = await tryTmux('capture-pane', '-e', '-p', '-t', target, '-S', row, '-E', row);
   if (raw === null) return 'unknown';
-  let s = stripGhost(raw.replace(/\n$/, ''));
-  // Strip composer box borders (claude/codex draw "│ … │"; some TUIs use ┃ or |).
-  s = s.replace(/[│┃|]/g, '').trim();
-  if (s === '') return 'empty';
-  if (PROMPT_GLYPHS.has(s)) return 'empty';
-  if (BUSY_RE.test(s)) return 'empty'; // busy footer landing on the cursor line
-  return 'pending';
+  return classifyComposerLine(raw);
 }
 
 // paneIsBusy(target) — do the last few non-blank lines of the pane show a
@@ -205,6 +214,7 @@ module.exports = {
   tryTmux,
   sleep,
   stripGhost,
+  classifyComposerLine,
   composerState,
   paneIsBusy,
   capture,

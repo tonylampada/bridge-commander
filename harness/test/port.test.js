@@ -8,6 +8,13 @@ test('getHarness returns builtin fake with all seven verbs', () => {
   for (const verb of VERBS) assert.strictEqual(typeof h[verb], 'function', verb);
 });
 
+test('getHarness returns builtin codex with all seven verbs + the pane capability verbs', () => {
+  const h = getHarness('codex');
+  for (const verb of VERBS) assert.strictEqual(typeof h[verb], 'function', verb);
+  assert.strictEqual(typeof h.openPane, 'function', 'openPane (UI pane peek)');
+  assert.strictEqual(typeof h.paneSnapshot, 'function', 'paneSnapshot');
+});
+
 test('getHarness throws on unknown harness', () => {
   assert.throws(() => getHarness('nope'), /unknown harness "nope"/);
 });
