@@ -25,7 +25,7 @@ them drift.
 
 - **Delivery is write-ahead and at-least-once**: every append lands in the durable queue
   first, then the server wakes the owning lieutenant — one coalesced
-  `[bridge-command] N pending item(s) — run: bc-axi drain` line typed into its live session,
+  `[bridge-commander] N pending item(s) — run: bc-axi drain` line typed into its live session,
   with the turn-end hook (`POST /api/turn-end`) re-nudging a lieutenant that ends a turn with
   items still unacked. Only ack removes; a dead session loses nothing; a server restart is a
   non-event.

@@ -90,14 +90,14 @@ async function step(name, fn) {
       await sleep(50);
     }
 
-    await step('board init: fixed frame, empty board, state under .bridge-command', async () => {
+    await step('board init: fixed frame, empty board, state under .bridge-commander', async () => {
       const b = (await api('GET', '/api/board')).body;
       assert.deepStrictEqual(b.columns.map((c) => c.id), ['backlog', 'working', 'review', 'peer']);
       assert.deepStrictEqual(b.lieutenants, []);
       assert.deepStrictEqual(b.cards, []);
-      assert.ok(fs.existsSync(path.join(ws, '.bridge-command', 'board.json')) ||
-        fs.existsSync(path.join(ws, '.bridge-command')), 'state dir exists');
-      const cfg = JSON.parse(fs.readFileSync(path.join(ws, '.bridge-command', 'config.json'), 'utf8'));
+      assert.ok(fs.existsSync(path.join(ws, '.bridge-commander', 'board.json')) ||
+        fs.existsSync(path.join(ws, '.bridge-commander')), 'state dir exists');
+      const cfg = JSON.parse(fs.readFileSync(path.join(ws, '.bridge-commander', 'config.json'), 'utf8'));
       assert.strictEqual(cfg.port, port);
       // the UI is served
       const html = await (await fetch(base + '/')).text();
@@ -131,7 +131,7 @@ async function step(name, fn) {
       assert.strictEqual(r.status, 200);
       const seq = r.body.seq;
       // durable on disk before anything else (write-ahead)
-      const onDisk = fs.readFileSync(path.join(ws, '.bridge-command', 'queue', 'ada.jsonl'), 'utf8');
+      const onDisk = fs.readFileSync(path.join(ws, '.bridge-commander', 'queue', 'ada.jsonl'), 'utf8');
       assert.ok(onDisk.includes('how goes the port?'));
       // drained via CLI (--json = raw QueueItems)
       let cli = await runCli(['drain', '--lieutenant', 'ada', '--json'], wsArgs);
@@ -184,7 +184,7 @@ async function step(name, fn) {
     await step('archive and restore with frozen state + loud resurrection', async () => {
       await api('POST', '/api/cards/chase-the-flake/archive', { reason: 'killed', note: 'wrong lead', actor: 'user' });
       assert.strictEqual((await api('GET', '/api/cards/chase-the-flake')).status, 404);
-      const recs = fs.readFileSync(path.join(ws, '.bridge-command', 'archive.jsonl'), 'utf8')
+      const recs = fs.readFileSync(path.join(ws, '.bridge-commander', 'archive.jsonl'), 'utf8')
         .split('\n').filter(Boolean).map((l) => JSON.parse(l));
       assert.strictEqual(recs[0].reason, 'killed');
       assert.strictEqual(recs[0].note, 'wrong lead');
@@ -268,7 +268,7 @@ async function step(name, fn) {
           assert.strictEqual(b.lt.ref.session, lieutenantSession(b.dir, 'twin'));
           assert.match(b.lt.ref.session, /^bc-[A-Za-z0-9-]+-lt-twin$/, 'workspace-discriminated, ASCII-only');
           const rec = JSON.parse(fs.readFileSync(path.join(b.dir, 'fake', b.lt.ref.session + '.json'), 'utf8'));
-          const want = path.join(b.dir, '.bridge-command', 'harness');
+          const want = path.join(b.dir, '.bridge-commander', 'harness');
           assert.strictEqual(rec.stateDir, want, 'harness state under THIS workspace, never a shared global dir');
           assert.ok(fs.existsSync(want), 'workspace harness state dir provisioned');
         }

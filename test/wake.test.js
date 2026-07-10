@@ -46,7 +46,7 @@ test('queue append wakes a live-ref lieutenant once; drain re-arms; ack re-arms'
     await s.api('POST', '/api/feedback', { target: 'lieutenant:fk1', text: 'hello' });
     let sends = await waitSends(fdir, 'bc-fk1', 1);
     assert.strictEqual(sends.length, 1);
-    assert.match(sends[0].text, /^\[bridge-command\] 1 pending item\(s\) — run: bc-axi drain$/);
+    assert.match(sends[0].text, /^\[bridge-commander\] 1 pending item\(s\) — run: bc-axi drain$/);
 
     // coalescing: more appends while pending-and-nudged do NOT stack wakes
     await s.api('POST', '/api/feedback', { target: 'lieutenant:fk1', text: 'again' });
@@ -177,7 +177,7 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
     // launch prompt = doctrine + charter + situating line (recorded by the fake's spawn marker)
     const rec = JSON.parse(fs.readFileSync(path.join(fdir, lt.ref.session + '.json'), 'utf8'));
     // harness state plumbed through the port is the WORKSPACE's, never global
-    assert.strictEqual(rec.stateDir, path.join(s.dir, '.bridge-command', 'harness'));
+    assert.strictEqual(rec.stateDir, path.join(s.dir, '.bridge-commander', 'harness'));
     assert.match(rec.prompt, /Lieutenant doctrine/);
     assert.match(rec.prompt, /guard the gate/);
     assert.match(rec.prompt, /lieutenant "Spawn Bot" \(id: spawn-bot\)/);
@@ -187,7 +187,7 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
     await s.api('POST', '/api/feedback', { target: 'lieutenant:spawn-bot', text: 'welcome aboard' });
     const sends = await waitSends(fdir, lt.ref.session, 1);
     assert.strictEqual(sends.length, 1);
-    assert.match(sends[0].text, /\[bridge-command\] 1 pending item\(s\)/);
+    assert.match(sends[0].text, /\[bridge-commander\] 1 pending item\(s\)/);
 
     // spawn failure = clean error, no lieutenant registered
     const bad = await s.api('POST', '/api/lieutenants', { name: 'Spawn Bot', spawn: true, harness: 'fake' });

@@ -14,7 +14,7 @@
 //
 // Zero dependencies; child_process + tmux only.
 //
-// Everything here is async: these primitives run inside the bridge-command
+// Everything here is async: these primitives run inside the bridge-commander
 // server, whose event loop must never block on a subprocess (a sync tmux
 // call per session per supervision tick froze the whole server — UI, SSE,
 // every request — for the duration).

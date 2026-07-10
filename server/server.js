@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// bridge-command server — the harness control surface. Node built-ins only, zero deps.
+// bridge-commander server — the harness control surface. Node built-ins only, zero deps.
 // Usage: node server/server.js [workspace] [--workspace DIR] [--port N] [--host H]
-// One workspace = one board. All state lives in <workspace>/.bridge-command/:
+// One workspace = one board. All state lives in <workspace>/.bridge-commander/:
 //   board.json     the board (canonical state of the world)
 //   archive.jsonl  append-only frozen card snapshots (reason: merged|killed)
 //   config.json    { port, host?, voices? } — port default 4780, written on first boot
@@ -58,6 +58,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
+const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const { execFile } = require('child_process');
 
 // ---------- args ----------
@@ -79,13 +80,20 @@ const opts = parseArgs(process.argv.slice(2));
 
 // ---------- paths (workspace-scoped; no global state) ----------
 const WORKSPACE = path.resolve(opts.workspace || process.cwd());
-const STATE_DIR = path.join(WORKSPACE, '.bridge-command');
+// One-shot rename migrations (bridge-command → bridge-commander). Boot-time and
+// idempotent: the server owns this workspace as it starts, so renaming the state
+// dir before any path below is used is safe. Legacy installs survive the flag day.
+const migratedState = migrateStateDir(WORKSPACE);
+if (migratedState) console.log('[bridge-commander] migrated state dir → ' + migratedState);
+const migratedHome = migrateHomeStateDir();
+if (migratedHome) console.log('[bridge-commander] migrated home state dir → ' + migratedHome);
+const STATE_DIR = path.join(WORKSPACE, STATE_DIR_NAME);
 const BOARD_FILE = path.join(STATE_DIR, 'board.json');
 const ARCHIVE_FILE = path.join(STATE_DIR, 'archive.jsonl');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const QUEUE_DIR = path.join(STATE_DIR, 'queue');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
-// Chat file uploads. Lives under the workspace .bridge-command/ (already
+// Chat file uploads. Lives under the workspace .bridge-commander/ (already
 // git-ignored). NOTE: this dir grows unbounded — an upload is never garbage
 // collected here; a prune policy (age/size cap, orphan sweep) can come later.
 // Each file is stored as <id>__<safeName> with a sidecar <id>.json holding its
@@ -119,7 +127,7 @@ const ARTIFACT_MIME = {
 
 const DEFAULT_PORT = 4780;
 
-// ---------- workspace config (.bridge-command/config.json) ----------
+// ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
   try {
     const c = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
@@ -538,7 +546,7 @@ function commitAck(seq, ownerId) {
 const WAKE_TTL_MS = process.env.BC_WAKE_TTL_MS !== undefined
   ? parseInt(process.env.BC_WAKE_TTL_MS, 10) : 90000;
 const nudged = new Map(); // lieutenant id -> epoch-ms of the last wake sent since its last drain
-function wakeLine(n) { return '[bridge-command] ' + n + ' pending item(s) — run: bc-axi drain'; }
+function wakeLine(n) { return '[bridge-commander] ' + n + ' pending item(s) — run: bc-axi drain'; }
 function scheduleWake(ltId) {
   const lt = findLieutenant(ltId);
   if (!lt || !isHarnessRef(lt.ref)) return;
@@ -1670,7 +1678,7 @@ async function superviseTick() {
         else {
           const target = lt.ref;
           Promise.resolve()
-            .then(() => harnessFor(target).send(target, '[bridge-command] session respawned — run: bc-axi drain'))
+            .then(() => harnessFor(target).send(target, '[bridge-commander] session respawned — run: bc-axi drain'))
             .catch(() => {});
         }
       } catch (e) {
@@ -2472,7 +2480,7 @@ const server = http.createServer(async (req, res) => {
 
 server.on('error', (e) => { console.error('server error: ' + e.message); cleanup(); process.exit(1); });
 server.listen(PORT, BIND_HOST, () => {
-  console.log('bridge-command server up: http://localhost:' + PORT + '/ host=' + BIND_HOST +
+  console.log('bridge-commander server up: http://localhost:' + PORT + '/ host=' + BIND_HOST +
     ' workspace=' + WORKSPACE + ' pid=' + process.pid);
 });
 // Non-loopback bind: also listen on loopback so local CLI/UI keep working.

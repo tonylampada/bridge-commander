@@ -1,13 +1,13 @@
 #!/usr/bin/env node
-// bc-axi — agent CLI for the bridge-command board. Node built-ins only, zero deps.
+// bc-axi — agent CLI for the bridge-commander board. Node built-ins only, zero deps.
 // Run with no args for full usage. Message/body/charter text always goes via
 // --text-file, --body-file, --charter-file, or stdin — never interpolated into a
 // shell command.
 //
 // Workspace resolution (no --board, no global state): --workspace wins; else walk
-// up from cwd to the nearest directory containing .bridge-command/; `open` may
+// up from cwd to the nearest directory containing .bridge-commander/; `open` may
 // bootstrap a fresh workspace in cwd. The server port comes from the workspace's
-// .bridge-command/config.json (default 4780); --port overrides.
+// .bridge-commander/config.json (default 4780); --port overrides.
 'use strict';
 
 const http = require('http');
@@ -18,6 +18,8 @@ const { spawn, execFileSync } = require('child_process');
 
 const SELF_DIR = path.dirname(fs.realpathSync(process.argv[1]));
 const SERVER_JS = path.join(SELF_DIR, '..', 'server', 'server.js');
+const { STATE_DIR_NAME, LEGACY_STATE_DIR_NAME, migrateStateDir, resolveStateDir, migrateHomeStateDir } =
+  require(path.join(SELF_DIR, '..', 'server', 'statedir.js'));
 const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
@@ -90,20 +92,39 @@ if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'wor
 if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
 // ---------- workspace resolution ----------
+// Discovery accepts BOTH the new and legacy state-dir names so a not-yet-migrated
+// install is still found; STATE_DIR resolution then prefers the new name.
 function findWorkspace(start) {
   let dir = path.resolve(start);
   for (;;) {
-    if (fs.existsSync(path.join(dir, '.bridge-command'))) return dir;
+    if (fs.existsSync(path.join(dir, STATE_DIR_NAME)) ||
+        fs.existsSync(path.join(dir, LEGACY_STATE_DIR_NAME))) return dir;
     const up = path.dirname(dir);
     if (up === dir) return null;
     dir = up;
   }
 }
+// A legacy state dir is "live" only while its server is running — never rename it
+// out from under one. Absent/stale pid ⇒ safe to migrate.
+function stateDirLive(dir) {
+  try {
+    const pid = parseInt(fs.readFileSync(path.join(dir, 'server.pid'), 'utf8'), 10);
+    if (!pid) return false;
+    process.kill(pid, 0);
+    return true;
+  } catch (e) { return false; }
+}
 const WORKSPACE = opts.workspace
   ? path.resolve(opts.workspace)
   : (cmd === 'open' || cmd === 'init' ? (findWorkspace(process.cwd()) || process.cwd()) : findWorkspace(process.cwd()));
-if (!WORKSPACE) die('no workspace found: no .bridge-command/ from cwd upward (run `bc-axi init` to start one here, or pass --workspace)');
-const STATE_DIR = path.join(WORKSPACE, '.bridge-command');
+if (!WORKSPACE) die('no workspace found: no ' + STATE_DIR_NAME + '/ from cwd upward (run `bc-axi init` to start one here, or pass --workspace)');
+// One-shot rename migrations (bridge-command → bridge-commander), idempotent and
+// guarded so a running legacy server is left alone.
+const migratedState = migrateStateDir(WORKSPACE, stateDirLive);
+if (migratedState) console.error('[bridge-commander] migrated state dir → ' + migratedState);
+const migratedHome = migrateHomeStateDir();
+if (migratedHome) console.error('[bridge-commander] migrated home state dir → ' + migratedHome);
+const STATE_DIR = resolveStateDir(WORKSPACE);
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
 
@@ -192,7 +213,7 @@ async function cmdOpen() {
 
 // ---------- init: workspace.init — the teleport ----------
 // Mechanical half of the founding flow (the skill drives the agent half):
-// verify tmux, bootstrap .bridge-command/, boot the server, register the CALLER
+// verify tmux, bootstrap .bridge-commander/, boot the server, register the CALLER
 // as the founding lieutenant (its tmux session is the ref), install the
 // workspace-level turn-end Stop hook, scaffold AGENTS.md + captain.md +
 // learnings/, print the board URL. Idempotent — safe to re-run.
@@ -230,8 +251,8 @@ async function cmdInit() {
   // because the agent's cwd drifted from the intended workspace. Announce the resolved
   // target and how it was chosen, so a wrong dir is caught before any state is written.
   const fresh = !fs.existsSync(STATE_DIR);
-  const how = opts.workspace ? '--workspace flag' : (fresh ? 'current directory (cwd)' : 'existing .bridge-command/ found from cwd upward');
-  console.error('┌─ bridge-command init');
+  const how = opts.workspace ? '--workspace flag' : (fresh ? 'current directory (cwd)' : 'existing .bridge-commander/ found from cwd upward');
+  console.error('┌─ bridge-commander init');
   console.error('│  workspace : ' + WORKSPACE + (fresh ? '   (NEW)' : '   (existing)'));
   console.error('│  resolved  : ' + how);
   console.error('│  tmux      : ' + tmuxSession);
@@ -239,7 +260,7 @@ async function cmdInit() {
 
   // 2. state dir + server (detached, idempotent)
   fs.mkdirSync(STATE_DIR, { recursive: true });
-  excludeFromGit(WORKSPACE, '.bridge-command/');
+  excludeFromGit(WORKSPACE, '.bridge-commander/');
   const { started } = await ensureServer();
   console.log('server ' + (started ? 'started' : 'already running') + ' on port ' + PORT);
 
@@ -276,25 +297,25 @@ async function cmdInit() {
   const agentsMd = path.join(WORKSPACE, 'AGENTS.md');
   if (!fs.existsSync(agentsMd)) {
     fs.writeFileSync(agentsMd,
-      '# ' + path.basename(WORKSPACE) + ' — Bridge Command workspace\n\n' +
-      'Every agent here works for the captain through the Bridge Command board.\n\n' +
-      '1. FIRST: load the **bridge-command** skill and follow its doctrine.\n' +
+      '# ' + path.basename(WORKSPACE) + ' — Bridge Commander workspace\n\n' +
+      'Every agent here works for the captain through the Bridge Commander board.\n\n' +
+      '1. FIRST: load the **bridge-commander** skill and follow its doctrine.\n' +
       '2. Read `captain.md` — the captain\'s preferences and working style.\n' +
       '3. Read `learnings/` — per-project engineering learnings, proactively maintained by lieutenants.\n\n' +
-      'Board state lives in `.bridge-command/` (server-owned — never hand-edit).\n' +
+      'Board state lives in `.bridge-commander/` (server-owned — never hand-edit).\n' +
       'Drive the board with `bc-axi` (run it bare for usage).\n');
     console.log('scaffolded AGENTS.md');
   }
   const captainMd = path.join(WORKSPACE, 'captain.md');
   if (!fs.existsSync(captainMd)) {
-    const seed = path.join(os.homedir(), '.bridge-command', 'captain.md');
+    const seed = path.join(os.homedir(), '.bridge-commander', 'captain.md');
     if (fs.existsSync(seed)) {
       fs.copyFileSync(seed, captainMd);
-      console.log('scaffolded captain.md (seeded from ~/.bridge-command/captain.md)');
+      console.log('scaffolded captain.md (seeded from ~/.bridge-commander/captain.md)');
     } else {
       fs.writeFileSync(captainMd,
         '# Captain preferences\n\n' +
-        '(Curated preferences and working style. A global seed can live at ~/.bridge-command/captain.md.)\n');
+        '(Curated preferences and working style. A global seed can live at ~/.bridge-commander/captain.md.)\n');
       console.log('scaffolded captain.md');
     }
   }
@@ -866,17 +887,17 @@ const commands = {
   say: cmdSay, drain: cmdDrain, ack: cmdAck,
 };
 if (!commands[cmd]) {
-  die('bc-axi — agent CLI for the bridge-command board.\n' +
-    'Workspace: nearest .bridge-command/ from cwd upward, or --workspace DIR. Port: workspace config.json (default 4780), or --port N.\n' +
+  die('bc-axi — agent CLI for the bridge-commander board.\n' +
+    'Workspace: nearest .bridge-commander/ from cwd upward, or --workspace DIR. Port: workspace config.json (default 4780), or --port N.\n' +
     'Bind host: config.json "host" (default 127.0.0.1 loopback), or --host H on init/open. Never 0.0.0.0 — there is no app auth.\n' +
     '\nserver & workspace:\n' +
     '  init --name N [--id id] [--charter-file f|-] [--port N] [--host H]\n' +
     '                                         workspace.init (the teleport): run INSIDE tmux; bootstraps\n' +
-    '                                         .bridge-command/, boots the server, registers the caller\'s tmux\n' +
+    '                                         .bridge-commander/, boots the server, registers the caller\'s tmux\n' +
     '                                         session as the founding lieutenant, installs the turn-end hook,\n' +
     '                                         scaffolds AGENTS.md + captain.md + learnings/. Idempotent\n' +
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +
-    '                                         Bootstraps .bridge-command/ in cwd on first run.\n' +
+    '                                         Bootstraps .bridge-commander/ in cwd on first run.\n' +
     '  status                                 up/down, cards, lieutenants, pending queue items\n' +
     '  stop                                   stop the workspace server\n' +
     '\nlieutenant:\n' +

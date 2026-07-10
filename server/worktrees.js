@@ -10,7 +10,7 @@
 // (non-interactive durable acquire: prints only the worktree path to stdout;
 // `treehouse return <path>` releases — the pattern mined from firstmate's
 // fm-spawn.sh, with --lease replacing the interactive-subshell dance), else
-// plain `git worktree add -d` under <workspace>/.bridge-command/worktrees/.
+// plain `git worktree add -d` under <workspace>/.bridge-commander/worktrees/.
 // BC_WORKTREE_TOOL=git|treehouse forces the choice (tests pin `git` for
 // hermetic cleanup).
 //
@@ -93,7 +93,7 @@ function createWorktree(projectPath, cardId, workspace) {
     }
     if (!wt) {
       tool = 'git';
-      const dir = path.join(workspace, '.bridge-command', 'worktrees');
+      const dir = path.join(workspace, '.bridge-commander', 'worktrees');
       fs.mkdirSync(dir, { recursive: true });
       wt = path.join(dir, String(cardId).replace(/[^A-Za-z0-9_.-]/g, '-'));
       if (fs.existsSync(wt)) throw new Error('worktree path already exists: ' + wt);

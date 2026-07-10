@@ -38,12 +38,12 @@ function workerBrief(b) {
   const card = b.card;
   const investigation = card.type === 'investigation';
   const cli = b.cli + ' --workspace ' + b.workspace;
-  const reportFile = b.workspace + '/.bridge-command/reports/' + card.id + '.md';
+  const reportFile = b.workspace + '/.bridge-commander/reports/' + card.id + '.md';
   const parts = [];
 
   parts.push(
     '# Worker brief — card "' + card.title + '" (' + card.id + ')\n\n'
-    + 'You are a Bridge Command **worker**: one fresh agent bound 1:1 to this card, working in an\n'
+    + 'You are a Bridge Commander **worker**: one fresh agent bound 1:1 to this card, working in an\n'
     + 'isolated git worktree. You implement; your owning lieutenant orchestrates and reviews. You\n'
     + 'never talk to the captain and you have no delivery queue — your only board verbs are the two\n'
     + '`worker` commands below.');

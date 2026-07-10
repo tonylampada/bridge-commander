@@ -22,8 +22,8 @@ test('upload → stored + served with the right Content-Type and correct size', 
     assert.strictEqual(up.body.mime, 'text/plain');
     assert.strictEqual(up.body.size, Buffer.byteLength(payload));
 
-    // stored on disk under .bridge-command/uploads with a sidecar
-    const up_dir = path.join(s.dir, '.bridge-command', 'uploads');
+    // stored on disk under .bridge-commander/uploads with a sidecar
+    const up_dir = path.join(s.dir, '.bridge-commander', 'uploads');
     assert.ok(fs.existsSync(path.join(up_dir, up.body.id + '.json')), 'sidecar written');
     assert.ok(fs.existsSync(path.join(up_dir, up.body.id + '__note.txt')), 'file written with id prefix');
 
@@ -74,7 +74,7 @@ test('path traversal in the id or the filename is blocked', async () => {
     const up = await s.api('POST', '/api/attachments', { name: '../../../etc/passwd', mime: 'text/plain', dataBase64: b64('x') });
     assert.strictEqual(up.status, 200);
     assert.strictEqual(up.body.name, 'passwd'); // stripped to the basename
-    const up_dir = path.join(s.dir, '.bridge-command', 'uploads');
+    const up_dir = path.join(s.dir, '.bridge-commander', 'uploads');
     const stored = fs.readdirSync(up_dir).filter((f) => f.startsWith(up.body.id + '__'));
     assert.strictEqual(stored.length, 1);
     assert.ok(!stored[0].includes('..') && !stored[0].includes('/'), 'stored name has no traversal');
@@ -100,7 +100,7 @@ test('captain feedback with attachments persists them on the thread message and 
     assert.strictEqual(att[0].id, up.body.id);
     assert.strictEqual(att[0].name, 'shot.png');
     assert.strictEqual(att[0].mime, 'image/png');
-    const absPath = path.join(s.dir, '.bridge-command', 'uploads', up.body.id + '__shot.png');
+    const absPath = path.join(s.dir, '.bridge-commander', 'uploads', up.body.id + '__shot.png');
     assert.strictEqual(att[0].path, absPath);
 
     // the queue item to the owner carries the same attachments (with path)
@@ -133,7 +133,7 @@ test('drain and thread output surface the absolute attachment path to the agent'
     await s.api('POST', '/api/cards', withOwner({ title: 'Paths' }));
     const up = await s.api('POST', '/api/attachments', { name: 'diag.log', mime: 'text/plain', dataBase64: b64('trace') });
     await s.api('POST', '/api/feedback', { target: 'card:paths', text: 'look', attachments: [{ id: up.body.id }] });
-    const absPath = path.join(s.dir, '.bridge-command', 'uploads', up.body.id + '__diag.log');
+    const absPath = path.join(s.dir, '.bridge-commander', 'uploads', up.body.id + '__diag.log');
 
     const drain = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
     assert.strictEqual(drain.code, 0, drain.stderr);

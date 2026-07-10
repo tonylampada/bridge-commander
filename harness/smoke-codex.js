@@ -24,7 +24,7 @@
 //      SAME across the death/resume cycle (refs survive repeated cycles)
 //
 // State is fully isolated in a temp stateDir (passed via opts), so nothing
-// touches ~/.bridge-command or any workspace.
+// touches ~/.bridge-commander or any workspace.
 
 const fs = require('node:fs');
 const os = require('node:os');

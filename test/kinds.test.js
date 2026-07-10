@@ -81,7 +81,7 @@ test('registered kinds persist with the board and survive a restart', async () =
   const s1 = await startServer({ dir });
   try {
     await s1.api('PUT', '/api/kinds', reg);
-    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, '.bridge-command', 'board.json'), 'utf8'));
+    const onDisk = JSON.parse(fs.readFileSync(path.join(dir, '.bridge-commander', 'board.json'), 'utf8'));
     assert.deepStrictEqual(onDisk.kinds, reg); // only the registered map is stored
   } finally {
     await s1.stop();
@@ -237,7 +237,7 @@ test('cli: bc-axi kinds sets from a file and prints the effective map', async ()
 test('hand-edited board json (kindless events, foreign columns) loads and serves', async () => {
   const s = await startServer({
     seed(dir) {
-      const stateDir = path.join(dir, '.bridge-command');
+      const stateDir = path.join(dir, '.bridge-commander');
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(path.join(stateDir, 'board.json'), JSON.stringify({
         title: 'legacy', seq: 3,

@@ -89,8 +89,8 @@ function dumpDiagnostics() {
   console.error(capture(LT_SESSION).split('\n').slice(-80).join('\n'));
   try {
     console.error('\n--- drain log (queue/' + LT + '.jsonl) ---');
-    console.error(fs.readFileSync(path.join(ws, '.bridge-command', 'queue', LT + '.jsonl'), 'utf8').trim());
-    console.error('ack cursor: ' + fs.readFileSync(path.join(ws, '.bridge-command', 'queue', LT + '.ack'), 'utf8').trim());
+    console.error(fs.readFileSync(path.join(ws, '.bridge-commander', 'queue', LT + '.jsonl'), 'utf8').trim());
+    console.error('ack cursor: ' + fs.readFileSync(path.join(ws, '.bridge-commander', 'queue', LT + '.ack'), 'utf8').trim());
   } catch (e) { console.error('(no queue state: ' + e.message + ')'); }
   for (const s of (tryTmux('list-sessions', '-F', '#S') || '').split('\n').filter((x) => x.startsWith('bc-' + workspaceDisc(ws) + '-w-'))) {
     console.error('\n--- worker pane (' + s + ') ---');

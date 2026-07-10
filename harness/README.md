@@ -112,8 +112,8 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
   (fs.watch + 1s polling backstop) and fires the hook per event.
 
 State lives in `opts.stateDir` — the server and CLI always pass the
-workspace's `.bridge-command/harness/` (`BC_HARNESS_STATE` overrides; the
-global `~/.bridge-command/harness/` is a last-resort for bare embedders only):
+workspace's `.bridge-commander/harness/` (`BC_HARNESS_STATE` overrides; the
+global `~/.bridge-commander/harness/` is a last-resort for bare embedders only):
 `<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`.
 
 ## The codex implementation

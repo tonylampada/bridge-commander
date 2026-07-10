@@ -20,12 +20,12 @@ const t = require('./tmux.js');
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh']);
 
 // State dir resolution: opts.stateDir (the server/CLI always pass the
-// workspace's .bridge-command/harness), then BC_HARNESS_STATE, then a global
+// workspace's .bridge-commander/harness), then BC_HARNESS_STATE, then a global
 // last-resort for bare embedders only — shared across workspaces, so never
 // rely on it from workspace-aware callers.
 function stateDirOf(opts = {}) {
   const dir = opts.stateDir || process.env.BC_HARNESS_STATE
-    || path.join(os.homedir(), '.bridge-command', 'harness');
+    || path.join(os.homedir(), '.bridge-commander', 'harness');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
 }

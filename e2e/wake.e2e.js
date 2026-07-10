@@ -134,7 +134,7 @@ const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutena
       assert.strictEqual(lt.id, 'founder');
       assert.deepStrictEqual(lt.ref, { harness: 'claude', session: FOUNDER, cwd: fs.realpathSync(ws) });
       // scaffolding: AGENTS.md (skill-first), captain.md, learnings/, Stop hook
-      assert.match(fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8'), /bridge-command.*skill/s);
+      assert.match(fs.readFileSync(path.join(ws, 'AGENTS.md'), 'utf8'), /bridge-commander.*skill/s);
       assert.ok(fs.existsSync(path.join(ws, 'captain.md')));
       assert.ok(fs.existsSync(path.join(ws, 'learnings', 'README.md')));
       const hooks = JSON.parse(fs.readFileSync(path.join(ws, '.claude', 'settings.local.json'), 'utf8'));
@@ -162,14 +162,14 @@ const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutena
       const r = await api('POST', '/api/feedback', { target: 'lieutenant:founder', text: 'hello founder' });
       assert.strictEqual(r.status, 200);
       firstSeq = r.body.seq;
-      await until('wake in pane', () => capture(FOUNDER).includes('[bridge-command] 1 pending item(s) — run: bc-axi drain'), 15000);
+      await until('wake in pane', () => capture(FOUNDER).includes('[bridge-commander] 1 pending item(s) — run: bc-axi drain'), 15000);
     });
 
     await stepCase('wakes coalesce while pending-and-nudged', async () => {
       await api('POST', '/api/feedback', { target: 'lieutenant:founder', text: 'second message' });
       await api('POST', '/api/feedback', { target: 'lieutenant:founder', text: 'third message' });
       await sleep(2500);
-      const hits = capture(FOUNDER).split('\n').filter((l) => l.includes('[bridge-command]'));
+      const hits = capture(FOUNDER).split('\n').filter((l) => l.includes('[bridge-commander]'));
       // cat echoes the submitted wake line back, so the ONE wake shows at most
       // twice; three stacked wakes would show many more.
       assert.ok(hits.length <= 2, 'expected one coalesced wake, pane shows:\n' + hits.join('\n'));
@@ -188,10 +188,10 @@ const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutena
       r = await runCli(['drain', '--lieutenant', 'founder', ...wsArgs]);
       assert.match(r.stdout, /queue empty/);
       // drained + acked -> a new append nudges again (a fresh wake line appears)
-      const before = capture(FOUNDER).split('\n').filter((l) => l.includes('[bridge-command]')).length;
+      const before = capture(FOUNDER).split('\n').filter((l) => l.includes('[bridge-commander]')).length;
       await api('POST', '/api/feedback', { target: 'lieutenant:founder', text: 'fourth message' });
       await until('re-nudge after drain', () => capture(FOUNDER).split('\n')
-        .filter((l) => l.includes('[bridge-command]')).length > before, 15000);
+        .filter((l) => l.includes('[bridge-commander]')).length > before, 15000);
       r = await runCli(['drain', '--lieutenant', 'founder', '--json', ...wsArgs]);
       const items = r.stdout.trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
       await runCli(['ack', String(items[items.length - 1].seq), ...wsArgs]);
@@ -223,7 +223,7 @@ const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutena
       });
       assert.strictEqual(r.status, 200);
       const seq = r.body.seq;
-      const ackFile = path.join(ws, '.bridge-command', 'queue', 'scout.ack');
+      const ackFile = path.join(ws, '.bridge-commander', 'queue', 'scout.ack');
       await until('scout to ack seq ' + seq, () => {
         try { return parseInt(fs.readFileSync(ackFile, 'utf8'), 10) >= seq; } catch (e) { return false; }
       }, 240000, 1000);
@@ -236,7 +236,7 @@ const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutena
     tryTmux('kill-server');
     // stop the workspace server via its pidfile
     try {
-      const pid = parseInt(fs.readFileSync(path.join(ws, '.bridge-command', 'server.pid'), 'utf8'), 10);
+      const pid = parseInt(fs.readFileSync(path.join(ws, '.bridge-commander', 'server.pid'), 'utf8'), 10);
       if (pid) process.kill(pid, 'SIGTERM');
     } catch (e) { /* already gone */ }
     await sleep(300);

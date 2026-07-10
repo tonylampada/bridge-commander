@@ -1,4 +1,4 @@
-# Operating the bridge-command tool
+# Operating the bridge-commander tool
 
 On-demand reference for a lieutenant or agent running a live board server or shipping changes
 to the tool itself. The doctrine governs how you orchestrate; this governs how you keep the

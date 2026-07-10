@@ -12,8 +12,8 @@ test('cli config reads and writes the workspace config.json', async () => {
   try {
     let r = await runCli(['config', 'voices', 'alpha,beta', '--workspace', dir]);
     assert.strictEqual(r.code, 0, r.stderr);
-    const cfgFile = path.join(dir, '.bridge-command', 'config.json');
-    assert.ok(fs.existsSync(cfgFile), 'config.json written under .bridge-command');
+    const cfgFile = path.join(dir, '.bridge-commander', 'config.json');
+    assert.ok(fs.existsSync(cfgFile), 'config.json written under .bridge-commander');
     assert.deepStrictEqual(JSON.parse(fs.readFileSync(cfgFile, 'utf8')).voices, ['alpha', 'beta']);
 
     r = await runCli(['config', 'show', '--workspace', dir]);
@@ -27,7 +27,7 @@ test('cli config reads and writes the workspace config.json', async () => {
   }
 });
 
-test('cli resolves the workspace by walking up from cwd to .bridge-command', async () => {
+test('cli resolves the workspace by walking up from cwd to .bridge-commander', async () => {
   const s = await startServerWithLieutenant();
   try {
     const nested = path.join(s.dir, 'projects', 'demo-app', 'src');

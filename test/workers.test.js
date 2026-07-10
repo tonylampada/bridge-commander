@@ -50,7 +50,7 @@ async function boot(extraEnv = {}) {
   return { s, root, repo, fdir, teardown };
 }
 function boardOnDisk(s) {
-  return JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-command', 'board.json'), 'utf8'));
+  return JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-commander', 'board.json'), 'utf8'));
 }
 
 test('cards cannot be created in Working (Working ⇔ live worker)', async () => {
@@ -227,7 +227,7 @@ test('investigation: brief carries the report contract, no branch; done attaches
     assert.doesNotMatch(rec.prompt, /Delivery mode/);
 
     // the worker writes the report, then reports done → auto-attached artifact
-    const report = path.join(s.dir, '.bridge-command', 'reports', 'why-slow.md');
+    const report = path.join(s.dir, '.bridge-commander', 'reports', 'why-slow.md');
     fs.mkdirSync(path.dirname(report), { recursive: true });
     fs.writeFileSync(report, '# Findings\nIt was DNS.\n');
     await s.api('POST', '/api/cards/why-slow/worker/done', { outcome: 'report written: it was DNS' });

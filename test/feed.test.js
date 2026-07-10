@@ -9,7 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { startServer, startServerWithLieutenant, LT } = require('./helper');
 
-function queueDir(s) { return path.join(s.dir, '.bridge-command', 'queue'); }
+function queueDir(s) { return path.join(s.dir, '.bridge-commander', 'queue'); }
 
 test('unacked items re-offer on every drain; ack commits and persists the cursor', async () => {
   const s = await startServerWithLieutenant();

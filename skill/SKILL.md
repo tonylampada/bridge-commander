@@ -1,22 +1,22 @@
 ---
-name: bridge-command
-description: Turn the current directory into a Bridge Command workspace and become its founding lieutenant (the teleport), or re-enter an existing one. Use when the user asks to init/set up bridge command, open the bridge board, or orchestrate work through the kanban board.
+name: bridge-commander
+description: Turn the current directory into a Bridge Commander workspace and become its founding lieutenant (the teleport), or re-enter an existing one. Use when the user asks to init/set up bridge command, open the bridge board, or orchestrate work through the kanban board.
 ---
 
-# Bridge Command — the teleport
+# Bridge Commander — the teleport
 
-Bridge Command is an agent-orchestration harness whose control surface is a kanban board.
+Bridge Commander is an agent-orchestration harness whose control surface is a kanban board.
 Invoking this skill turns YOU into a **lieutenant** on the workspace board: durable
 orchestrator, one tmux session, supervised through durable delivery queues.
 
-`bc-axi` is the board CLI. If it is not on PATH, use `<bridge-command checkout>/cli/bc-axi`
+`bc-axi` is the board CLI. If it is not on PATH, use `<bridge-commander checkout>/cli/bc-axi`
 (this skill lives in that checkout's `skill/` directory; run it bare for full usage).
 
 ## 1. Verify you are inside tmux
 
 Check `$TMUX`. If it is empty, REFUSE to init and tell the user exactly this, then stop:
 
-> Bridge Command lieutenants live in tmux sessions — I need to be running inside one.
+> Bridge Commander lieutenants live in tmux sessions — I need to be running inside one.
 > Please start `tmux new -s <workspace-name>`, launch me again in there, and re-invoke
 > this skill.
 
@@ -37,7 +37,7 @@ workspace directory run:
 bc-axi init --name "<your-name>" [--charter-file <f|->]
 ```
 
-This is mechanical and safe to re-run: it creates `.bridge-command/`, boots the board server
+This is mechanical and safe to re-run: it creates `.bridge-commander/`, boots the board server
 detached, registers YOUR tmux session as the founding lieutenant, installs the turn-end hook
 (note: your own turn-end tracking activates on your next claude restart — hooks are captured
 at startup), scaffolds `AGENTS.md`, `captain.md`, `learnings/`, and prints the board URL.
@@ -53,5 +53,5 @@ Give the user that URL — the board is the captain's cockpit.
 
 From now on behave per the doctrine: `bc-axi drain` as the first act of every turn, ack only
 after handling, orchestrate through cards, never implement in a project yourself, talk to
-the captain in outcomes. A `[bridge-command] N pending item(s)` line appearing in your
+the captain in outcomes. A `[bridge-commander] N pending item(s)` line appearing in your
 session is a wake: drain immediately.

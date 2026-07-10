@@ -116,7 +116,7 @@ async function main() {
       }
       await t.tryTmux('kill-session', '-t', `=${ref.session}:`);
       const stateDir = process.env.BC_HARNESS_STATE
-        || path.join(os.homedir(), '.bridge-command', 'harness');
+        || path.join(os.homedir(), '.bridge-commander', 'harness');
       for (const suffix of ['.prompt', '.session-id', '.turnend.jsonl']) {
         try { fs.unlinkSync(path.join(stateDir, ref.session + suffix)); } catch { /* absent */ }
       }
