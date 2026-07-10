@@ -59,4 +59,8 @@ retries on its own.
   `node --test test/*.test.js harness/test/*.test.js`.
 - Never run it under `/tmp` — the ui/js ESM files fail to load there and tests go red for the
   wrong reason.
-- `stale.test.js` is load-sensitive: re-run it alone before calling it red.
+- `stale.test.js` and `prwatch.test.js` are load-sensitive: re-run the failing one alone before
+  calling it red.
+- `test/install/docker-install-test.sh` verifies the README install procedure end-to-end in a
+  pristine Docker container; `--demo` also populates a demo board on port 4790 (the fixture
+  behind the README screenshot) and keeps the container running.
