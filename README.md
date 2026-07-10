@@ -19,14 +19,16 @@ through per-card chat threads — from anywhere, phone included.
 ## Install
 
 ```sh
-# bridge-commander (server + CLI + skill)
-git clone https://github.com/tonylampada/bridge-commander.git
-ln -s "$(pwd)/bridge-commander/skill" ~/.claude/skills/bridge-commander
+# bridge-commander (server + CLI + skill — the whole repo installs as one skill)
+npx skills add tonylampada/bridge-commander -g
 
 # dependencies
 curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
 curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
 ```
+
+Dev mode (hack on the tool): clone and symlink the whole repo into your skills dir —
+`git clone https://github.com/tonylampada/bridge-commander.git && ln -s "$(pwd)/bridge-commander" ~/.claude/skills/bridge-commander`.
 
 ## Dependencies
 

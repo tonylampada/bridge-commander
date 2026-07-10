@@ -359,7 +359,7 @@ function createLieutenant(body) {
 // workspace-level Stop hook (installed by `bc-axi init`) already covers every
 // claude in this cwd; the server dedupes its turn-end POSTs by session_id.
 function doctrineText() {
-  try { return fs.readFileSync(path.join(__dirname, '..', 'skill', 'DOCTRINE.md'), 'utf8').trim(); }
+  try { return fs.readFileSync(path.join(__dirname, '..', 'DOCTRINE.md'), 'utf8').trim(); }
   catch (e) { return ''; }
 }
 function lieutenantPrompt(name, id, charter) {
