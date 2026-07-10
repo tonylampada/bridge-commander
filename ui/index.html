@@ -156,6 +156,14 @@
       <option value="investigation">🕵️ investigation</option>
     </select>
     <textarea id="nc-body" placeholder="body (markdown, optional)" rows="5"></textarea>
+    <div class="lt-row">
+      <select id="nc-harness" title="harness hint (honored when the worker starts)">
+        <option value="">— harness</option>
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+      </select>
+      <input id="nc-model" placeholder="model (optional)" autocomplete="off">
+    </div>
     <div class="nc-actions">
       <button type="button" id="nc-cancel">cancel</button>
       <button type="submit" id="nc-create">create</button>
@@ -170,6 +178,10 @@
     <div class="lt-row">
       <input id="lt-color" type="color" value="#58b6ff" title="lieutenant color">
       <input id="lt-name" placeholder="name" autocomplete="off" required>
+      <select id="lt-harness" title="agent harness">
+        <option value="claude" selected>claude</option>
+        <option value="codex">codex</option>
+      </select>
     </div>
     <textarea id="lt-charter" placeholder="charter — the standing mission (markdown, optional)" rows="5"></textarea>
     <div class="nc-actions">
