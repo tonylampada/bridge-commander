@@ -12,6 +12,26 @@ session, one isolated git worktree) that ships through the project's delivery mo
 board mechanics evolve from [bridge](https://github.com/tonylampada/claudegoodies);
 orchestration doctrine distills firstmate. Zero dependencies — plain Node ≥ 18, nothing to install.
 
+## Requirements
+
+The server itself is dependency-free, but the harness drives real agent sessions and real PRs,
+so the machine needs:
+
+| Tool | Required? | Why |
+|---|---|---|
+| Node ≥ 18 | **yes** | runs the server and `bc-axi` (zero npm deps) |
+| `tmux` | **yes** | every lieutenant and worker lives in a tmux session |
+| `git` | **yes** | projects, worker worktrees, branches |
+| [Claude Code](https://claude.com/claude-code) (`claude`), authenticated | **yes** | the default agent harness for lieutenants and workers |
+| [GitHub CLI](https://cli.github.com/) (`gh`), authenticated | **yes** for PR flows | PR watch (auto-archive on merge) and the `direct-PR`/`no-mistakes` delivery modes; `local-only` projects work without it |
+| [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`), authenticated | optional | only for `--harness codex` workers/lieutenants |
+| `treehouse` | optional | worktree leasing for workers; auto-detected — without it, plain `git worktree` is used |
+
+**Dependent skill:** projects registered with `--mode no-mistakes` generate worker briefs that
+invoke the user-level **`/no-mistakes`** skill (validation pipeline → review → tests → push →
+PR → CI). Install it before using that mode, or register projects as `direct-PR` /
+`local-only` instead — those modes have no skill dependency.
+
 ## Quickstart (the teleport)
 
 1. **Install the skill** so your agent can invoke it — symlink this checkout's `skill/`
