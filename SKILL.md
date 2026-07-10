@@ -14,9 +14,9 @@ orchestrator, one tmux session, supervised through durable delivery queues.
 Some skill installers copy only this file. Resolve the tool checkout, in order:
 
 1. `<skill-dir>/cli/bc-axi` exists → this skill dir IS the tool; use it.
-2. `~/.bridge-commander/checkout/cli/bc-axi` exists → use that.
+2. `~/.local/share/bridge-commander/cli/bc-axi` exists → use that.
 3. Neither → clone it:
-   `git clone https://github.com/tonylampada/bridge-commander.git ~/.bridge-commander/checkout`
+   `git clone https://github.com/tonylampada/bridge-commander.git ~/.local/share/bridge-commander`
 
 `bc-axi` is the board CLI at `<checkout>/cli/bc-axi` (use PATH if available; run it bare for
 full usage). `DOCTRINE.md` and `OPERATIONS.md` live in the checkout root — read them from
