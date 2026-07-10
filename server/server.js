@@ -1405,7 +1405,10 @@ async function doStartCard(card, body) {
     cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
   });
   const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
-  if (body && body.model) spawnOpts.extraArgs = ['--model', String(body.model)];
+  const extraArgs = [];
+  if (body && body.model) extraArgs.push('--model', String(body.model));
+  if (body && body.effort) extraArgs.push('--effort', String(body.effort));
+  if (extraArgs.length) spawnOpts.extraArgs = extraArgs;
   let ref;
   try {
     ref = await impl.spawn(wt.path, prompt, spawnOpts);

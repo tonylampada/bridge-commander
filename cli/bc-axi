@@ -42,7 +42,7 @@ const opts = {
   name: null, color: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
-  mode: null, briefFile: null, resume: false, outcome: null, model: null, park: false,
+  mode: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
   uri: null,
 };
 const positional = [];
@@ -75,6 +75,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--spawn') opts.spawn = true;
   else if (a === '--harness') opts.harness = argv[++i];
   else if (a === '--model') opts.model = argv[++i];
+  else if (a === '--effort') opts.effort = argv[++i];
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
   else if (a === '--resume') opts.resume = true;
@@ -556,12 +557,13 @@ async function cmdArtifactRemove() {
 async function cmdStart() {
   const id = positional[0];
   if (!id) {
-    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume] [--harness h] [--model m]\n' +
+    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume] [--harness h] [--model m] [--effort l]\n' +
       '  ONE atomic op: provision an isolated worktree, spawn the worker session with the brief\n' +
       '  as launch prompt, bind session/worktree/branch to the card, move it to Working.\n' +
       '  --brief-file adds/overrides the task text (default: the card body).\n' +
       '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.\n' +
-      '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.');
+      '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.\n' +
+      '  --effort sets reasoning effort (low|medium|high|xhigh|max) for a claude worker; ignored with --resume.');
   }
   if (opts.resume && opts.briefFile) {
     die('--resume does not deliver briefs: the reincarnated worker keeps its own context and the\n' +
@@ -573,6 +575,7 @@ async function cmdStart() {
   if (opts.resume) body.resume = true;
   if (opts.harness) body.harness = opts.harness;
   if (opts.model) body.model = opts.model;
+  if (opts.effort) body.effort = opts.effort;
   console.log((opts.resume ? 'resuming' : 'starting') + ' a worker for ' + id + ' (worktree + real session — can take a minute)...');
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/start', body, 180000);
   const w = r.worker;
