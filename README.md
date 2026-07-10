@@ -36,7 +36,7 @@ Dev mode (hack on the tool): clone and symlink the whole repo into your skills d
 - [Claude Code](https://claude.com/claude-code), authenticated — the default agent harness
 - [GitHub CLI](https://cli.github.com/), authenticated — PR flows
 - [treehouse](https://github.com/kunchenguid/treehouse) — worker worktrees (optional; falls back to `git worktree`)
-- [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for `no-mistakes`-mode projects
+- [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for `no-mistakes`-mode projects; the `/no-mistakes` skill appears after running `no-mistakes init` in the project
 - [OpenAI Codex CLI](https://github.com/openai/codex) — only for `--harness codex` (optional)
 
 ## Run
