@@ -60,13 +60,18 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
 
 - `port.js` — the contract: `getHarness(name)`, `registerHarness(name, impl)`, `harnessFor(ref)`, `isHarnessRef(ref)`
 - `claude-tmux.js` — the claude implementation over tmux (v0's real harness)
+- `codex-tmux.js` — the OpenAI Codex CLI implementation over tmux
+- `tmux-session.js` — session/window/pane plumbing shared by the tmux adapters
+  (pane lifecycle, naming, launch-and-settle skeleton, turn-end tail, pane viewing)
 - `tmux.js` — shared tmux primitives (composer state, ghost-text stripping, verified submit)
 - `turnend-hook.js` — the Stop-hook relay claude runs at every turn boundary
+- `codex-notify.js` — the notify relay codex runs at every turn boundary
 - `fake.js` — in-memory implementation for unit-testing server code; set
   `BC_FAKE_STATE=<dir>` for file-backed mode (cross-process: spawn writes a
   `<session>.json` marker, sends append to `<session>.sends.jsonl`, and a
   marker on disk counts as a live session)
 - `smoke.js` — real end-to-end smoke (spawns actual claude sessions)
+- `smoke-codex.js` — the codex twin (skips cleanly when codex is not on PATH)
 - `test/` — unit tests (`node --test harness/test/*.test.js`)
 
 ## The claude implementation
@@ -111,14 +116,64 @@ workspace's `.bridge-command/harness/` (`BC_HARNESS_STATE` overrides; the
 global `~/.bridge-command/harness/` is a last-resort for bare embedders only):
 `<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`.
 
+## The codex implementation
+
+Same tmux plumbing as claude (shared `tmux-session.js`); what differs is the
+launch line, the screen signatures, and where the turn-end relay rides
+(command line, not settings file). Verified against codex 0.144.1.
+
+- **spawn** — launches
+  `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c notify='[...]' "$(cat <promptfile>)"`.
+  - `--dangerously-bypass-approvals-and-sandbox` is codex's analog of claude's
+    `--dangerously-skip-permissions` (YOLO mode: no sandbox, no approval
+    prompts — the port's full-autonomy rule).
+  - `--dangerously-bypass-hook-trust` suppresses the "Hooks need review"
+    picker a global `~/.codex/hooks.json` otherwise raises at launch; without
+    it spawn hangs on that screen.
+  - a fresh cwd still shows codex's **directory-trust** prompt ("Do you trust
+    the contents of this directory?", accept preselected) even with both
+    bypass flags; launch-settle auto-accepts it with Enter, exactly like
+    claude's folder trust. codex renders inline in the primary screen (no
+    alternate screen), so the settle signatures are matched against the pane
+    TAIL — the accepted trust prompt lingers in scrollback.
+  - `--model <m>` is accepted, so the server's existing `extraArgs` model
+    plumbing works unchanged; the default model comes from
+    `~/.codex/config.toml`.
+- **turn ends + resume id** — one mechanism gives both: `-c notify=[...]`
+  makes codex run `codex-notify.js` at every turn boundary with its payload
+  JSON appended as the LAST argv (`type: "agent-turn-complete"`, `thread-id`,
+  `cwd`, ...). The relay normalizes it into the exact event shape
+  `turnend-hook.js` emits, appends to `<key>.turnend.jsonl` (so `onTurnEnd()`
+  is the shared tail), records the thread-id at `<key>.session-id`, and
+  best-effort POSTs the callback URL. Nothing is written into the worktree —
+  the never-dirty rule holds for free.
+- **resumeId** — the codex thread-id. Unlike claude there is no `--session-id`
+  flag: the ref is born WITHOUT `resumeId` and adopts it from the first
+  turn-end (the server writes it back into the ref; the `.session-id` file is
+  the ground truth either way).
+- **resume** — `codex resume <thread-id>` with the same bypass + notify flags,
+  in a fresh pane under the same name. Resuming continues the SAME thread-id
+  (verified empirically — `smoke-codex.js --resume` asserts it), so refs
+  survive any number of death/resume cycles. Without any id: fresh launch,
+  memory lost.
+- **composer** — codex's prompt glyph is `›` (U+203A), in `tmux.js`
+  `PROMPT_GLYPHS` so verified submit gets its positive ack when the composer
+  clears; codex's busy footer matches the shared `BUSY_RE`
+  ("esc to interrupt").
+
 ## Adding a new harness
 
-Implement the seven verbs in one module and register it:
+Implement the seven verbs in one module and register it (claude and codex are
+already builtins — `getHarness('codex')` just works):
 
 ```js
 const { registerHarness } = require('./port.js');
-registerHarness('codex', require('./codex-tmux.js'));
+registerHarness('goose', require('./goose-tmux.js'));
 ```
+
+For a tmux-TUI harness, start from `tmux-session.js` — codex-tmux.js shows the
+shape: the adapter supplies only its launch line, trust/UI-ready signatures,
+resume semantics, and turn-end relay wiring.
 
 Rules of the road, learned the hard way (from firstmate's verified adapters):
 
@@ -141,6 +196,8 @@ node --test harness/test/*.test.js   # unit: registry, ref shape, fake, ANSI str
 node harness/smoke.js                # REAL e2e: spawn → hook turn-end → reply →
                                      # send → reply → alive/kill (needs tmux + claude)
 node harness/smoke.js --resume       # + kill → resume → memory-recall leg
+node harness/smoke-codex.js          # the codex twin (+ --resume adds the
+                                     # thread-id-continuity leg); skips without codex
 ```
 
 The smoke prints `SMOKE OK` and exits 0 on success; on failure it dumps the

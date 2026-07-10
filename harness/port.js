@@ -43,6 +43,7 @@ const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnE
 // machinery for callers that only use the fake.
 const BUILTINS = {
   claude: './claude-tmux.js',
+  codex: './codex-tmux.js',
   fake: './fake.js',
 };
 

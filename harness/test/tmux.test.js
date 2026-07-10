@@ -2,7 +2,7 @@
 // Unit tests for the pure parts of harness/tmux.js (no tmux server needed).
 const test = require('node:test');
 const assert = require('node:assert');
-const { stripGhost } = require('../tmux.js');
+const { stripGhost, classifyComposerLine } = require('../tmux.js');
 
 const ESC = '\x1b';
 
@@ -42,4 +42,22 @@ test('stripGhost strips non-SGR escape sequences', () => {
 test('stripGhost keeps multibyte glyphs intact', () => {
   assert.strictEqual(stripGhost('❯ café'), '❯ café');
   assert.strictEqual(stripGhost(`${ESC}[2m❯ ghost${ESC}[0m│real│`), '│real│');
+});
+
+test('classifyComposerLine: a cleared claude composer reads empty', () => {
+  assert.strictEqual(classifyComposerLine('❯ '), 'empty');
+  assert.strictEqual(classifyComposerLine('│ > │'), 'empty');
+  assert.strictEqual(classifyComposerLine(`> ${ESC}[2mtry "fix the bug"${ESC}[0m`), 'empty');
+  assert.strictEqual(classifyComposerLine('❯ real text'), 'pending');
+});
+
+test("classifyComposerLine: codex's '›' composer (U+203A) reads empty when cleared", () => {
+  // The bare codex prompt glyph — a submit's positive ack. Without '›' in
+  // PROMPT_GLYPHS this classified as pending and verified-submit saw every
+  // codex send as stuck.
+  assert.strictEqual(classifyComposerLine('› '), 'empty');
+  // codex ghost text renders dim after the glyph
+  assert.strictEqual(classifyComposerLine(`› ${ESC}[2mAsk Codex anything${ESC}[0m`), 'empty');
+  // real unsubmitted text must still read pending
+  assert.strictEqual(classifyComposerLine('› fix the flaky test'), 'pending');
 });
