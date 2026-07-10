@@ -9,8 +9,8 @@ Bridge Commander is an agent-orchestration harness whose control surface is a ka
 Invoking this skill turns YOU into a **lieutenant** on the workspace board: durable
 orchestrator, one tmux session, supervised through durable delivery queues.
 
-`bc-axi` is the board CLI. If it is not on PATH, use `<bridge-commander checkout>/cli/bc-axi`
-(this skill lives in that checkout's `skill/` directory; run it bare for full usage).
+`bc-axi` is the board CLI. If it is not on PATH, use `<skill-dir>/cli/bc-axi` — this skill dir
+IS the whole tool (server + CLI + skill); run it bare for full usage.
 
 ## 1. Verify you are inside tmux
 

@@ -26,6 +26,14 @@ The board runs from a checkout on disk; a merged PR is not live until that check
 - Restart the server only if `server/` or `harness/` changed.
 - UI-only changes need just a browser refresh — no restart.
 
+## Updating the tool
+
+Which update path applies depends on how the skill dir was installed — check for `.git`:
+
+- **skills-CLI copy** (no `.git`): `npx skills add` copied the folder, so `git pull` won't work.
+  Update = re-run `npx skills add tonylampada/bridge-commander -g`, then restart the server.
+- **Dev checkout** (`.git` present): update via `git pull`, then follow the deploy section above.
+
 ## The stale-UI trap
 
 After a UI deploy the board can LOOK live while running old JS: SSE reconnects and re-renders
