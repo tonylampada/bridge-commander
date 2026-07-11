@@ -49,13 +49,23 @@ const s = require('./tmux-session.js');
 
 const NOTIFY_SCRIPT = path.join(__dirname, 'codex-notify.js');
 const TRUST_RE = /Do you trust the contents of this directory|Yes, continue/;
+const FAILURE_DETECTORS = [
+  {
+    re: /(?:^|\n)\s*(?:bash|zsh|sh|fish|dash|ksh)?:?\s*codex: command not found\b|(?:^|\n)\s*codex: not found\b/i,
+    message: 'codex CLI is not installed or not on PATH; install the OpenAI Codex CLI and retry',
+  },
+  {
+    re: /(?:^|\n).*(?:codex login|sign in to openai|openai codex login|login required|authenticate to openai)/i,
+    message: 'codex CLI is waiting for interactive sign-in; run `codex login` in a normal terminal and retry',
+  },
+];
 
 // UI_READY_RE matches signatures only the codex main UI renders: the intro
 // box (">_ OpenAI Codex (vX.Y.Z)"), the YOLO-mode permissions line, or the
 // composer prompt glyph '›' at a line start. The directory-trust screen shows
 // none of these as a line of its own — and trustRe is checked first anyway.
 const UI_READY_RE = /OpenAI Codex \(v|YOLO mode|\n›/;
-const SETTLE = { trustRe: TRUST_RE, readyRe: UI_READY_RE, label: 'codex' };
+const SETTLE = { trustRe: TRUST_RE, readyRe: UI_READY_RE, label: 'codex', failureDetectors: FAILURE_DETECTORS };
 
 // The bypass + notify flags every codex launch (spawn AND resume) carries.
 function launchFlags(stateDir, key, callbackUrl) {

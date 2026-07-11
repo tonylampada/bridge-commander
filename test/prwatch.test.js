@@ -23,15 +23,18 @@ function makeRepo(root) {
   return repo;
 }
 
-// A gh stub: `gh pr view <url> --json state,mergedAt` answered from a control
-// map file the test rewrites (url -> state). Unknown URL = non-zero exit.
+// A gh stub: `gh auth status` succeeds (startCard's readiness gate) and
+// `gh pr view <url> --json state,mergedAt` is answered from a control map file
+// the test rewrites (url -> state). Unknown URL = non-zero exit.
 function makeGhStub(root) {
   const mapFile = path.join(root, 'gh-map.json');
   fs.writeFileSync(mapFile, '{}');
   const stub = path.join(root, 'gh-stub');
   fs.writeFileSync(stub, '#!/usr/bin/env node\n'
     + "const fs = require('fs');\n"
-    + 'const url = process.argv[4]; // argv: node, stub, pr, view, <url>, --json, ...\n'
+    + 'const args = process.argv.slice(2);\n'
+    + 'if (args[0] === "auth" && args[1] === "status") { process.exit(0); }\n'
+    + 'const url = args[2]; // argv: node, stub, pr, view, <url>, --json, ...\n'
     + 'const map = JSON.parse(fs.readFileSync(' + JSON.stringify(mapFile) + ", 'utf8'));\n"
     + 'if (!map[url]) { console.error("no such pr"); process.exit(1); }\n'
     + 'console.log(JSON.stringify({ state: map[url], mergedAt: map[url] === "MERGED" ? new Date().toISOString() : null }));\n');
