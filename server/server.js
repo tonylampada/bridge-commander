@@ -163,9 +163,26 @@ const TURNEND_URL = 'http://127.0.0.1:' + PORT + '/api/turn-end';
 
 // ---------- pidfile: single instance per workspace ----------
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
+// A live pid alone isn't proof it's OUR server — pids get recycled by the OS,
+// so an unrelated process can end up wearing a stale server.pid. Sanity-check
+// via /proc/<pid>/cmdline (Linux only — cmdline is null/unreadable elsewhere,
+// e.g. after the process exits mid-check or on a non-Linux OS) so a recycled
+// pid doesn't block a real boot; null means "can't tell" and falls back to
+// trusting pidAlive, same as before this check existed.
+function looksLikeOurServer(pid) {
+  try {
+    const cmdline = fs.readFileSync('/proc/' + pid + '/cmdline', 'utf8');
+    return cmdline.split('\0').some((a) => a && path.basename(a) === 'server.js');
+  } catch (e) { return null; }
+}
 if (fs.existsSync(PID_FILE)) {
   const old = parseInt(fs.readFileSync(PID_FILE, 'utf8'), 10);
-  if (old && pidAlive(old)) process.exit(0); // live server already owns this workspace
+  if (old && pidAlive(old)) {
+    const ours = looksLikeOurServer(old);
+    if (ours !== false) process.exit(0); // live server already owns this workspace (or unverifiable — trust it)
+    // else: pid is alive but is NOT a bridge-commander server — a recycled pid
+    // wearing a stale pidfile. Fall through and boot normally.
+  }
 }
 fs.writeFileSync(PID_FILE, String(process.pid));
 function cleanup() {
