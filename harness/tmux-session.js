@@ -147,6 +147,15 @@ function paneTail(pane) {
   return pane.replace(/\s+$/, '').split('\n').slice(-SETTLE_TAIL_LINES).join('\n');
 }
 
+function detectLaunchFailure(sig, tail) {
+  if (!sig || !Array.isArray(sig.failureDetectors)) return null;
+  for (const det of sig.failureDetectors) {
+    if (!det || !(det.re instanceof RegExp) || typeof det.message !== 'string') continue;
+    if (det.re.test(tail)) return det.message;
+  }
+  return null;
+}
+
 async function launchAndSettle(target, launchCmd, sig) {
   await t.sendLiteral(target, launchCmd);
   await t.sleep(300);
@@ -157,8 +166,10 @@ async function launchAndSettle(target, launchCmd, sig) {
     await t.sleep(500);
     const cmd = await paneCommand(target);
     if (cmd === null) throw new Error(`tmux pane ${target} vanished during launch`);
-    if (SHELLS.has(cmd)) continue; // agent not up yet (or it already exited — captured by timeout)
     const tail = paneTail(await t.capture(target, 40));
+    const failure = detectLaunchFailure(sig, tail);
+    if (failure) throw new Error(failure + ` (${target})`);
+    if (SHELLS.has(cmd)) continue; // agent not up yet (or it already exited — captured by timeout)
     if (sig.trustRe.test(tail)) {
       await t.sendKey(target, 'Enter');
       await t.sleep(1000);
@@ -167,6 +178,8 @@ async function launchAndSettle(target, launchCmd, sig) {
     if (sig.readyRe.test(tail)) return;
   }
   const tail = await t.capture(target, 20);
+  const failure = detectLaunchFailure(sig, paneTail(tail));
+  if (failure) throw new Error(failure + ` (${target})`);
   throw new Error(`${sig.label} did not start at ${target} within 45s; pane tail:\n${tail}`);
 }
 
@@ -306,6 +319,7 @@ module.exports = {
   claimPaneNames,
   createPane,
   killPane,
+  detectLaunchFailure,
   launchAndSettle,
   onTurnEnd,
   openPane,

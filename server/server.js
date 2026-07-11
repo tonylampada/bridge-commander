@@ -143,6 +143,29 @@ function userConfig() {
   }
   return { voices: null };
 }
+function ghCommand() {
+  return String(process.env.BC_GH_CMD || 'gh').trim() || 'gh';
+}
+function needsGhReady(project) {
+  return !!project && (project.mode === 'direct-PR' || project.mode === 'no-mistakes');
+}
+function ghReadinessError(project) {
+  if (!needsGhReady(project)) return Promise.resolve(null);
+  const gh = ghCommand();
+  return new Promise((resolve) => {
+    execFile(gh, ['auth', 'status'], { encoding: 'utf8', timeout: 10000 }, (err, stdout, stderr) => {
+      if (!err) return resolve(null);
+      const detail = String(stderr || stdout || err.message || '').trim();
+      if (err.code === 'ENOENT') {
+        return resolve(`GitHub CLI is required for ${project.mode} projects but \`${gh}\` is not installed or not on PATH`);
+      }
+      if (/not logged into|not authenticated|authentication failed|run `?gh auth login`?|gh auth login/i.test(detail)) {
+        return resolve(`GitHub CLI is not authenticated for ${project.mode} projects; run \`gh auth login\` and retry`);
+      }
+      return resolve(`GitHub CLI is not ready for ${project.mode} projects: ${detail || 'gh auth status failed'}`);
+    });
+  });
+}
 // Port: --port flag > config.json "port" > 4780. The resolved port is written
 // back into config.json when absent, so the CLI and UI can always find it.
 const cfg = readConfig();
@@ -1376,6 +1399,8 @@ async function doStartCard(card, body) {
   if (!repoAttr) return { error: 'card has no repo attribute — set it first: card patch ' + card.id + ' --attr repo=<project>' };
   const project = findProject(String(repoAttr));
   if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path> --mode <mode>)' };
+  const ghError = await ghReadinessError(project);
+  if (ghError) return { error: ghError, code: 502 };
 
   // Harness precedence: explicit CLI --harness wins, then the card's stored
   // hint (attributes.harness, set from the new-card modal), then config/default.

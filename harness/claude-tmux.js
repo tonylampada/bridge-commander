@@ -43,11 +43,21 @@ const s = require('./tmux-session.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
+const FAILURE_DETECTORS = [
+  {
+    re: /(?:^|\n)\s*(?:bash|zsh|sh|fish|dash|ksh)?:?\s*claude: command not found\b|(?:^|\n)\s*claude: not found\b/i,
+    message: 'claude CLI is not installed or not on PATH; install Claude Code and retry',
+  },
+  {
+    re: /(?:^|\n).*(?:claude login|please login|login required|sign in to claude|authenticate to claude)/i,
+    message: 'claude CLI is waiting for interactive sign-in; run `claude login` in a normal terminal and retry',
+  },
+];
 
 // UI_READY_RE matches signatures only the main UI renders (composer prompt,
 // busy footer, permission-mode footer) and the trust screen does not.
 const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
-const SETTLE = { trustRe: TRUST_RE, readyRe: UI_READY_RE, label: 'claude' };
+const SETTLE = { trustRe: TRUST_RE, readyRe: UI_READY_RE, label: 'claude', failureDetectors: FAILURE_DETECTORS };
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from

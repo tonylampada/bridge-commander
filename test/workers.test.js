@@ -34,7 +34,7 @@ function makeRepo(root, name = 'srcrepo') {
 }
 
 // One temp tree per boot: fake-harness state + source repo + workspace.
-async function boot(extraEnv = {}) {
+async function boot(extraEnv = {}, projectMode = 'local-only') {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
   const repo = makeRepo(root);
   const fdir = path.join(root, 'fake');
@@ -44,7 +44,7 @@ async function boot(extraEnv = {}) {
       BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
     }, extraEnv),
   });
-  const r = await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+  const r = await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: projectMode });
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
   const teardown = async () => { await s.stop(); fs.rmSync(root, { recursive: true, force: true }); };
   return { s, root, repo, fdir, teardown };
@@ -89,6 +89,17 @@ test('card.start refusals: plan cards, missing/unregistered repo, already Workin
     r = await s.api('POST', '/api/cards/task/start', { harness: 'fake' });
     assert.strictEqual(r.status, 409);
     assert.match(r.body.error, /already Working/);
+  } finally { await teardown(); }
+});
+
+test('card.start: direct-PR projects fail early when gh is missing or unauthenticated', async () => {
+  const { s, teardown } = await boot({ BC_GH_CMD: 'gh-does-not-exist' }, 'direct-PR');
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Need PR', id: 'need-pr', attributes: { repo: 'proj' } }));
+    const r = await s.api('POST', '/api/cards/need-pr/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.error, /GitHub CLI is required for direct-PR projects/i);
+    assert.match(r.body.error, /gh-does-not-exist/);
   } finally { await teardown(); }
 });
 
