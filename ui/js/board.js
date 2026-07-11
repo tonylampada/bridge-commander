@@ -7,9 +7,63 @@ import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
 import { openCardPane, openLieutenantPane } from './pane.js';
+import { SETUP_DISMISS_KEY, buildSetupState } from './onboarding.mjs';
 
 const laneEl = document.getElementById('lane');
+const setupEl = document.getElementById('setup-panel');
 const boardEl = document.getElementById('board');
+
+function setupDismissed() {
+  try { return localStorage.getItem(SETUP_DISMISS_KEY) === '1'; }
+  catch (e) { return false; }
+}
+
+function setSetupDismissed(v) {
+  try {
+    if (v) localStorage.setItem(SETUP_DISMISS_KEY, '1');
+    else localStorage.removeItem(SETUP_DISMISS_KEY);
+  } catch (e) {}
+}
+
+function setupPanelHtml(state) {
+  const items = state.items.map((item) =>
+    '<li class="setup-item' + (item.done ? ' done' : '') + (item.optional ? ' optional' : '') + '">' +
+      '<span class="setup-mark" aria-hidden="true">' + (item.done ? '✓' : item.optional ? '·' : '○') + '</span>' +
+      '<span class="setup-copy"><span class="setup-label">' + esc(item.label) + '</span>' +
+      '<span class="setup-detail">' + esc(item.detail) + '</span></span>' +
+    '</li>').join('');
+  const actions = state.actions.map((action) =>
+    '<button type="button" class="setup-action' + (action.secondary ? ' secondary' : '') + '" data-action="' + esc(action.id) + '">' + esc(action.label) + '</button>'
+  ).join('');
+  return '<div class="setup-card">' +
+    '<div class="setup-head"><div><div class="setup-kicker">onboarding</div><h2>' + esc(state.title) + '</h2>' +
+    '<p>' + esc(state.summary) + '</p></div>' +
+    (state.workspace ? '<span class="setup-workspace" title="workspace">📂 ' + esc(state.workspace) + '</span>' : '') +
+    '</div>' +
+    '<ul class="setup-list">' + items + '</ul>' +
+    '<div class="setup-next">' + esc(state.nextStep) + '</div>' +
+    '<div class="setup-actions">' + actions + '</div>' +
+  '</div>';
+}
+
+function renderSetupPanel() {
+  const state = buildSetupState(S.doc, S.boardStatus, S.connected, { dismissed: setupDismissed() });
+  if (!state.show) {
+    setupEl.hidden = true;
+    setupEl.textContent = '';
+    return;
+  }
+  setupEl.hidden = false;
+  if (!setHtmlIfChanged(setupEl, setupPanelHtml(state))) return;
+  setupEl.querySelectorAll('[data-action]').forEach((el) => {
+    el.onclick = () => {
+      const action = el.dataset.action;
+      if (action === 'add-lieutenant') { setSetupDismissed(false); openNewLieutenant(); return; }
+      if (action === 'create-card') { setSetupDismissed(false); openNewCard('backlog'); return; }
+      if (action === 'dismiss') { setSetupDismissed(true); render(); }
+    };
+  });
+}
 
 function byRecency(a, b) {
   return (new Date(cardRecency(b) || 0).getTime() || 0) - (new Date(cardRecency(a) || 0).getTime() || 0);
@@ -156,6 +210,7 @@ function tileHtml(c) {
 
 export function renderBoard() {
   renderLane();
+  renderSetupPanel();
   const cols = columns();
   const html = !cols.length
     ? '<div class="empty">waiting for board…</div>'
