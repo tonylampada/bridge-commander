@@ -115,13 +115,13 @@ function msgHtml(m, promote, avatarIdx) {
   // speak button only on lieutenant bubbles; 🔊 icon, no message text in markup
   const speakBtn = mine ? '' :
     '<button class="msg-speak" type="button" data-speak title="read this message aloud" aria-label="read this message aloud">🔊</button>';
-  const bubble = '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body + atts +
-    '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
-  // face sits beside the bubble in a row — same face for every agent bubble in
+  // face sits inside the bubble, top-left — same face for every agent bubble in
   // this feed (a card thread's interlocutor is always the owning lieutenant,
   // so even a worker's stamped-as-owner say gets its face)
-  if (mine || avatarIdx == null) return bubble;
-  return '<div class="msg-row">' + avatarHtml(avatarIdx, 'msg-avatar') + bubble + '</div>';
+  const hasAvatar = !mine && avatarIdx != null;
+  const face = hasAvatar ? avatarHtml(avatarIdx, 'msg-face') : '';
+  return '<div class="msg ' + (mine ? 'user' : 'agent') + (hasAvatar ? ' has-avatar' : '') + '">' + face + body + atts +
+    '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
 // same fallback rule as everywhere else) above the "no messages yet" text
