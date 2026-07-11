@@ -32,6 +32,12 @@
 // iff its <session>.json marker exists. That lets a test process watch what a
 // server process sent, and pre-register "live" fake sessions by dropping a
 // marker file. Without BC_FAKE_STATE the fake stays purely in-memory.
+//
+// spawn also writes opts.stateDir/<key>.prompt (the SAME source-of-truth file
+// the real tmux adapters persist) whenever opts.stateDir is given — distinct
+// from BC_FAKE_STATE, and honored even without it, mirroring the real
+// harnesses closely enough for callers (card.start's brief-artifact
+// auto-attach) to be exercised under test without tmux.
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
@@ -115,6 +121,10 @@ async function spawn(cwd, prompt, opts = {}) {
     // plumbed through the port (the fake itself never writes state there).
     fs.writeFileSync(marker,
       JSON.stringify({ cwd, resumeId, prompt, stateDir: opts.stateDir || null }, null, 2) + '\n');
+  }
+  if (opts.stateDir) {
+    fs.mkdirSync(opts.stateDir, { recursive: true });
+    fs.writeFileSync(path.join(opts.stateDir, `${key}.prompt`), prompt);
   }
   emitTurnEnd(key);
   const ref = { harness: 'fake', session, cwd, resumeId };

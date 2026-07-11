@@ -19,16 +19,13 @@ function brief(overrides = {}) {
   });
 }
 
-test('ground rules carry the process-safety rule (capture pid, never kill by pattern)', () => {
+test('ground rules carry the worktree-isolation rule (misplaced-worker check, work only in the worktree)', () => {
   const out = brief();
-  assert.match(out, /Process safety/);
-  assert.match(out, /PID=\$!/);
-  assert.match(out, /NEVER `pgrep`\/`pkill`\/`kill` by name or/);
-  assert.match(out, /freeze or kill YOU/);
+  assert.match(out, /verify your\n {2}cwd is exactly that worktree/);
+  assert.match(out, /Work only inside your worktree\. Never touch the project clone or the workspace directly\./);
 });
 
-test('process-safety rule is present for investigation cards too', () => {
+test('worktree-isolation rule is present for investigation cards too', () => {
   const out = brief({ card: { id: 'demo', title: 'Look into it', type: 'investigation', body: 'why?' } });
-  assert.match(out, /Process safety/);
-  assert.match(out, /PID=\$!/);
+  assert.match(out, /Work only inside your worktree\./);
 });

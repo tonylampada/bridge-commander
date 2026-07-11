@@ -22,11 +22,17 @@
 //
 // Verified launch template (mined from firstmate's fm-spawn.sh):
 //   CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \
-//     --session-id <uuid> "$(cat <promptfile>)"
+//     --session-id <uuid>
 //   - CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false kills the dim "ghost text"
 //     prompt suggestion that otherwise reads as pending composer input.
-//   - the prompt rides in a file, expanded by the pane's shell — no quoting
-//     hazards, no tmux argv length limits.
+//   - the prompt is NEVER passed on the command line — claude launches bare,
+//     and once launch-settle confirms the composer is up, the prompt is typed
+//     into it via the same verified-submit machinery send() uses (t.submit).
+//     A prompt riding in argv would sit in that process's command line for
+//     the life of the session — visible to `ps`/`pgrep -f`, and a broad
+//     pattern-kill run BY that very agent (matching its own argv) could
+//     freeze or kill itself. The prompt file in stateDir stays the source of
+//     truth; only the delivery mechanism changed.
 //   - a fresh cwd triggers claude's folder-trust dialog even with
 //     --dangerously-skip-permissions (verified); spawn auto-accepts it.
 //
@@ -120,10 +126,10 @@ async function spawn(cwd, prompt, opts = {}) {
   try {
     const extra = (opts.extraArgs || []).map(s.shellQuote).join(' ');
     const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
-      + `claude --dangerously-skip-permissions --session-id ${resumeId} `
-      + (extra ? extra + ' ' : '')
-      + `"$(cat ${s.shellQuote(promptFile)})"`;
+      + `claude --dangerously-skip-permissions --session-id ${resumeId}`
+      + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(session, window), launchCmd, SETTLE);
+    await deliverPrompt(s.paneTarget(session, window), prompt);
   } catch (err) {
     await s.killPane(session, window);
     try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
@@ -133,6 +139,24 @@ async function spawn(cwd, prompt, opts = {}) {
   const ref = { harness: 'claude', session, cwd: cwdAbs, resumeId };
   if (window) ref.window = window;
   return ref;
+}
+
+// deliverPrompt(target, prompt) — type the brief into the just-settled
+// composer with verified submission (t.submit — same mechanism send() uses:
+// type once, retry only Enter, never retype). Runs once, right after
+// launchAndSettle confirms the main UI is up, so the brief never rides in
+// argv (see the file-header note on why that matters).
+async function deliverPrompt(target, prompt) {
+  const verdict = await t.submit(target, prompt, {
+    retries: Number(process.env.BC_SEND_RETRIES || 3),
+    enterSleep: Number(process.env.BC_SEND_SLEEP_MS || 400),
+  });
+  if (verdict === 'pending') {
+    throw new Error('brief not submitted at spawn (Enter swallowed; text left in composer)');
+  }
+  if (verdict === 'send-failed') {
+    throw new Error('brief not sent at spawn (tmux send failed)');
+  }
 }
 
 // send(ref, text) — type into the session with verified submission.

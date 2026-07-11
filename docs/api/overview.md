@@ -72,7 +72,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `card.create` | `lieutenant, title, type, attrs → card` | 🤠 · ⚓ (proactive) | an idea/task is worth tracking; born in Backlog, nowhere else |
-| `card.start` | `card → worker` | ⚓ (own judgment, or executing a captain drag-order) | ready to work: ONE atomic op — spawn worker session + worktree, bind to card, card → Working. `plan` cards never start. The ONLY operation that enters Working |
+| `card.start` | `card → worker` | ⚓ (own judgment, or executing a captain drag-order) | ready to work: ONE atomic op — spawn worker session + worktree, bind to card, card → Working. The brief is auto-attached as a card artifact (label `brief`, idempotent across resumes). `plan` cards never start. The ONLY operation that enters Working |
 | `card.move` | `card, column` | 🤠 drag = **order** · ⚓ only → Your review (the handoff) · ⚙️ only on objective facts (start, merge) | see side effects for drag semantics |
 | `card.patch` | `card, {title?, body?, type?, attrs?, labels?}` | ⚓ · ⚙️ (mechanical attrs: prs, session) | body rewritten to current state before every handoff. Owner is NOT patchable (see invariant 4) |
 | `card.status` | `card, worker-state` | 🛠️ writes · ⚙️ TTL-decays | the live lease behind CardStatus; single-writer |
@@ -145,7 +145,7 @@ gracefully when the verb is absent. Current optional verbs (pane viewing — the
 | captain drags any column → Working | start-order QueueItem to the owning lieutenant → it briefs and runs `card.start`; the card does not move until then (it carries a visible `pendingOrder` marker, cleared by any applied move) |
 | captain drags Your review → Backlog | rework-order QueueItem carrying the captain's thread comment; same `pendingOrder` marker |
 | captain creates / moves a card | `card-created` / `card-moved` QueueItem to the owner (awareness, not an order) |
-| `card.start` | worker spawned (worktree + session), card → Working, level-2 event |
+| `card.start` | worker spawned (worktree + session), card → Working, level-2 event, brief auto-attached as an artifact |
 | `chat.say` by captain | QueueItem (write-ahead) + `harness.send` wake to the owning lieutenant |
 | `chat.say` on a card thread by anyone but the owning lieutenant (its worker, a peer, unidentified tooling) | `worker-said` QueueItem waking the owner — the thread alone notifies nobody |
 | `worker.send` by the lieutenant | text typed into the card's live worker session (harness `send`, verified submission) + level-2 event; loud error without a live worker. `card.start --resume` refuses a brief and points here |
