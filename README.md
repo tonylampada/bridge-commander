@@ -21,7 +21,8 @@ npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander ru
 ## Quickstart
 
 - Create an empty folder (e.g. `myfleet`)
-- Start `claude` in that folder, **inside tmux** (not optional — the lieutenant lives in the tmux session)
+- Start `claude` in that folder, inside tmux
+- Optional but recommended: run `bc-axi doctor` to verify Node/tmux/git/gh/claude/codex, tmux, workspace readiness, and the board port before bootstrapping
 - `/bridge-commander`
 - Open the printed board URL (default `http://localhost:4780/`)
 - Talk to your lieutenant from there — he'll guide you through the rest of the setup
