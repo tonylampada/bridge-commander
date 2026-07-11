@@ -1,7 +1,12 @@
 # Bridge Commander
 
-Use Claude Code / Codex as multiple chiefs of staff. Work items get done by independent agent
-sessions and are tracked realtime in a kanban board.
+As you work with AI, your **attention gets fragmented** — driving multiple planning tasks while
+overseeing multiple implementation tasks. Chat quickly becomes the wrong UX for piloting a fleet
+of agents.
+
+This skill lets you use Claude Code / Codex as multiple chiefs of staff (**lieutenants**). You
+get a web UI where you work together, as work items get done by independent agent sessions on a
+kanban board.
 
 ![the board](docs/img/board.png)
 
