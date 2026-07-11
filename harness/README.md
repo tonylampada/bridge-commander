@@ -77,11 +77,14 @@ is the captain's escape hatch). `resumeId` is the harness-native conversation id
 ## The claude implementation
 
 - **spawn** — `tmux new-session -d -s bc-<id> -c <cwd>`, then launches
-  `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --session-id <uuid> "$(cat <promptfile>)"`.
-  The uuid is generated up front, so `resumeId` is known deterministically at birth.
-  The prompt rides in a file expanded by the pane's shell — no quoting hazards.
-  A fresh cwd shows claude's folder-trust dialog even in bypass mode; spawn detects
-  and auto-accepts it, and only returns once the main UI is up.
+  `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --session-id <uuid>`
+  (bare — no prompt on the command line). The uuid is generated up front, so
+  `resumeId` is known deterministically at birth. A fresh cwd shows claude's
+  folder-trust dialog even in bypass mode; spawn detects and auto-accepts it,
+  waits for the main UI, and only THEN types the prompt into the composer with
+  the same verified-submit machinery `send()` uses — the prompt is persisted to
+  `<stateDir>/<key>.prompt` (source of truth) but never rides in argv, so
+  `ps`/`pgrep -f` on the launched process never shows it.
   `opts.installHooks: false` skips the per-spawn Stop-hook install (spawn and
   resume both honor it) — for sessions born into a cwd that already carries a
   workspace-level hook, which a per-spawn install would clobber (one bc entry
@@ -123,7 +126,9 @@ launch line, the screen signatures, and where the turn-end relay rides
 (command line, not settings file). Verified against codex 0.144.1.
 
 - **spawn** — launches
-  `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c notify='[...]' "$(cat <promptfile>)"`.
+  `codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust -c notify='[...]'`
+  (bare — no prompt on the command line; delivered into the composer the same
+  way claude's spawn does, once launch-settle confirms the UI is up).
   - `--dangerously-bypass-approvals-and-sandbox` is codex's analog of claude's
     `--dangerously-skip-permissions` (YOLO mode: no sandbox, no approval
     prompts — the port's full-autonomy rule).

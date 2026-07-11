@@ -20,7 +20,7 @@
 //
 // Verified launch template (codex 0.144.1):
 //   codex --dangerously-bypass-approvals-and-sandbox --dangerously-bypass-hook-trust \
-//     -c notify='["node","<relay>","<stateDir>","<key>","<url>"]' "$(cat <promptfile>)"
+//     -c notify='["node","<relay>","<stateDir>","<key>","<url>"]'
 //   - --dangerously-bypass-approvals-and-sandbox is codex's analog of claude's
 //     --dangerously-skip-permissions (YOLO mode: no sandbox, no approval
 //     prompts — port rule #4, full autonomy at launch).
@@ -31,8 +31,14 @@
 //     it at every turn boundary with the payload JSON appended as the LAST
 //     argv. One mechanism gives BOTH turn-end detection AND the thread-id for
 //     resume — nothing is written into the worktree (port rule #5 for free).
-//   - the prompt rides in a file, expanded by the pane's shell — no quoting
-//     hazards, no tmux argv length limits (same trick as claude).
+//   - the prompt is NEVER passed on the command line — codex launches bare,
+//     and once launch-settle confirms the composer is up, the prompt is typed
+//     into it via the same verified-submit machinery send() uses (t.submit).
+//     A prompt riding in argv would sit in that process's command line for
+//     the life of the session — visible to `ps`/`pgrep -f`, and a broad
+//     pattern-kill run BY that very agent (matching its own argv) could
+//     freeze or kill itself. The prompt file in stateDir stays the source of
+//     truth; only the delivery mechanism changed.
 //   - a fresh cwd shows codex's directory-trust prompt even with the bypass
 //     flags ("Do you trust the contents of this directory?", "Yes, continue"
 //     preselected — Enter accepts); launch-settle auto-accepts it, exactly
@@ -85,10 +91,10 @@ async function spawn(cwd, prompt, opts = {}) {
   try {
     const extra = (opts.extraArgs || []).map(s.shellQuote).join(' ');
     const launchCmd = 'codex '
-      + launchFlags(stateDir, key, opts.callbackUrl || process.env.BC_TURNEND_URL || '') + ' '
-      + (extra ? extra + ' ' : '')
-      + `"$(cat ${s.shellQuote(promptFile)})"`;
+      + launchFlags(stateDir, key, opts.callbackUrl || process.env.BC_TURNEND_URL || '')
+      + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(session, window), launchCmd, SETTLE);
+    await deliverPrompt(s.paneTarget(session, window), prompt);
   } catch (err) {
     await s.killPane(session, window);
     try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
@@ -98,6 +104,24 @@ async function spawn(cwd, prompt, opts = {}) {
   const ref = { harness: 'codex', session, cwd: cwdAbs };
   if (window) ref.window = window;
   return ref;
+}
+
+// deliverPrompt(target, prompt) — type the brief into the just-settled
+// composer with verified submission (t.submit — same mechanism send() uses:
+// type once, retry only Enter, never retype). Runs once, right after
+// launchAndSettle confirms the main UI is up, so the brief never rides in
+// argv (see the file-header note on why that matters).
+async function deliverPrompt(target, prompt) {
+  const verdict = await t.submit(target, prompt, {
+    retries: Number(process.env.BC_SEND_RETRIES || 3),
+    enterSleep: Number(process.env.BC_SEND_SLEEP_MS || 400),
+  });
+  if (verdict === 'pending') {
+    throw new Error('brief not submitted at spawn (Enter swallowed; text left in composer)');
+  }
+  if (verdict === 'send-failed') {
+    throw new Error('brief not sent at spawn (tmux send failed)');
+  }
 }
 
 // send(ref, text) — type into the session with verified submission.

@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const codex = require('../codex-tmux.js');
 const { isHarnessRef } = require('../port.js');
+const { mockTmux } = require('./tmux-mock.js');
 
 test('a codex ref is a valid HarnessRef with and without the (late-adopted) resumeId', () => {
   // Born WITHOUT resumeId — codex assigns the thread-id and the first notify
@@ -55,5 +56,46 @@ test('spawn validates the window name before touching tmux: numeric or hostile n
       codex.spawn('/tmp', 'hi', { session: 'bc-t', window }),
       /invalid window name/,
       `window "${window}" must be refused`);
+  }
+});
+
+// Same guarantee as claude-tmux.test.js: the brief must never ride on the
+// command line — a worker's own broad pattern-kill (against its own argv)
+// could freeze or kill itself. Mock tmux.js (tmux-mock.js) and check exactly
+// what got typed: the launch line (typed at launch) must be brief-free; the
+// brief must show up ONLY in the later verified-submit (composer) call.
+test('spawn never puts the brief on the launch line — it is typed into the composer after settle', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-codex-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-codex-state2-'));
+  const mock = mockTmux({ readyTail: 'OpenAI Codex (v1.0.0)\nYOLO mode\n› ' });
+  const brief = 'SECRET_BRIEF_MARKER: do the thing, then do the other thing.\nmulti-line too.';
+  try {
+    const ref = await codex.spawn(dir, brief, { session: 'bc-argvtest2', stateDir });
+    assert.strictEqual(ref.harness, 'codex');
+
+    const launchCall = mock.calls.find((c) => c.fn === 'sendLiteral');
+    assert.ok(launchCall, 'the launch line must have been typed');
+    assert.doesNotMatch(launchCall.args[1], /SECRET_BRIEF_MARKER/, 'launch line must not carry the brief');
+    assert.match(launchCall.args[1], /codex --dangerously-bypass-approvals-and-sandbox/);
+
+    const submitCall = mock.calls.find((c) => c.fn === 'submit');
+    assert.ok(submitCall, 'the brief must have been delivered via verified submit');
+    assert.strictEqual(submitCall.args[1], brief, 'the exact brief text is what gets typed into the composer');
+    assert.ok(mock.calls.indexOf(submitCall) > mock.calls.indexOf(launchCall), 'brief delivery happens AFTER launch');
+
+    // no tmux/tryTmux/sendKey call anywhere carries the brief either
+    for (const c of mock.calls) {
+      if (c.fn === 'submit') continue;
+      assert.ok(!JSON.stringify(c.args).includes('SECRET_BRIEF_MARKER'),
+        `${c.fn}(${JSON.stringify(c.args)}) must not carry the brief`);
+    }
+
+    // the prompt file (source of truth) still gets the exact brief
+    const promptFile = path.join(stateDir, 'bc-argvtest2.prompt');
+    assert.strictEqual(fs.readFileSync(promptFile, 'utf8'), brief);
+  } finally {
+    mock.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });

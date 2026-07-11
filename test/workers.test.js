@@ -152,6 +152,15 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     assert.match(rec.prompt, /worker done fix-login/);
     assert.match(rec.prompt, new RegExp('--workspace ' + s.dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
+    // the brief is auto-attached as a card artifact (label "brief"), pointing
+    // at the SAME persisted prompt file the harness port treats as the
+    // source of truth — and it is servable through the artifact preview endpoint
+    const briefFile = path.join(s.dir, '.bridge-commander', 'harness', sess + '.prompt');
+    assert.deepStrictEqual(card.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief' }]);
+    const art = await s.api('GET', '/api/artifact?uri=' + encodeURIComponent('file://' + briefFile));
+    assert.strictEqual(art.status, 200);
+    assert.match(art.body.content, /Worker brief — card "Fix login"/);
+
     // worker registry survives on disk (board is truth)
     const disk = boardOnDisk(s);
     assert.strictEqual(disk.workers.length, 1);
@@ -226,13 +235,20 @@ test('investigation: brief carries the report contract, no branch; done attaches
     assert.doesNotMatch(rec.prompt, /git checkout -b/);
     assert.doesNotMatch(rec.prompt, /Delivery mode/);
 
+    // card.start already auto-attached the brief itself, ahead of the report
+    const briefFile = path.join(s.dir, '.bridge-commander', 'harness', workerKey(s.dir, 'why-slow') + '.prompt');
+    assert.deepStrictEqual(card0.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief' }]);
+
     // the worker writes the report, then reports done → auto-attached artifact
     const report = path.join(s.dir, '.bridge-commander', 'reports', 'why-slow.md');
     fs.mkdirSync(path.dirname(report), { recursive: true });
     fs.writeFileSync(report, '# Findings\nIt was DNS.\n');
     await s.api('POST', '/api/cards/why-slow/worker/done', { outcome: 'report written: it was DNS' });
     const card = (await s.api('GET', '/api/cards/why-slow')).body;
-    assert.deepStrictEqual(card.attributes.artifacts, [{ uri: 'file://' + report, label: 'report' }]);
+    assert.deepStrictEqual(card.attributes.artifacts, [
+      { uri: 'file://' + briefFile, label: 'brief' },
+      { uri: 'file://' + report, label: 'report' },
+    ]);
     // and the artifact is servable through the artifact preview endpoint
     const art = await s.api('GET', '/api/artifact?uri=' + encodeURIComponent('file://' + report));
     assert.strictEqual(art.status, 200);
@@ -313,6 +329,10 @@ test('card start --resume reincarnates a dead recorded worker in the same worktr
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Crashy', id: 'crashy', attributes: { repo: 'proj' } }));
     const first = (await s.api('POST', '/api/cards/crashy/start', { harness: 'fake' })).body.worker;
+    const cardBefore = (await s.api('GET', '/api/cards/crashy')).body;
+    assert.strictEqual(cardBefore.attributes.artifacts.length, 1, 'brief attached on the fresh spawn');
+    const briefUri = cardBefore.attributes.artifacts[0].uri;
+    assert.strictEqual(cardBefore.attributes.artifacts[0].label, 'brief');
 
     // simulate worker-died state: the supervision loop would have flagged it
     // (BC state is on disk; here we drive the resume path directly)
@@ -326,7 +346,11 @@ test('card start --resume reincarnates a dead recorded worker in the same worktr
     assert.strictEqual(w.ref.window, workerWindow('crashy'));
     assert.strictEqual(w.worktree.path, first.worktree.path, 'same worktree — context preserved');
     assert.strictEqual(w.done, false);
-    assert.strictEqual((await s.api('GET', '/api/cards/crashy')).body.column, 'working');
+    const cardAfter = (await s.api('GET', '/api/cards/crashy')).body;
+    assert.strictEqual(cardAfter.column, 'working');
+
+    // idempotent: resume re-attaches the SAME brief uri, no duplicate entry
+    assert.deepStrictEqual(cardAfter.attributes.artifacts, [{ uri: briefUri, label: 'brief' }]);
 
     // resume with no recorded worker refuses
     await s.api('POST', '/api/cards', withOwner({ title: 'Fresh', id: 'fresh', attributes: { repo: 'proj' } }));

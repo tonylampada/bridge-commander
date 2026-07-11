@@ -1318,6 +1318,26 @@ function enterWorking(card, text) {
   return ev;
 }
 
+// attachBriefArtifact(card, ref) — the worker's brief, auto-attached as a card
+// artifact (label "brief") the moment a worker is bound to the card: fresh
+// spawn AND resume both call it. Mirrors the investigation report auto-attach
+// (workerDone): dedup by uri, gated on the file actually existing (a harness
+// that doesn't persist a prompt file at this path simply gets no artifact —
+// best-effort, never an error). The path is the SAME deterministic
+// `<stateDir>/<key>.prompt` the harness port persists as the brief's source
+// of truth (key = workerName(ref) = session or session:window), so a resume
+// — which never regenerates a brief — still points at the original one and
+// the uri-dedup keeps this idempotent across any number of resumes.
+function attachBriefArtifact(card, ref) {
+  const briefFile = path.join(HARNESS_STATE_DIR, workerName(ref) + '.prompt');
+  if (!fs.existsSync(briefFile)) return;
+  if (!Array.isArray(card.attributes.artifacts)) card.attributes.artifacts = [];
+  const uri = 'file://' + briefFile;
+  if (!card.attributes.artifacts.some((a) => a && a.uri === uri)) {
+    card.attributes.artifacts.push({ uri, label: 'brief' });
+  }
+}
+
 // card.start — ONE atomic op: provision an isolated worktree, spawn the worker
 // session with the brief as launch prompt (per-spawn hook install is SAFE here
 // precisely because the cwd is an isolated worktree — never the workspace root,
@@ -1372,6 +1392,7 @@ async function doStartCard(card, body) {
     delete existing.stopNotified;
     delete existing.staleNotified;
     delete existing.paused; // a revived worker is watched again
+    attachBriefArtifact(card, ref);
     enterWorking(card, 'worker ' + workerName(ref) + ' resumed in ' + existing.worktree.path);
     return { worker: existing, resumed: true };
   }
@@ -1446,6 +1467,7 @@ async function doStartCard(card, body) {
   card.attributes.session = workerName(ref);
   card.attributes.worktree = wt.path;
   if (branch) card.attributes.branch = branch;
+  attachBriefArtifact(card, ref);
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
   if (branch) worker.branch = branch;
   board.workers.push(worker);
