@@ -144,6 +144,15 @@
 <!-- owner menu (detail ✎ on the lieutenant chip — reassign the owning lieutenant) -->
 <div id="owner-menu" hidden></div>
 
+<!-- lieutenant appearance popover (lane ⋯ → appearance): avatar + color, edits commit on pick -->
+<div id="ap-popover" hidden>
+  <div class="ap-head">
+    <span class="ap-title">appearance</span>
+    <input id="ap-color" type="color" title="lieutenant color">
+  </div>
+  <div id="ap-grid"></div>
+</div>
+
 <!-- new card modal -->
 <div id="nc-overlay" hidden>
   <form id="nc-modal">
@@ -183,6 +192,7 @@
         <option value="codex">codex</option>
       </select>
     </div>
+    <div id="lt-avatar-grid"></div>
     <textarea id="lt-charter" placeholder="charter — the standing mission (markdown, optional)" rows="5"></textarea>
     <div class="nc-actions">
       <button type="button" id="lt-cancel">cancel</button>

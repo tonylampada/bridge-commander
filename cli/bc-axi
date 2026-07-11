@@ -41,7 +41,7 @@ const opts = {
   workspace: '', port: 0, host: '',
   textFile: null, bodyFile: null, charterFile: null,
   title: null, column: null, id: null, type: null, owner: null, lieutenant: null,
-  name: null, color: null,
+  name: null, color: null, avatar: null,
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
   mode: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
@@ -64,6 +64,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--lieutenant') opts.lieutenant = argv[++i];
   else if (a === '--name') opts.name = argv[++i];
   else if (a === '--color') opts.color = argv[++i];
+  else if (a === '--avatar') opts.avatar = argv[++i];
   else if (a === '--level') opts.level = parseInt(argv[++i], 10);
   else if (a === '--kind') opts.kind = argv[++i];
   else if (a === '--actor') opts.actor = argv[++i];
@@ -342,11 +343,20 @@ async function cmdStop() {
 }
 
 // ---------- lieutenants ----------
+function parseAvatarOpt(raw) {
+  const n = parseInt(raw, 10);
+  if (!Number.isInteger(n) || String(n) !== String(raw).trim() || n < 0 || n > 63) {
+    die('--avatar must be an integer 0-63');
+  }
+  return n;
+}
+
 async function cmdLtCreate() {
-  if (!opts.name) die('usage: bc-axi lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-] [--spawn [--harness h]]');
+  if (!opts.name) die('usage: bc-axi lieutenant create --name N [--id id] [--color #rrggbb] [--avatar N] [--charter-file f|-] [--spawn [--harness h]]');
   const body = { name: opts.name };
   if (opts.id) body.id = opts.id;
   if (opts.color) body.color = opts.color;
+  if (opts.avatar !== null) body.avatar = parseAvatarOpt(opts.avatar);
   if (opts.charterFile) body.charter = readInput(opts.charterFile);
   if (opts.actor) body.actor = opts.actor;
   if (opts.spawn) {
@@ -358,6 +368,18 @@ async function cmdLtCreate() {
   const ref = r.lieutenant.ref;
   console.log('lieutenant ' + r.lieutenant.id + ' created (' + r.lieutenant.color + ')'
     + (ref ? ' — live session ' + ref.harness + ':' + ref.session : ''));
+}
+
+async function cmdLtPatch() {
+  const id = positional[0];
+  if (!id) die('usage: bc-axi lieutenant patch <id> [--avatar N|none] [--color #rrggbb]');
+  const body = {};
+  if (opts.avatar !== null) body.avatar = opts.avatar === 'none' ? null : parseAvatarOpt(opts.avatar);
+  if (opts.color) body.color = opts.color;
+  if (!Object.keys(body).length) die('usage: bc-axi lieutenant patch <id> [--avatar N|none] [--color #rrggbb]');
+  const r = await request('PATCH', '/api/lieutenants/' + encodeURIComponent(id), body);
+  console.log('lieutenant ' + id + ' updated (avatar=' + (r.lieutenant.avatar != null ? r.lieutenant.avatar : 'none')
+    + ' color=' + r.lieutenant.color + ')');
 }
 
 async function cmdLtRetire() {
@@ -877,6 +899,7 @@ const commands = {
   open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
   board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
   'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList, 'lieutenant retire': cmdLtRetire,
+  'lieutenant patch': cmdLtPatch,
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
@@ -903,11 +926,14 @@ if (!commands[cmd]) {
     '  status                                 up/down, cards, lieutenants, pending queue items\n' +
     '  stop                                   stop the workspace server\n' +
     '\nlieutenant:\n' +
-    '  lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-] [--spawn [--harness h]]\n' +
-    '                                         register a lieutenant (color auto-assigned when omitted);\n' +
-    '                                         --spawn births a REAL agent session in the workspace root\n' +
-    '                                         (doctrine + charter as launch prompt, ref persisted)\n' +
+    '  lieutenant create --name N [--id id] [--color #rrggbb] [--avatar N] [--charter-file f|-] [--spawn [--harness h]]\n' +
+    '                                         register a lieutenant (color auto-assigned when omitted;\n' +
+    '                                         --avatar 0-63 indexes the sprite sheet, omitted = colored-dot\n' +
+    '                                         fallback); --spawn births a REAL agent session in the\n' +
+    '                                         workspace root (doctrine + charter as launch prompt, ref persisted)\n' +
     '  lieutenant list [--json]               id, name, color, charter first line\n' +
+    '  lieutenant patch <id> [--avatar N|none] [--color #rrggbb]\n' +
+    '                                         lieutenant.update: cosmetics only — name/id stay immutable\n' +
     '  lieutenant retire <id>                 lieutenant.retire: refuses while the lieutenant owns\n' +
     '                                         non-archived cards; else kills its session, removes it\n' +
     '                                         and its queue, level-1 event\n' +

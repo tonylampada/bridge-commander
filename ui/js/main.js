@@ -5,7 +5,7 @@ import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard } from './toast.js';
-import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
+import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu, appearancePopoverOpen, closeAppearancePopover } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
@@ -111,6 +111,7 @@ document.addEventListener('keydown', (e) => {
     else if (newCardOpen()) closeNewCard();
     else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();
+    else if (appearancePopoverOpen()) closeAppearancePopover();
     else if (ownerMenuOpen()) closeOwnerMenu(); // just the menu — keep the detail open
     else if (S.notifOpen) { S.notifOpen = false; render(); }
     else if (!spEl.hidden) { spEl.hidden = true; gearBtn.classList.remove('on'); }
