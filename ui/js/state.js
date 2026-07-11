@@ -35,6 +35,11 @@ export function lieutenantName(id) {
   const l = lieutenant(id);
   return l ? l.name || l.id : id;
 }
+export function lieutenantAvatar(id) {
+  const l = lieutenant(id);
+  const a = l && l.avatar;
+  return Number.isInteger(a) && a >= 0 && a <= 63 ? a : null;
+}
 
 export function reads() {
   const r = (S.doc && S.doc.reads && S.doc.reads[USER]) || {};

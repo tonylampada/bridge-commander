@@ -182,6 +182,77 @@ test('cli: lieutenant retire', async () => {
   }
 });
 
+test('avatar: create with valid index, absent by default, out-of-range rejected; PATCH sets/clears', async () => {
+  const s = await startServer();
+  try {
+    // absent by default — graceful colored-dot fallback
+    let r = await s.api('POST', '/api/lieutenants', { name: 'No Face', id: 'noface' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.avatar, undefined);
+
+    // valid index (including boundary 0 and 63)
+    r = await s.api('POST', '/api/lieutenants', { name: 'Face Zero', id: 'face0', avatar: 0 });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.avatar, 0);
+    r = await s.api('POST', '/api/lieutenants', { name: 'Face Last', id: 'face63', avatar: 63 });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.avatar, 63);
+
+    // out-of-range / non-integer rejected on create
+    r = await s.api('POST', '/api/lieutenants', { name: 'Bad', id: 'bad1', avatar: 64 });
+    assert.strictEqual(r.status, 400);
+    r = await s.api('POST', '/api/lieutenants', { name: 'Bad', id: 'bad2', avatar: -1 });
+    assert.strictEqual(r.status, 400);
+    r = await s.api('POST', '/api/lieutenants', { name: 'Bad', id: 'bad3', avatar: 1.5 });
+    assert.strictEqual(r.status, 400);
+
+    // PATCH sets avatar, then clears it back to fallback with null; out-of-range rejected
+    r = await s.api('PATCH', '/api/lieutenants/noface', { avatar: 12 });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.avatar, 12);
+    r = await s.api('PATCH', '/api/lieutenants/noface', { avatar: 99 });
+    assert.strictEqual(r.status, 400);
+    r = await s.api('PATCH', '/api/lieutenants/noface', { avatar: null });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.avatar, undefined);
+
+    // color also PATCHable on an existing lieutenant, alongside avatar
+    r = await s.api('PATCH', '/api/lieutenants/face0', { avatar: 7, color: '#123456' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.avatar, 7);
+    assert.strictEqual(r.body.lieutenant.color, '#123456');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('cli: lieutenant create --avatar and lieutenant patch', async () => {
+  const s = await startServer();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
+  try {
+    let r = await runCli(['lieutenant', 'create', '--name', 'Avi', '--id', 'avi', '--avatar', '5', ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    let lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'avi');
+    assert.strictEqual(lt.avatar, 5);
+
+    r = await runCli(['lieutenant', 'create', '--name', 'Bad', '--id', 'bad', '--avatar', '64', ...args]);
+    assert.notStrictEqual(r.code, 0);
+    assert.match(r.stderr, /--avatar must be an integer 0-63/);
+
+    r = await runCli(['lieutenant', 'patch', 'avi', '--avatar', '9', '--color', '#abcdef', ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /lieutenant avi updated \(avatar=9 color=#abcdef\)/);
+
+    r = await runCli(['lieutenant', 'patch', 'avi', '--avatar', 'none', ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /avatar=none/);
+    lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'avi');
+    assert.strictEqual(lt.avatar, undefined);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('cli: lieutenant create (charter via stdin file) and list', async () => {
   const s = await startServer();
   const args = ['--workspace', s.dir, '--port', String(s.port)];

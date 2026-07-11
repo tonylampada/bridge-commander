@@ -1,12 +1,13 @@
 // board: lieutenant lane above the columns, dense tiles, drag&drop, long-press
 // move menu, new-card / new-lieutenant modals.
-import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
+import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
 import { api } from './api.js';
 import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
 import { openCardPane, openLieutenantPane } from './pane.js';
+import { avatarHtml, avatarGridHtml, wireAvatarGrid } from './avatars.js';
 
 const laneEl = document.getElementById('lane');
 const boardEl = document.getElementById('board');
@@ -33,10 +34,14 @@ function ltCardHtml(l) {
     : owed
     ? '<span class="t-typing" title="owes you a reply"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
     : '';
+  const av = lieutenantAvatar(l.id);
+  const face = av != null
+    ? '<span class="lt-face" style="border-color:' + esc(lieutenantColor(l.id)) + '">' + avatarHtml(av) + '</span>'
+    : '<span class="lt-dot" style="background:' + esc(lieutenantColor(l.id)) + '"></span>';
   return '<div class="lt-card' + (active ? ' on' : '') + (filterSelected('owner', l.id) ? ' filtered' : '') + '" data-id="' + esc(l.id) + '"' +
     ' style="border-left-color:' + esc(lieutenantColor(l.id)) + '"' +
     (l.charter ? ' title="' + esc(l.charter.split('\n')[0].slice(0, 160)) + '"' : '') + '>' +
-    '<span class="lt-dot" style="background:' + esc(lieutenantColor(l.id)) + '"></span>' +
+    face +
     '<span class="lt-name">' + esc(l.name || l.id) + '</span>' +
     ind +
     '<span class="lt-counts">' + mine.length + (working ? ' · 🔨' + working : '') + '</span>' +
@@ -71,6 +76,10 @@ function openLtMenu(ltId, x, y) {
   head.className = 'mm-head';
   head.textContent = l.name || ltId;
   menuEl.appendChild(head);
+  const appearance = document.createElement('button');
+  appearance.textContent = '🖼 appearance';
+  appearance.onclick = (e) => { e.stopPropagation(); closeMoveMenu(); openAppearancePopover(ltId, x, y); };
+  menuEl.appendChild(appearance);
   const owned = cards().filter((c) => c.owner === ltId).length;
   const retire = document.createElement('button');
   retire.className = 'danger';
@@ -86,6 +95,36 @@ function openLtMenu(ltId, x, y) {
   menuEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
   menuEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
+
+// ---------- appearance popover (⋯ → appearance): avatar + color, each pick
+// PATCHes immediately (mirrors the label manager's recolor-on-change) ----------
+const apEl = document.getElementById('ap-popover');
+const apColor = document.getElementById('ap-color');
+const apGrid = document.getElementById('ap-grid');
+let apLtId = null;
+function openAppearancePopover(ltId, x, y) {
+  const l = lieutenant(ltId);
+  if (!l) return;
+  apLtId = ltId;
+  apColor.value = lieutenantColor(ltId);
+  apGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
+  wireAvatarGrid(apGrid, async (idx) => {
+    try { await api.updateLieutenant(ltId, { avatar: idx }); } catch (e) { alert(e.message); }
+  });
+  apEl.hidden = false;
+  const r = apEl.getBoundingClientRect();
+  apEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
+  apEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
+}
+export function closeAppearancePopover() { apLtId = null; apEl.hidden = true; }
+export function appearancePopoverOpen() { return !apEl.hidden; }
+apColor.onchange = async () => {
+  if (!apLtId) return;
+  try { await api.updateLieutenant(apLtId, { color: apColor.value }); } catch (e) { alert(e.message); }
+};
+document.addEventListener('click', (e) => {
+  if (!apEl.hidden && !apEl.contains(e.target) && !e.target.closest('.lt-menu')) closeAppearancePopover();
+});
 
 // ---------- tiles ----------
 function tileHtml(c) {
@@ -340,10 +379,15 @@ document.getElementById('nc-modal').onsubmit = async (e) => {
 
 // ---------- new lieutenant modal ----------
 const ltOverlay = document.getElementById('lt-overlay');
+const ltAvatarGrid = document.getElementById('lt-avatar-grid');
+let ltAvatarPick = null; // null = no avatar (the "none" cell), "none" allowed
 export function openNewLieutenant() {
   document.getElementById('lt-name').value = '';
   document.getElementById('lt-charter').value = '';
   document.getElementById('lt-harness').value = 'claude';
+  ltAvatarPick = null;
+  ltAvatarGrid.innerHTML = avatarGridHtml(ltAvatarPick);
+  wireAvatarGrid(ltAvatarGrid, (idx) => { ltAvatarPick = idx; });
   ltOverlay.hidden = false;
   document.getElementById('lt-name').focus();
 }
@@ -364,6 +408,7 @@ document.getElementById('lt-modal').onsubmit = async (e) => {
   try {
     const r = await api.createLieutenant({
       name,
+      avatar: ltAvatarPick,
       color: document.getElementById('lt-color').value,
       charter: document.getElementById('lt-charter').value,
       harness: document.getElementById('lt-harness').value || 'claude',

@@ -32,7 +32,7 @@ columns; each lieutenant has a color, and its cards carry that color stripe.
 |---|---|
 | Workspace | The deployment unit: board state, config (port), shared memory, project clones. Independent of every other workspace |
 | Project | A repo registered in the workspace, with a delivery mode: `no-mistakes` (default) \| `direct-PR` \| `local-only` |
-| Lieutenant | Durable orchestrator: `name` (display, emoji welcome), `color`, `charter` (mission). Its `id` and any derived session name come from the ASCII slug of the name — emoji never reach tmux. Its tmux session is an incarnation, not the entity. Converses with the captain; proactive inside its mission (creates cards, starts them); never writes to projects |
+| Lieutenant | Durable orchestrator: `name` (display, emoji welcome), `color`, `avatar` (optional index 0-63 into the sprite sheet; absent = colored-dot fallback), `charter` (mission). Its `id` and any derived session name come from the ASCII slug of the name — emoji never reach tmux. Its tmux session is an incarnation, not the entity. Converses with the captain; proactive inside its mission (creates cards, starts them); never writes to projects |
 | Card | Unit of work, owned by one lieutenant. `type`: `plan` 🧠 \| `implementation` 🔥 \| `investigation` 🕵️. `body` = the deliverable, always rewritten to current state. `labels` (tags from the board registry). Work attributes live in an open `attributes{}` map, keys by convention: `repo`, `branch`, `worktree`, `session`, `prs {url, state}`, `artifacts {uri, label}` |
 | CardStatus | Live status hung on a card, UI's real-time signal. Worker lease: `absent \| idle \| working \| needs-you`, written ONLY by `card.status` (worker-side), decayed server-side by TTL; plus server-derived `owed` (captain's last thread message unanswered) and `unread` |
 | Worker | Implementation agent bound 1:1 to a Working card: tmux session + isolated worktree (+ delivery pipeline per project mode). Ephemeral — dies with the card's Working state |
@@ -64,6 +64,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `workspace.init` | `dir → workspace` | ⚓ (the founding agent) | skill invoked in a fresh dir, **inside tmux** (refuses outside, with instruction); creates `.bridge-commander/`, boots the server, registers the caller as the first lieutenant — the "teleport" |
 | `workspace.addProject` | `url \| path, mode → project` | ⚓ | captain asks to bring a repo into the workspace |
 | `lieutenant.create` | `charter → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + charter as launch prompt |
+| `lieutenant.update` | `color?, avatar? → lieutenant` | 🤠 (⋯ → appearance) | cosmetic only — name/id stay immutable; `avatar: null` clears back to the colored-dot fallback |
 | `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first — never reassign); kills its session, removes it and its queue, loud level-1 event |
 
 ### card

@@ -12,7 +12,7 @@
 // Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
 //             columns: fixed frame (backlog | working | review | peer),
-//             lieutenants: [{id, name, color, charter, chat: [{author,text,ts}], created,
+//             lieutenants: [{id, name, color, avatar?: 0-63, charter, chat: [{author,text,ts}], created,
 //                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
@@ -320,6 +320,10 @@ function mkEvent(body, defaults) {
 // ---------- label registry (user-owned; persisted in board json) ----------
 const LABEL_PALETTE = ['#4cc2ff', '#2fbf71', '#e2b93b', '#c678dd', '#e2795b', '#56b6c2', '#98c379', '#e06c75'];
 function validColor(c) { return typeof c === 'string' && /^#[0-9a-fA-F]{6}$/.test(c) ? c : null; }
+// lieutenant avatar: index into the 64-head sprite sheet (ui/img/avatars.png,
+// 8x8, row-major). Absent = colored-dot fallback everywhere (every existing
+// lieutenant has no avatar).
+function validAvatar(a) { return Number.isInteger(a) && a >= 0 && a <= 63; }
 function labelIndex(name) { return board.labels.findIndex((l) => l && l.name === name); }
 function registerCardLabels() {
   for (const c of board.cards) {
@@ -340,12 +344,16 @@ function createLieutenant(body) {
   const id = body.id ? String(body.id) : lieutenantIdFrom(name);
   if (!/^[\w][\w.-]*$/.test(id)) return { error: 'bad lieutenant id (use [A-Za-z0-9_.-])' };
   if (findLieutenant(id)) return { error: 'lieutenant exists: ' + id, code: 409 };
+  if (body.avatar !== undefined && body.avatar !== null && !validAvatar(body.avatar)) {
+    return { error: 'avatar must be an integer 0-63' };
+  }
   const color = validColor(body.color) || LT_PALETTE[board.lieutenants.length % LT_PALETTE.length];
   const lt = {
     id, name: name.slice(0, 60), color,
     charter: String(body.charter || '').slice(0, 8000),
     chat: [], created: now(),
   };
+  if (validAvatar(body.avatar)) lt.avatar = body.avatar;
   if (isHarnessRef(body.ref)) lt.ref = body.ref; // the live-session address, persisted with the board
   board.lieutenants.push(lt);
   const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' joined the bridge', actor: body.actor || 'user', level: 2 }, {});
@@ -1988,7 +1996,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, event: r.event });
     }
-    if (ltRoute && req.method === 'PATCH') { // update name/color/charter/ref (init idempotency)
+    if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/charter/ref (init idempotency)
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
       if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
       const body = JSON.parse(await readBody(req) || '{}');
@@ -2000,6 +2008,11 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.name !== undefined && String(body.name).trim()) lt.name = String(body.name).trim().slice(0, 60);
       if (body.color !== undefined && validColor(body.color)) lt.color = body.color;
+      if (body.avatar !== undefined) {
+        if (body.avatar === null) delete lt.avatar;
+        else if (validAvatar(body.avatar)) lt.avatar = body.avatar;
+        else return sendJson(res, 400, { error: 'avatar must be an integer 0-63 or null' });
+      }
       if (body.charter !== undefined) lt.charter = String(body.charter).slice(0, 8000);
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, lieutenant: lt });

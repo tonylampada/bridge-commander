@@ -2,12 +2,13 @@
 // the lieutenant's main chat or one of its card threads (a card thread's
 // interlocutor is always the owning lieutenant). Whole-window mode switch,
 // premium composer.
-import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
+import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime } from './util.js';
 import { md } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
+import { avatarHtml } from './avatars.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -103,7 +104,7 @@ function attachmentsHtml(atts, promote) {
       '</span>' + pin + '</div>';
   }).join('') + '</div>';
 }
-function msgHtml(m, promote) {
+function msgHtml(m, promote, avatarIdx) {
   const mine = m.author === USER;
   const hasText = !!(m.text && m.text.trim());
   const body = !hasText ? '' : (mine
@@ -114,8 +115,23 @@ function msgHtml(m, promote) {
   // speak button only on lieutenant bubbles; 🔊 icon, no message text in markup
   const speakBtn = mine ? '' :
     '<button class="msg-speak" type="button" data-speak title="read this message aloud" aria-label="read this message aloud">🔊</button>';
-  return '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body + atts +
+  const bubble = '<div class="msg ' + (mine ? 'user' : 'agent') + '">' + body + atts +
     '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
+  // face sits beside the bubble in a row — same face for every agent bubble in
+  // this feed (a card thread's interlocutor is always the owning lieutenant,
+  // so even a worker's stamped-as-owner say gets its face)
+  if (mine || avatarIdx == null) return bubble;
+  return '<div class="msg-row">' + avatarHtml(avatarIdx, 'msg-avatar') + bubble + '</div>';
+}
+// empty-conversation placeholder: the lieutenant's face (or its colored dot,
+// same fallback rule as everywhere else) above the "no messages yet" text
+function emptyFeedHtml(lt) {
+  if (!lt) return '<div class="empty">no messages yet</div>';
+  const av = lieutenantAvatar(lt.id);
+  const face = av != null
+    ? avatarHtml(av, 'chat-empty-avatar')
+    : '<span class="chat-empty-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span>';
+  return '<div class="empty">' + face + 'no messages yet</div>';
 }
 function typingHtml(state, name) {
   // the "owes you a reply" balloon (card.status.owedState / the main-chat rule),
@@ -213,9 +229,13 @@ export function renderChat() {
 
   backBtn.hidden = !isCard;
   openBtn.hidden = !isCard;
+  const titleAv = lt ? lieutenantAvatar(lt.id) : null;
+  const titleFace = titleAv != null
+    ? '<span class="lt-face" style="border-color:' + esc(lieutenantColor(lt.id)) + '">' + avatarHtml(titleAv) + '</span>'
+    : '<span class="lt-dot" style="background:' + esc(lieutenantColor((lt || {}).id)) + '"></span>';
   setHtmlIfChanged(titleEl, isCard
     ? esc(cardEmoji(c) + ' ' + (c.title || c.id))
-    : '<span class="lt-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span> ' + esc(ltName));
+    : titleFace + ' ' + esc(ltName));
   inputEl.placeholder = isCard ? 'message ' + ltName + ' about this card…' : 'message ' + ltName + '…';
 
   // Land at the newest message when the visible conversation changes (first
@@ -228,12 +248,13 @@ export function renderChat() {
   const pinned = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
 
   const blocks = []; // {html, msg?} — msg only on lieutenant bubbles, for speak wiring
+  const avatarIdx = lt ? lieutenantAvatar(lt.id) : null;
   let lastDay = '';
   const push = (m) => {
     const day = m.ts ? dayLabel(m.ts) : '';
     let h = '';
     if (day && day !== lastDay) { h += '<div class="feed-day">' + esc(day) + '</div>'; lastDay = day; }
-    blocks.push({ html: h + msgHtml(m, isCard), msg: m.author === USER ? null : m });
+    blocks.push({ html: h + msgHtml(m, isCard, avatarIdx), msg: m.author === USER ? null : m });
   };
   if (isCard) {
     for (const m of c.thread || []) push(m);
@@ -267,7 +288,7 @@ export function renderChat() {
     if (switched) scrollFeedToBottom();
     else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
   } else {
-    feedEl.innerHTML = blocks.map((b) => b.html).join('') + tail || '<div class="empty">no messages yet</div>';
+    feedEl.innerHTML = blocks.map((b) => b.html).join('') + tail || emptyFeedHtml(lt);
     wireSpeak(blocks, target);
     if (switched) scrollFeedToBottom(); // deferred: the feed may still be hidden this frame
     else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
