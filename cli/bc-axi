@@ -12,6 +12,7 @@
 
 const http = require('http');
 const fs = require('fs');
+const net = require('net');
 const os = require('os');
 const path = require('path');
 const { spawn, execFileSync } = require('child_process');
@@ -116,9 +117,12 @@ function stateDirLive(dir) {
     return true;
   } catch (e) { return false; }
 }
+const DISCOVERED_WORKSPACE = findWorkspace(process.cwd());
 const WORKSPACE = opts.workspace
   ? path.resolve(opts.workspace)
-  : (cmd === 'open' || cmd === 'init' ? (findWorkspace(process.cwd()) || process.cwd()) : findWorkspace(process.cwd()));
+  : (cmd === 'open' || cmd === 'init' || cmd === 'doctor'
+    ? (DISCOVERED_WORKSPACE || process.cwd())
+    : DISCOVERED_WORKSPACE);
 if (!WORKSPACE) die('no workspace found: no ' + STATE_DIR_NAME + '/ from cwd upward (run `bc-axi init` to start one here, or pass --workspace)');
 // One-shot rename migrations (bridge-command → bridge-commander), idempotent and
 // guarded so a running legacy server is left alone.
@@ -183,6 +187,65 @@ function parseAttrs(list) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 function hhmm(iso) { try { return new Date(iso).toISOString().slice(5, 16).replace('T', ' '); } catch (e) { return ''; } }
 const TARGET_RE = /^(lieutenant:.+|card:.+)$/;
+function compareSemverish(a, b) {
+  const pa = String(a || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b || '').replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0);
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    const da = pa[i] || 0;
+    const db = pb[i] || 0;
+    if (da > db) return 1;
+    if (da < db) return -1;
+  }
+  return 0;
+}
+function shellQuote(s) {
+  return /[^A-Za-z0-9_@%+=:,./-]/.test(s) ? '"' + String(s).replace(/(["\\$`])/g, '\\$1') + '"' : String(s);
+}
+function commandOnPath(name) {
+  const pathEnv = process.env.PATH || '';
+  const exts = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';')
+    : [''];
+  for (const dir of pathEnv.split(path.delimiter)) {
+    if (!dir) continue;
+    for (const ext of exts) {
+      const file = path.join(dir, process.platform === 'win32' ? name + ext : name);
+      try {
+        fs.accessSync(file, fs.constants.X_OK);
+        return file;
+      } catch (e) {}
+    }
+  }
+  return null;
+}
+function runCheck(command, args, opts) {
+  try {
+    const out = execFileSync(command, args || [], Object.assign({ encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }, opts || {}));
+    return { ok: true, output: String(out || '').trim() };
+  } catch (e) {
+    const stderr = e && e.stderr != null ? String(e.stderr).trim() : '';
+    const stdout = e && e.stdout != null ? String(e.stdout).trim() : '';
+    return { ok: false, code: e && e.status, output: stderr || stdout || (e && e.message) || '' };
+  }
+}
+function portAvailable(port, host) {
+  return new Promise((resolve) => {
+    const srv = net.createServer();
+    const finish = (result) => {
+      if (!srv.listening) return resolve(result);
+      srv.close(() => resolve(result));
+    };
+    srv.once('error', (err) => finish({ ok: false, detail: err.code || err.message }));
+    srv.listen(port, host, () => finish({ ok: true, detail: host + ':' + port }));
+  });
+}
+function doctorLine(status, label, detail, fix) {
+  const icon = status === 'PASS' ? '✓' : status === 'WARN' ? '!' : '✗';
+  let line = icon + ' ' + status.padEnd(4) + ' ' + label + ' — ' + detail;
+  if (fix) line += '\n         fix: ' + fix;
+  return line;
+}
 // Agent-facing attachment lines: the ABSOLUTE local path per file, so the agent
 // can Read it. Images are flagged so the agent knows they're viewable inline.
 function attachmentLines(atts) {
@@ -849,6 +912,89 @@ async function cmdStatus() {
     '  pending-queue=' + st.queue_pending + '  url=http://localhost:' + PORT + '/');
 }
 
+// ---------- doctor ----------
+async function cmdDoctor() {
+  const cfg = readConfig();
+  const host = opts.host || (typeof cfg.host === 'string' && cfg.host ? cfg.host : '127.0.0.1');
+  const lines = [];
+  let pass = 0, warn = 0, fail = 0;
+  const add = (status, label, detail, fix) => {
+    if (status === 'PASS') pass++;
+    else if (status === 'WARN') warn++;
+    else fail++;
+    lines.push(doctorLine(status, label, detail, fix));
+  };
+
+  const minNode = '18.0.0';
+  const nodeVersion = process.version;
+  if (compareSemverish(nodeVersion, minNode) >= 0) add('PASS', 'node', nodeVersion + ' (requires >= ' + minNode + ')');
+  else add('FAIL', 'node', nodeVersion + ' is too old (requires >= ' + minNode + ')', 'Upgrade Node before using bridge-commander.');
+
+  const tmuxPath = commandOnPath('tmux');
+  if (tmuxPath) add('PASS', 'tmux installed', tmuxPath);
+  else add('FAIL', 'tmux installed', 'not found on PATH', 'Install tmux, then re-run `bc-axi doctor`.');
+
+  const gitPath = commandOnPath('git');
+  if (gitPath) add('PASS', 'git installed', gitPath);
+  else add('FAIL', 'git installed', 'not found on PATH', 'Install git, then re-run `bc-axi doctor`.');
+
+  const ghPath = commandOnPath('gh');
+  if (!ghPath) add('FAIL', 'gh installed', 'not found on PATH', 'Install GitHub CLI from https://cli.github.com/ .');
+  else {
+    const ghAuth = runCheck('gh', ['auth', 'status']);
+    if (ghAuth.ok) {
+      const first = ghAuth.output.split('\n').find(Boolean) || 'authenticated';
+      add('PASS', 'gh authenticated', first);
+    } else {
+      add('FAIL', 'gh authenticated', ghAuth.output || 'not authenticated', 'Run `gh auth login` and confirm `gh auth status` succeeds.');
+    }
+  }
+
+  const claudePath = commandOnPath('claude');
+  if (claudePath) add('PASS', 'claude installed', claudePath);
+  else add('FAIL', 'claude installed', 'not found on PATH', 'Install/authenticate Claude Code — it is the default harness.');
+
+  const codexPath = commandOnPath('codex');
+  if (!codexPath) add('WARN', 'codex installed', 'not found on PATH (optional unless you use `--harness codex`)');
+  else {
+    const codexAuth = runCheck('codex', ['login', 'status']);
+    if (codexAuth.ok) {
+      const first = codexAuth.output.split('\n').find(Boolean) || 'authenticated';
+      add('PASS', 'codex authenticated', first);
+    } else {
+      add('WARN', 'codex authenticated', codexAuth.output || 'unable to confirm auth', 'If you plan to use Codex workers, run `codex login` first.');
+    }
+  }
+
+  if (process.env.TMUX) add('PASS', 'inside tmux', 'TMUX=' + process.env.TMUX);
+  else add('FAIL', 'inside tmux', 'TMUX is not set', 'Start or re-enter tmux, then run bridge-commander from that session.');
+
+  const currentIsWorkspace = isWorkspace(process.cwd());
+  if (opts.workspace) {
+    if (isWorkspace(WORKSPACE)) add('PASS', 'workspace', 'yes — ' + WORKSPACE);
+    else add('FAIL', 'workspace', 'no workspace at ' + WORKSPACE, 'Run `bc-axi init --workspace ' + shellQuote(WORKSPACE) + ' --name <founding-lieutenant-name>` there.');
+  } else if (currentIsWorkspace) {
+    add('PASS', 'workspace', 'yes — current directory is a workspace root (' + WORKSPACE + ')');
+  } else if (DISCOVERED_WORKSPACE) {
+    add('WARN', 'workspace', 'current directory is inside workspace ' + DISCOVERED_WORKSPACE + ' but is not the workspace root', 'Run from the workspace root or pass `--workspace ' + shellQuote(DISCOVERED_WORKSPACE) + '` explicitly.');
+  } else {
+    add('FAIL', 'workspace', 'current directory is not a bridge-commander workspace', 'Run `bc-axi init --name <founding-lieutenant-name>` in the directory you want to use.');
+  }
+
+  const portCheck = await portAvailable(PORT, host);
+  if (portCheck.ok) add('PASS', 'port ' + PORT, 'available on ' + host);
+  else add('FAIL', 'port ' + PORT, 'in use or unavailable on ' + host + ' (' + portCheck.detail + ')', 'Pick another port with `bc-axi open --port <n>` or update ' + CONFIG_FILE + '.');
+
+  console.log('Bridge Commander doctor');
+  console.log('workspace target: ' + WORKSPACE);
+  console.log('cwd: ' + process.cwd());
+  console.log('');
+  for (const line of lines) console.log(line);
+  console.log('');
+  console.log('Summary: ' + pass + ' pass, ' + warn + ' warn, ' + fail + ' fail');
+  if (fail) process.exit(1);
+}
+
 // ---------- config ----------
 async function cmdConfig() {
   const sub = positional[0];
@@ -874,7 +1020,7 @@ async function cmdConfig() {
 
 const commands = {
   init: cmdInit,
-  open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
+  open: cmdOpen, stop: cmdStop, status: cmdStatus, doctor: cmdDoctor, config: cmdConfig,
   board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
   'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList, 'lieutenant retire': cmdLtRetire,
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
@@ -901,6 +1047,8 @@ if (!commands[cmd]) {
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +
     '                                         Bootstraps .bridge-commander/ in cwd on first run.\n' +
     '  status                                 up/down, cards, lieutenants, pending queue items\n' +
+    '  doctor [--workspace DIR] [--port N]    preflight checks: node/tmux/git/gh/claude/codex, tmux,\n' +
+    '                                         workspace readiness, and port availability\n' +
     '  stop                                   stop the workspace server\n' +
     '\nlieutenant:\n' +
     '  lieutenant create --name N [--id id] [--color #rrggbb] [--charter-file f|-] [--spawn [--harness h]]\n' +
