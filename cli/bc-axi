@@ -17,7 +17,9 @@ const path = require('path');
 const { spawn, execFileSync } = require('child_process');
 
 const SELF_DIR = path.dirname(fs.realpathSync(process.argv[1]));
-const SERVER_JS = path.join(SELF_DIR, '..', 'server', 'server.js');
+// BC_SERVER_JS is a test-only seam: it lets tests point auto-boot at a
+// deliberately-crashing script to exercise the boot-failure path.
+const SERVER_JS = process.env.BC_SERVER_JS || path.join(SELF_DIR, '..', 'server', 'server.js');
 const { STATE_DIR_NAME, LEGACY_STATE_DIR_NAME, migrateStateDir, resolveStateDir, migrateHomeStateDir, isWorkspace } =
   require(path.join(SELF_DIR, '..', 'server', 'statedir.js'));
 const DEFAULT_PORT = 4780;
@@ -130,6 +132,7 @@ if (migratedHome) console.error('[bridge-commander] migrated home state dir → 
 const STATE_DIR = resolveStateDir(WORKSPACE);
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
+const LOG_FILE = path.join(STATE_DIR, 'server.log');
 
 function readConfig() {
   try {
@@ -194,17 +197,33 @@ function attachmentLines(atts) {
 
 // ---------- server ----------
 // ensureServer — boot the workspace server detached when down (idempotent).
+// Output goes to a logfile (truncated on each boot) — never 'ignore' — so a
+// failed auto-boot leaves a trace instead of failing silently. Boot is then
+// verified by polling /api/status; a boot that never answers is a REAL error
+// pointing at the logfile, not a silent no-op.
 async function ensureServer() {
   let st = await serverUp();
   if (st) return { st, started: false };
+  fs.mkdirSync(STATE_DIR, { recursive: true });
   const args = [SERVER_JS, WORKSPACE, '--port', String(PORT)];
   if (opts.host) args.push('--host', opts.host); // else server resolves: config.json "host" > 127.0.0.1
-  const child = spawn(process.execPath, args, {
-    detached: true, stdio: 'ignore',
-  });
+  const logFd = fs.openSync(LOG_FILE, 'w');
+  let child;
+  try {
+    child = spawn(process.execPath, args, {
+      detached: true, stdio: ['ignore', logFd, logFd],
+    });
+  } finally {
+    fs.closeSync(logFd); // child dup'd its own reference at spawn time
+  }
   child.unref();
   for (let i = 0; i < 20 && !st; i++) { await sleep(150); st = await serverUp(); }
-  if (!st) die('failed to start server on port ' + PORT);
+  if (!st) {
+    const rel = path.relative(WORKSPACE, LOG_FILE) || LOG_FILE;
+    let tail = '';
+    try { tail = fs.readFileSync(LOG_FILE, 'utf8').trim(); } catch (e) {}
+    die('server failed to start — see ' + rel + (tail ? ':\n' + tail.split('\n').slice(-20).join('\n') : ' (empty log)'));
+  }
   return { st, started: true };
 }
 
