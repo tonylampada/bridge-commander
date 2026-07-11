@@ -36,10 +36,6 @@ echo "=== prerequisites (README Dependencies: Node >= 18, tmux, git) ==="
 apt-get update -qq >/dev/null && apt-get install -y -qq tmux >/dev/null 2>&1
 node --version && git --version && tmux -V || exit 1
 
-echo "=== README Install: npx skills add ==="
-npx -y skills add tonylampada/bridge-commander -g -y || exit 1
-test -f ~/.agents/skills/bridge-commander/SKILL.md || exit 1
-
 echo "=== README Install: treehouse ==="
 curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh || exit 1
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
@@ -48,6 +44,10 @@ command -v treehouse || exit 1
 echo "=== README Install: no-mistakes ==="
 curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh || exit 1
 command -v no-mistakes || exit 1
+
+echo "=== README Install: npx skills add ==="
+npx -y skills add tonylampada/bridge-commander -g -y || exit 1
+test -f ~/.agents/skills/bridge-commander/SKILL.md || exit 1
 
 echo "=== SKILL.md step 0: self-bootstrap (what the agent does on first /bridge-commander) ==="
 if [ ! -x ~/.agents/skills/bridge-commander/cli/bc-axi ]; then

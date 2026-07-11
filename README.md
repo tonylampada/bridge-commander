@@ -1,34 +1,30 @@
 # Bridge Commander
 
-Agent-orchestration harness whose control surface is a kanban board: the captain (you, in a
-browser) pilots **lieutenants** — durable orchestrator agents — who brief, supervise and verify
-**workers** (one fresh agent per card, in an isolated git worktree) that write the code and ship
-it up to a real reviewed PR. You glance at the board, drag cards to issue orders, and talk
-through per-card chat threads — from anywhere, phone included.
+Use Claude Code / Codex as multiple chiefs of staff. Work items get done by independent agent
+sessions and are tracked realtime in a kanban board.
 
 ![the board](docs/img/board.png)
 
-## Quickstart
-
-- Open a tmux session in a directory, run your agent, invoke `/bridge-commander` — it becomes
-  the founding lieutenant and hands you the board URL.
-- Register your repos, then create cards and drag them to order work; chat with lieutenants on
-  the board.
-- Lieutenants start workers on cards; workers ship PRs; merged PRs archive themselves.
-
 ## Install
 
-```sh
-# bridge-commander (server + CLI + skill — the whole repo installs as one skill)
-npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander run clones the full tool
+Just some dependencies and a new skill:
 
+```sh
 # dependencies
 curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
 curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
+
+# bridge-commander
+npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander run clones the full tool
 ```
 
-Dev mode (hack on the tool): clone and symlink the whole repo into your skills dir —
-`git clone https://github.com/tonylampada/bridge-commander.git && ln -s "$(pwd)/bridge-commander" ~/.claude/skills/bridge-commander`.
+## Quickstart
+
+- Create an empty folder (e.g. `myfleet`)
+- Start `claude` in that folder, inside tmux
+- `/bridge-commander`
+- Open the printed board URL (default `http://localhost:4780/`)
+- Talk to your lieutenant from there — he'll guide you through the rest of the setup
 
 ## Dependencies
 
@@ -38,17 +34,6 @@ Dev mode (hack on the tool): clone and symlink the whole repo into your skills d
 - [treehouse](https://github.com/kunchenguid/treehouse) — worker worktrees (optional; falls back to `git worktree`)
 - [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for `no-mistakes`-mode projects; the `/no-mistakes` skill appears after running `no-mistakes init` in the project
 - [OpenAI Codex CLI](https://github.com/openai/codex) — only for `--harness codex` (optional)
-
-## Run
-
-```sh
-mkdir myfleet && cd myfleet && tmux new -s myfleet
-claude   # then: /bridge-commander
-```
-
-Open the printed board URL (default `http://localhost:4780/`). Add repos with
-`bc-axi project add <url|path> --mode no-mistakes|direct-PR|local-only`. Run `bc-axi` bare for
-full CLI usage.
 
 ## Configuration
 
