@@ -4,6 +4,7 @@ export const USER = 'user';
 
 export const S = {
   doc: null,               // full board doc from the server
+  boardStatus: null,       // lightweight /api/status snapshot for readiness UI
   connected: false,
   // The chat panel always talks to a lieutenant: either its main chat or one of
   // its card threads (the interlocutor of a card thread is the owning

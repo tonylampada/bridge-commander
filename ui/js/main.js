@@ -162,7 +162,12 @@ function applyBoard(doc) {
   render();
 }
 function refetchBoard() {
-  api.board().then(applyBoard).catch(() => {}); // still down — the watchdog retries
+  Promise.all([api.board(), api.status().catch(() => null)])
+    .then(([doc, status]) => {
+      if (status) S.boardStatus = status;
+      applyBoard(doc);
+    })
+    .catch(() => {}); // still down — the watchdog retries
 }
 function connect() {
   if (es) es.close();

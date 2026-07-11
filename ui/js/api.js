@@ -50,4 +50,5 @@ export const api = {
   artifact: (uri) => j('GET', '/api/artifact?uri=' + encodeURIComponent(uri)),
   board: () => j('GET', '/api/board'),
   config: () => j('GET', '/api/config'),
+  status: () => j('GET', '/api/status'),
 };
