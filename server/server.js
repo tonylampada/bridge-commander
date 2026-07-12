@@ -976,8 +976,12 @@ function harnessCommands(ref) {
 // (no wake, no owed). Unknown commands and missing sessions answer in-thread
 // too (a composer conversation, not an HTTP failure).
 async function runChatCommand(target, thread, text) {
-  const stamp = (author, t) => {
-    const msg = { author, text: t, ts: now() };
+  // command messages carry `cmd` metadata the UI keys off for its console-style
+  // rendering: the request (cmd.name only) and its reply (cmd.reply true). The
+  // /status reply additionally carries the structured `status` payload so the UI
+  // renders a real progress bar instead of regex-parsing the formatted prose.
+  const stamp = (author, t, cmd, extra) => {
+    const msg = Object.assign({ author, text: t, ts: now(), cmd }, extra || {});
     thread.push(msg);
     const m = /^card:(.+)$/.exec(target);
     if (m) {
@@ -985,30 +989,39 @@ async function runChatCommand(target, thread, text) {
       if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
     }
   };
-  stamp('user', text);
   const name = text.split(/\s+/)[0];
+  const reply = (author, t, extra) => stamp(author, t, { name, reply: true }, extra);
+  stamp('user', text, { name });
   const r = commandTargetRef(target);
   if (r.error) return r; // unknown target — the normal 404, same as a say
   if (!r.ref) {
-    stamp('bridge', '⚠ ' + name + ' — ' + r.why);
+    reply('bridge', '⚠ ' + name + ' — ' + r.why);
     return { ok: true, command: name };
   }
   const cmds = harnessCommands(r.ref);
   if (!cmds.length) {
-    stamp('bridge', '⚠ ' + name + ' — the ' + r.ref.harness + ' harness has no slash commands');
+    reply('bridge', '⚠ ' + name + ' — the ' + r.ref.harness + ' harness has no slash commands');
     return { ok: true, command: name };
   }
   if (!cmds.some((c) => c && c.name === name)) {
-    stamp('bridge', '⚠ unknown command ' + name + ' — available: ' + cmds.map((c) => c.name).join(', '));
+    reply('bridge', '⚠ unknown command ' + name + ' — available: ' + cmds.map((c) => c.name).join(', '));
     return { ok: true, command: name };
   }
   try {
     // the FULL line goes to the harness — pass-through commands (/compact,
     // claude's /autocompact) may carry arguments; `name` only did the match
-    const result = await getHarness(r.ref.harness).runCommand(r.ref, text);
-    stamp(r.ref.harness, String(result == null ? name + ' done' : result));
+    const impl = getHarness(r.ref.harness);
+    const result = await impl.runCommand(r.ref, text);
+    // /status also fetches the structured status (a cheap transcript read) so the
+    // reply carries both the formatted text (fallback) and the payload the UI
+    // renders as model + context bar + rate lines — never parsing the prose.
+    let extra;
+    if (name === '/status' && typeof impl.status === 'function') {
+      try { const st = await impl.status(r.ref); if (st && typeof st === 'object') extra = { status: st }; } catch {}
+    }
+    reply(r.ref.harness, String(result == null ? name + ' done' : result), extra);
   } catch (e) {
-    stamp('bridge', '⚠ ' + name + ' failed: ' + String((e && e.message) || e));
+    reply('bridge', '⚠ ' + name + ' failed: ' + String((e && e.message) || e));
   }
   return { ok: true, command: name };
 }
