@@ -115,6 +115,46 @@ export function ctxBarHtml(st) {
     + '<span class="ctx-fill' + cls + '" style="width:' + pct + '%"></span></span>';
 }
 
+// green → yellow (≥60%) → red (≥80%) — the shared context-bar thresholds
+function ctxFillCls(pct) { return pct >= 80 ? ' red' : pct >= 60 ? ' yellow' : ''; }
+function barRowHtml(label, pct, val) {
+  const bar = pct == null ? ''
+    : '<span class="ctx-bar st-bar"><span class="ctx-fill' + ctxFillCls(pct) + '" style="width:' + pct + '%"></span></span>';
+  return '<div class="st-row"><span class="st-lbl">' + esc(label) + '</span>'
+    + bar + '<span class="st-val">' + esc(val) + '</span></div>';
+}
+// A rate-limit window's short label (10080min=1w, 1440min=1d, 60min=1h, else min),
+// mirroring the server's fmtWindowLabel so codex limits read the same in-thread.
+function windowLabel(minutes) {
+  if (!Number.isFinite(minutes)) return 'rate';
+  if (minutes % 10080 === 0) return (minutes / 10080) + 'w';
+  if (minutes % 1440 === 0) return (minutes / 1440) + 'd';
+  if (minutes % 60 === 0) return (minutes / 60) + 'h';
+  return minutes + 'min';
+}
+// /status rich reply: model name, context usage as a real progress bar (reusing
+// the lane-chip context-bar visual language), plus rate-limit rows when present
+// (codex). Fed the structured `status` payload the server attaches to the reply.
+export function statusBlockHtml(st) {
+  if (!st || typeof st !== 'object') return '';
+  const rows = [];
+  rows.push('<div class="st-model">' + esc(st.model || 'unknown') + '</div>');
+  if (st.contextUsed > 0 && st.contextWindow > 0) {
+    const pct = Math.min(100, Math.round((st.contextUsed / st.contextWindow) * 100));
+    rows.push(barRowHtml('context', pct, fmtTokens(st.contextUsed) + ' / ' + fmtTokens(st.contextWindow) + ' · ' + pct + '%'));
+  } else if (st.contextUsed > 0) {
+    rows.push(barRowHtml('context', null, fmtTokens(st.contextUsed) + ' tokens'));
+  }
+  const rl = st.rateLimits || {};
+  for (const key of ['primary', 'secondary']) {
+    const w = rl[key];
+    if (!w) continue;
+    const pct = Number.isFinite(w.usedPercent) ? Math.min(100, Math.round(w.usedPercent)) : null;
+    rows.push(barRowHtml(windowLabel(w.windowMinutes) + ' limit', pct, (pct == null ? '?' : pct) + '% used'));
+  }
+  return '<div class="status-block">' + rows.join('') + '</div>';
+}
+
 // attributes.artifacts — [{uri, label}] — resources hung on the card (briefs, docs)
 export function cardArtifacts(card) {
   const v = card && card.attributes && card.attributes.artifacts;

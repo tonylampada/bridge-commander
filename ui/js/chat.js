@@ -4,7 +4,7 @@
 // premium composer.
 import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
-import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime } from './util.js';
+import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml } from './util.js';
 import { md } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
@@ -104,7 +104,26 @@ function attachmentsHtml(atts, promote) {
       '</span>' + pin + '</div>';
   }).join('') + '</div>';
 }
+// A slash command's request+reply are the SYSTEM, not the lieutenant: they get a
+// full-width console block (monospace, subtle border, dim palette, a small "⌘"
+// affordance) — no avatar, no speak button — so they never read as an agent bubble.
+function cmdMsgHtml(m) {
+  const ts = '<span class="ts">' + hhmm(m.ts) + '</span>';
+  if (!m.cmd.reply) {
+    // the request: a console prompt line echoing exactly what was typed
+    return '<div class="msg cmd cmd-req"><span class="cmd-glyph">⌘</span>' +
+      '<span class="cmd-line">' + esc(m.text) + '</span>' + ts + '</div>';
+  }
+  // the reply: /status renders a rich model+context block; everything else is
+  // the harness's formatted text as console output
+  const body = m.status
+    ? statusBlockHtml(m.status)
+    : '<div class="cmd-out md">' + md(m.text) + '</div>';
+  const badge = '<span class="cmd-badge">⌘ ' + esc(m.cmd.name || '') + '</span>';
+  return '<div class="msg cmd cmd-reply">' + badge + body + ts + '</div>';
+}
 function msgHtml(m, promote, avatarIdx) {
+  if (m.cmd && typeof m.cmd === 'object') return cmdMsgHtml(m);
   const mine = m.author === USER;
   const hasText = !!(m.text && m.text.trim());
   const body = !hasText ? '' : (mine
@@ -254,7 +273,10 @@ export function renderChat() {
     const day = m.ts ? dayLabel(m.ts) : '';
     let h = '';
     if (day && day !== lastDay) { h += '<div class="feed-day">' + esc(day) + '</div>'; lastDay = day; }
-    blocks.push({ html: h + msgHtml(m, isCard, avatarIdx), msg: m.author === USER ? null : m });
+    // command blocks render no speak button, so they carry no `msg` (speak wiring
+    // maps buttons to blocks-with-msg by index — a command block would desync it)
+    const speakable = m.author !== USER && !(m.cmd && typeof m.cmd === 'object');
+    blocks.push({ html: h + msgHtml(m, isCard, avatarIdx), msg: speakable ? m : null });
   };
   if (isCard) {
     for (const m of c.thread || []) push(m);
