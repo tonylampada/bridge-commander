@@ -37,7 +37,9 @@ const PROJECT_MODES = Object.keys(MODE_CONTRACTS);
 function workerBrief(b) {
   const card = b.card;
   const investigation = card.type === 'investigation';
-  const cli = b.cli + ' --workspace ' + b.workspace;
+  // Canonical form: verb-first, global flags last (`<cli> <verb> ... --workspace X`).
+  const cli = b.cli;
+  const ws = ' --workspace ' + b.workspace;
   const reportFile = b.workspace + '/.bridge-commander/reports/' + card.id + '.md';
   const parts = [];
 
@@ -56,9 +58,9 @@ function workerBrief(b) {
     + '  in the project clone".\n'
     + '- Work only inside your worktree. Never touch the project clone or the workspace directly.\n'
     + '- Signal real milestones (branch created, tests green, PR open) — not chatter:\n'
-    + '  `' + cli + ' worker signal ' + card.id + ' "<one line>"`\n'
+    + '  `' + cli + ' worker signal ' + card.id + ' "<one line>"' + ws + '`\n'
     + '- When the work is finished per the contract below, report done and stop:\n'
-    + '  `' + cli + ' worker done ' + card.id + ' --outcome "<what landed, incl. PR URL if any>"`\n'
+    + '  `' + cli + ' worker done ' + card.id + ' --outcome "<what landed, incl. PR URL if any>"' + ws + '`\n'
     + '- Do NOT move the card; your lieutenant verifies your work and hands it off.');
 
   const task = String(b.task || card.body || '').trim();

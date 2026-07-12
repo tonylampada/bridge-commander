@@ -50,6 +50,30 @@ test('cli resolves the workspace by walking up from cwd to .bridge-commander', a
   }
 });
 
+test('cli accepts global flags in any position relative to the verb', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    // flags BEFORE the verb — the classic papercut: `--workspace X board` used to
+    // print usage because the parser took the verb from argv[0].
+    let r = await runCli(['--workspace', s.dir, '--port', String(s.port), 'board']);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /backlog/i);
+
+    // flags interleaved with a two-word verb and its positionals
+    r = await runCli(['--workspace', s.dir, 'card', '--port', String(s.port), 'create',
+      '--title', 'Interleaved', '--owner', LT]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /created interleaved in backlog/);
+
+    // flags AFTER the verb still work (unchanged behavior)
+    r = await runCli(['board', '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /Interleaved/);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('cli card create / board / say / drain / ack round-trip against a test server', async () => {
   const s = await startServerWithLieutenant();
   const args = ['--workspace', s.dir, '--port', String(s.port)];

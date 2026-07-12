@@ -37,8 +37,11 @@ function currentTmuxSession() {
 }
 
 // ---------- args ----------
+// Global flags are accepted in ANY position relative to the verb: the whole argv
+// is parsed into flags + positionals first, then the verb is taken from the
+// positionals. So `bc-axi --workspace X board` and `bc-axi board --workspace X`
+// are equivalent.
 const argv = process.argv.slice(2);
-let cmd = argv.shift();
 const opts = {
   workspace: '', port: 0, host: '',
   textFile: null, bodyFile: null, charterFile: null,
@@ -89,6 +92,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--uri') opts.uri = argv[++i];
   else positional.push(a);
 }
+let cmd = positional.shift();
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
 if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker') && positional.length) cmd = cmd + ' ' + positional.shift();
 // Three-word verb: `card artifact add|rm`.
@@ -976,10 +980,11 @@ if (!commands[cmd]) {
     '                                         level-1 event); → working is refused (card start does it).\n' +
     '                                         Captain drags happen in the UI; a captain drag into\n' +
     '                                         working / review→backlog is an ORDER (queue item), not a move\n' +
-    '  card patch <card-id> [--title T] [--type t] [--body-file f|-] [--attr k=v]...\n' +
-    '                                         update card (k= deletes attr; owner is immutable — archive\n' +
-    '                                         and recreate to move work); body = the deliverable,\n' +
-    '                                         rewritten to current state before every handoff\n' +
+    '  card patch <card-id> [--title T] [--type t] [--owner L] [--body-file f|-] [--attr k=v]...\n' +
+    '                                         update card (k= deletes attr; owner reassignable ONLY\n' +
+    '                                         while no worker is bound to the card — else archive and\n' +
+    '                                         recreate); body = the deliverable, rewritten to current\n' +
+    '                                         state before every handoff\n' +
     '  card archive <card-id> [--reason merged|killed] [--note "..."]\n' +
     '                                         kill = archive (append-only file, off the board)\n' +
     '  card restore <card-id> [--note "..."]  resurrect the most recent archived snapshot in full;\n' +

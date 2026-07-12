@@ -29,3 +29,12 @@ test('worktree-isolation rule is present for investigation cards too', () => {
   const out = brief({ card: { id: 'demo', title: 'Look into it', type: 'investigation', body: 'why?' } });
   assert.match(out, /Work only inside your worktree\./);
 });
+
+test('worker commands are emitted verb-first with --workspace last (canonical form)', () => {
+  const out = brief();
+  // canonical: `<cli> <verb> ... --workspace X` — never flags before the verb
+  assert.match(out, /bc-axi worker signal demo "<one line>" --workspace \/ws/);
+  assert.match(out, /bc-axi worker done demo --outcome "[^"]*" --workspace \/ws/);
+  // the old broken form (flags before the verb) must be gone
+  assert.doesNotMatch(out, /bc-axi --workspace \/ws worker/);
+});
