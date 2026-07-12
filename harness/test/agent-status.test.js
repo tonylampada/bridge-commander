@@ -171,5 +171,5 @@ test('codexStatus: null on unknown thread / ref without resumeId — never a thr
 test('formatStatus: claude shape (no rate limits) renders model + context only', () => {
   const text = formatStatus({ model: 'claude-fable-5', contextUsed: 185709, contextWindow: 1000000 });
   assert.strictEqual(text,
-    'model: claude-fable-5\ncontext: 185,709 / 1,000,000 tokens (19%)');
+    'model: claude-fable-5\n\ncontext: 185,709 / 1,000,000 tokens (19%)');
 });

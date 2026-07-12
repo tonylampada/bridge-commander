@@ -90,3 +90,12 @@ test('spawn never puts the brief on the launch line — it is typed into the com
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('slash commands: the shared trio plus claude-only /autocompact; /help lists them all', async () => {
+  const names = claude.commands().map((c) => c.name);
+  assert.deepStrictEqual(names, ['/status', '/compact', '/help', '/autocompact']);
+  const ref = { harness: 'claude', session: 'bc-cmd', cwd: '/tmp' };
+  assert.match(await claude.runCommand(ref, '/help'), /\/autocompact — set how full/);
+  // unknown commands throw without ever touching tmux
+  await assert.rejects(() => claude.runCommand(ref, '/nope'), /unknown command \/nope/);
+});

@@ -91,9 +91,11 @@ test('slash commands + status: canned capability verbs (commands/runCommand/stat
 
   assert.match(await fake.runCommand(ref, '/status'), /fake-model[\s\S]*50,000 \/ 200,000 tokens \(25%\)/);
   assert.match(await fake.runCommand(ref, '/help'), /\/status[\s\S]*\/compact[\s\S]*\/help/);
-  // /compact rides the send path: the literal lands in the transcript
-  assert.match(await fake.runCommand(ref, '/compact'), /compaction requested/);
-  assert.deepStrictEqual(fake.transcript(ref), ['hi', '/compact']);
+  // /compact rides the send path: the literal FULL line (args included) lands
+  // in the transcript — pass-through commands forward their arguments
+  assert.match(await fake.runCommand(ref, '/compact'), /"\/compact" submitted/);
+  assert.match(await fake.runCommand(ref, '/compact focus on the API'), /submitted/);
+  assert.deepStrictEqual(fake.transcript(ref), ['hi', '/compact', '/compact focus on the API']);
   await assert.rejects(() => fake.runCommand(ref, '/xyz'), /unknown command/);
 
   // dead session: status null, /compact refuses (send path throws)

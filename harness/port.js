@@ -40,12 +40,15 @@
 // context bars; agent-status.js holds the shared machinery):
 //   commands(ref?) -> [{ name, description }]
 //       the slash commands this harness answers (/status /compact /help
-//       where applicable).
-//   runCommand(ref, name) -> Promise<string>
-//       execute one command against the session; resolves to the reply text.
-//       /compact types the literal "/compact" through the verified-submit
-//       send path (the harness's own compaction runs in-session); /status
-//       formats status(); /help renders commands(). Unknown names throw.
+//       where applicable; claude adds /autocompact — verified against the
+//       binary, the public docs lag behind).
+//   runCommand(ref, command) -> Promise<string>
+//       execute one command line against the session (first token names the
+//       command; arguments ride along); resolves to the reply text.
+//       Pass-through commands (/compact, claude's /autocompact) type the
+//       LITERAL line through the verified-submit send path — the harness's
+//       own implementation runs in-session; /status formats status(); /help
+//       renders commands(). Unknown names throw.
 //   status(ref) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
 //       model + context usage read from the files the harness already
 //       writes (transcript / rollout log); null — never a throw — when

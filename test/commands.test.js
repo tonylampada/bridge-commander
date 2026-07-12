@@ -178,7 +178,7 @@ test('card-thread commands address the WORKER session; worker turn-end refreshes
     assert.ok(sends.some((x) => x.text === '/compact'), 'literal /compact reached the worker session: ' + JSON.stringify(sends));
     const card = (await s.api('GET', '/api/cards/task')).body;
     assert.strictEqual(card.thread[0].text, '/compact');
-    assert.match(card.thread[1].text, /compaction requested/);
+    assert.match(card.thread[1].text, /"\/compact" submitted/);
 
     // a worker turn-end refreshes the worker record's agentStatus
     const te = await s.api('POST', '/api/turn-end', { session: key });

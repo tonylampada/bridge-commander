@@ -251,13 +251,22 @@ async function kill(ref) {
 // status(ref) reads the session transcript claude already writes
 // (~/.claude/projects/<slug(cwd)>/<resumeId>.jsonl — agent-status.js); no
 // resumeId yet or no transcript → null, never a throw.
+// /autocompact is claude-specific (verified against the 2.1.207 binary — the
+// public docs lag behind); like /compact it is a PASS-THROUGH: the literal
+// command line (args included) is typed into the session via verified submit
+// and claude's own implementation runs in-place.
+const PASSTHROUGH = new Set(['/compact', '/autocompact']);
 function commands() {
-  return SLASH_COMMANDS.map((c) => ({ ...c }));
+  return SLASH_COMMANDS.map((c) => ({ ...c })).concat([
+    { name: '/autocompact', description: 'set how full the context gets before auto-compaction' },
+  ]);
 }
 async function status(ref) {
   return claudeStatus(ref);
 }
-async function runCommand(ref, name) {
+async function runCommand(ref, command) {
+  const line = String(command || '').trim();
+  const name = line.split(/\s+/)[0];
   const key = s.stateKey(ref.session, ref.window);
   if (name === '/help') return helpText(commands());
   if (name === '/status') {
@@ -265,9 +274,9 @@ async function runCommand(ref, name) {
     if (!st) throw new Error('no status for ' + key + ' — session transcript not found');
     return formatStatus(st);
   }
-  if (name === '/compact') {
-    await send(ref, '/compact'); // verified submit; claude's own /compact runs in-session
-    return 'compaction requested — "/compact" submitted to ' + key;
+  if (PASSTHROUGH.has(name)) {
+    await send(ref, line); // verified submit; claude's own command runs in-session
+    return '"' + line + '" submitted to ' + key + ' — the session runs it in-place';
   }
   throw new Error('unknown command ' + name + ' (see /help)');
 }

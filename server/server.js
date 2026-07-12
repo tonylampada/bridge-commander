@@ -1003,7 +1003,9 @@ async function runChatCommand(target, thread, text) {
     return { ok: true, command: name };
   }
   try {
-    const result = await getHarness(r.ref.harness).runCommand(r.ref, name);
+    // the FULL line goes to the harness — pass-through commands (/compact,
+    // claude's /autocompact) may carry arguments; `name` only did the match
+    const result = await getHarness(r.ref.harness).runCommand(r.ref, text);
     stamp(r.ref.harness, String(result == null ? name + ' done' : result));
   } catch (e) {
     stamp('bridge', '⚠ ' + name + ' failed: ' + String((e && e.message) || e));

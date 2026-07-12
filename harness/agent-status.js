@@ -205,8 +205,10 @@ const SLASH_COMMANDS = [
   { name: '/help', description: 'list the available commands' },
 ];
 
+// Replies render as markdown in the chat thread, where a single newline
+// collapses — blank-line separators keep each line its own paragraph.
 function helpText(cmds) {
-  return cmds.map((c) => c.name + ' — ' + c.description).join('\n');
+  return cmds.map((c) => c.name + ' — ' + c.description).join('\n\n');
 }
 
 function fmtInt(n) {
@@ -241,7 +243,7 @@ function formatStatus(st) {
     }
     lines.push(line);
   }
-  return lines.join('\n');
+  return lines.join('\n\n');
 }
 
 module.exports = {

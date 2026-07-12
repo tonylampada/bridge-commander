@@ -227,7 +227,11 @@ function commands() {
 async function status(ref) {
   return codexStatus(ref);
 }
-async function runCommand(ref, name) {
+// No /autocompact here: codex has no such slash command (its binary only
+// carries the model_auto_compact_token_limit CONFIG scope — verified 0.144.x).
+async function runCommand(ref, command) {
+  const line = String(command || '').trim();
+  const name = line.split(/\s+/)[0];
   const key = s.stateKey(ref.session, ref.window);
   if (name === '/help') return helpText(commands());
   if (name === '/status') {
@@ -236,8 +240,8 @@ async function runCommand(ref, name) {
     return formatStatus(st);
   }
   if (name === '/compact') {
-    await send(ref, '/compact'); // verified submit; codex's own /compact runs in-session
-    return 'compaction requested — "/compact" submitted to ' + key;
+    await send(ref, line); // verified submit; codex's own /compact runs in-session
+    return '"' + line + '" submitted to ' + key + ' — the session runs it in-place';
   }
   throw new Error('unknown command ' + name + ' (see /help)');
 }

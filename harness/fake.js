@@ -271,7 +271,9 @@ async function status(ref) {
   return marker && fs.existsSync(marker) ? { ...FAKE_STATUS } : null;
 }
 
-async function runCommand(ref, name) {
+async function runCommand(ref, command) {
+  const line = String(command || '').trim();
+  const name = line.split(/\s+/)[0];
   if (name === '/help') return helpText(commands());
   if (name === '/status') {
     const st = await status(ref);
@@ -279,8 +281,8 @@ async function runCommand(ref, name) {
     return formatStatus(st);
   }
   if (name === '/compact') {
-    await send(ref, '/compact'); // same path a real adapter uses: the send machinery
-    return 'compaction requested — "/compact" submitted to ' + refKey(ref);
+    await send(ref, line); // same path a real adapter uses: the send machinery
+    return '"' + line + '" submitted to ' + refKey(ref) + ' — the session runs it in-place';
   }
   throw new Error('fake: unknown command ' + name + ' (see /help)');
 }

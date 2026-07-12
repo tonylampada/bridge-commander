@@ -84,7 +84,6 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `chat.say` | `target: lieutenant-main \| card, text` | 🤠 ↔ ⚓ | any time; captain-side is write-ahead: queue first, then `harness.send` wake. Author defaults to the CALLER's identity (session-resolved), never inferred from the target |
-| `chat.command` | `target, "/name"` | 🤠 | a captain message that IS a single leading-`/` token routes to `harness.runCommand` against the TARGET SESSION (lieutenant chat → the lieutenant's session, card thread → the card's worker) instead of becoming a say; command + reply land in the thread, nothing rides the queue. Unknown command / missing session → in-thread error. `GET /api/commands?target=…` feeds the composer autocomplete |
 | `feed.drain` | `lieutenant → QueueItem[]` | ⚓ | first act of every lieutenant turn; the caller self-identifies by its tmux session and drains ONLY its own queue |
 | `feed.ack` | `seq` | ⚓ | after handling; only ack removes — unacked re-offers. Identity-scoped: a lieutenant can only commit seqs in its own queue |
 | `event.append` | `card \| board, text, kind, level` | ⚓ · 🛠️ | agent-authored timeline entry (card) or board-level notice |
@@ -126,9 +125,6 @@ gracefully when the verb is absent. Current optional verbs (pane viewing — the
 |---|---|---|---|
 | `harness.openPane` | `ref, {onFrame, intervalMs?, lines?} → {close()}` | ⚙️ pane hub | stream the pane's rendered screen as change-detected frames (strings, MAY carry ANSI SGR) — served to the captain over a dedicated per-target SSE (`GET /api/cards/:id/pane/stream`, `GET /api/lieutenants/:id/pane/stream`), ref-counted so N viewers share ONE feed and the last disconnect releases it; harness lacks the verb → `unsupported`, nothing to watch → `no-pane`, concurrent-pane cap → `busy` (all clean SSE events, never an HTTP error) |
 | `harness.paneSnapshot` | `ref, {lines?} → string` | ⚙️ pane hub | one-shot capture for the stream's initial paint |
-| `harness.commands` | `ref? → [{name, description}]` | ⚙️ `/api/commands` · chat.command | the slash commands this harness answers (`/status` `/compact` `/help` where applicable) |
-| `harness.runCommand` | `ref, name → string` | ⚙️ chat.command | run one command against the session: `/compact` types the literal "/compact" through the verified-submit send path, `/status` formats `harness.status`, `/help` renders `commands()`; unknown names throw |
-| `harness.status` | `ref → {model, contextUsed, contextWindow, rateLimits?} \| null` | ⚙️ turn-end | model + context usage read from the files the harness already writes (claude: the session transcript; codex: the rollout log, incl. rate limits); refreshed at turn-end onto the lieutenant's/worker's `agentStatus` (the UI context bars); unreadable → null, never a throw |
 
 ## Invariants
 
