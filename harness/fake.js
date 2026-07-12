@@ -42,6 +42,7 @@
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
+const { SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
 
 const sessions = new Map(); // key (session or session:window) -> { alive, cwd, resumeId, transcript, hooks, turns }
 
@@ -250,6 +251,40 @@ async function paneSnapshot(ref) {
   return 'fake pane ' + refKey(ref) + ' — snapshot\n';
 }
 
+// ---------- slash commands + status (OPTIONAL capability verbs — see port.js) ----------
+// Canned, deterministic, filesystem-free — the whole slash/status stack (server
+// routing, /api/commands, the composer autocomplete, context bars) tests
+// without tmux. A session counts for status the same way alive() counts it:
+// known to this process OR marked live via a BC_FAKE_STATE marker file.
+//   BC_FAKE_NO_COMMANDS   hides all three verbs — the "harness without slash
+//                         commands" (capability-absent degradation under test)
+const FAKE_STATUS = { model: 'fake-model', contextUsed: 50000, contextWindow: 200000 };
+
+function commands() {
+  return SLASH_COMMANDS.map((c) => ({ ...c }));
+}
+
+async function status(ref) {
+  const s = sessions.get(refKey(ref));
+  if (s) return s.alive ? { ...FAKE_STATUS } : null;
+  const marker = markerFile(refKey(ref));
+  return marker && fs.existsSync(marker) ? { ...FAKE_STATUS } : null;
+}
+
+async function runCommand(ref, name) {
+  if (name === '/help') return helpText(commands());
+  if (name === '/status') {
+    const st = await status(ref);
+    if (!st) throw new Error('fake: no status for ' + refKey(ref));
+    return formatStatus(st);
+  }
+  if (name === '/compact') {
+    await send(ref, '/compact'); // same path a real adapter uses: the send machinery
+    return 'compaction requested — "/compact" submitted to ' + refKey(ref);
+  }
+  throw new Error('fake: unknown command ' + name + ' (see /help)');
+}
+
 // --- test helpers ---
 
 function transcript(ref) {
@@ -266,5 +301,12 @@ const impl = { spawn, send, alive, resumable, resume, onTurnEnd, kill, transcrip
 if (!process.env.BC_FAKE_NO_PANE) {
   impl.openPane = openPane;
   impl.paneSnapshot = paneSnapshot;
+}
+// Slash commands + status are OPTIONAL too; BC_FAKE_NO_COMMANDS simulates a
+// harness that never implemented them.
+if (!process.env.BC_FAKE_NO_COMMANDS) {
+  impl.commands = commands;
+  impl.runCommand = runCommand;
+  impl.status = status;
 }
 module.exports = impl;

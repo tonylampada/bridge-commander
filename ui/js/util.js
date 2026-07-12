@@ -93,6 +93,28 @@ export function uriBasename(uri) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+// human token count for the context bar tooltip (185709 → "186k", 1e6 → "1M")
+export function fmtTokens(n) {
+  if (!Number.isFinite(n)) return '?';
+  if (n >= 1e6) return (n % 1e6 ? (n / 1e6).toFixed(1) : n / 1e6) + 'M';
+  if (n >= 1000) return Math.round(n / 1000) + 'k';
+  return String(n);
+}
+
+// context bar: used ÷ window from a lieutenant's/worker's agentStatus (the
+// harness port's status(), refreshed at turn-end). Green → yellow (≥60%) →
+// red (≥80% — auto-compact territory). No/partial status → no bar (graceful
+// absence, like avatars).
+export function ctxBarHtml(st) {
+  if (!st || !(st.contextUsed > 0) || !(st.contextWindow > 0)) return '';
+  const pct = Math.min(100, Math.round((st.contextUsed / st.contextWindow) * 100));
+  const cls = pct >= 80 ? ' red' : pct >= 60 ? ' yellow' : '';
+  const title = 'context: ' + fmtTokens(st.contextUsed) + ' / ' + fmtTokens(st.contextWindow)
+    + ' tokens (' + pct + '%)' + (st.model ? ' — ' + st.model : '');
+  return '<span class="ctx-bar" title="' + esc(title) + '">'
+    + '<span class="ctx-fill' + cls + '" style="width:' + pct + '%"></span></span>';
+}
+
 // attributes.artifacts — [{uri, label}] — resources hung on the card (briefs, docs)
 export function cardArtifacts(card) {
   const v = card && card.attributes && card.attributes.artifacts;

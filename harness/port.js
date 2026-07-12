@@ -28,7 +28,7 @@
 // harness (the fake included) to implement it and break validation. The
 // server capability-checks at the call site (`typeof impl.openPane ===
 // 'function'`) and degrades gracefully when the verb is absent. Current
-// optional verbs (pane viewing — the UI's 👁 peek):
+// optional verbs — pane viewing (the UI's 👁 peek):
 //   openPane(ref, { onFrame, intervalMs?, lines? }) -> { close() }
 //       deliver the pane's CURRENT RENDERED SCREEN as successive frames:
 //       onFrame(frameString) fires whenever the content changes (identical
@@ -36,6 +36,21 @@
 //       stops delivery and releases resources. All async-safe.
 //   paneSnapshot(ref, { lines? }) -> Promise<string>
 //       one-shot capture — the initial paint / non-streaming fallback.
+// — and slash commands + session status (the UI composer's "/" and the
+// context bars; agent-status.js holds the shared machinery):
+//   commands(ref?) -> [{ name, description }]
+//       the slash commands this harness answers (/status /compact /help
+//       where applicable).
+//   runCommand(ref, name) -> Promise<string>
+//       execute one command against the session; resolves to the reply text.
+//       /compact types the literal "/compact" through the verified-submit
+//       send path (the harness's own compaction runs in-session); /status
+//       formats status(); /help renders commands(). Unknown names throw.
+//   status(ref) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
+//       model + context usage read from the files the harness already
+//       writes (transcript / rollout log); null — never a throw — when
+//       nothing is readable. rateLimits only where the harness persists
+//       them (codex); claude omits the field.
 
 const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnEnd'];
 

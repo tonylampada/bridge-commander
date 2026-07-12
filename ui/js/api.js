@@ -51,4 +51,6 @@ export const api = {
   artifact: (uri) => j('GET', '/api/artifact?uri=' + encodeURIComponent(uri)),
   board: () => j('GET', '/api/board'),
   config: () => j('GET', '/api/config'),
+  // slash commands the current chat target's harness answers (composer autocomplete)
+  commands: (target) => j('GET', '/api/commands?target=' + encodeURIComponent(target)),
 };

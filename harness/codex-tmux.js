@@ -52,6 +52,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const t = require('./tmux.js');
 const s = require('./tmux-session.js');
+const { codexStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
 
 const NOTIFY_SCRIPT = path.join(__dirname, 'codex-notify.js');
 const TRUST_RE = /Do you trust the contents of this directory|Yes, continue/;
@@ -215,9 +216,36 @@ async function kill(ref) {
   await s.killPane(ref.session, ref.window);
 }
 
+// ---------- slash commands + status (OPTIONAL capability verbs — port.js) ----------
+// status(ref) reads the rollout log codex already writes
+// (~/.codex/sessions/YYYY/MM/DD/rollout-*-<threadId>.jsonl — agent-status.js).
+// The thread-id IS ref.resumeId, adopted from the first turn-end; before that
+// (or with no rollout on disk) status is null, never a throw.
+function commands() {
+  return SLASH_COMMANDS.map((c) => ({ ...c }));
+}
+async function status(ref) {
+  return codexStatus(ref);
+}
+async function runCommand(ref, name) {
+  const key = s.stateKey(ref.session, ref.window);
+  if (name === '/help') return helpText(commands());
+  if (name === '/status') {
+    const st = await status(ref);
+    if (!st) throw new Error('no status for ' + key + ' — rollout log not found (thread-id not adopted yet?)');
+    return formatStatus(st);
+  }
+  if (name === '/compact') {
+    await send(ref, '/compact'); // verified submit; codex's own /compact runs in-session
+    return 'compaction requested — "/compact" submitted to ' + key;
+  }
+  throw new Error('unknown command ' + name + ' (see /help)');
+}
+
 // onTurnEnd / openPane / paneSnapshot — the shared implementations verbatim
 // (tmux-session.js): codex-notify.js writes the same turnend.jsonl shape the
 // claude Stop hook does, and pane viewing is pure capture-pane.
 const { onTurnEnd, openPane, paneSnapshot } = s;
 
-module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, openPane, paneSnapshot };
+module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd,
+  openPane, paneSnapshot, commands, runCommand, status };

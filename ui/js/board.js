@@ -1,8 +1,8 @@
 // board: lieutenant lane above the columns, dense tiles, drag&drop, long-press
 // move menu, new-card / new-lieutenant modals.
-import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, render } from './state.js';
+import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, render, workerFor } from './state.js';
 import { api } from './api.js';
-import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged } from './util.js';
+import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged, ctxBarHtml } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
@@ -44,6 +44,7 @@ function ltCardHtml(l) {
     face +
     '<span class="lt-name">' + esc(l.name || l.id) + '</span>' +
     ind +
+    ctxBarHtml(l.agentStatus) +
     '<span class="lt-counts">' + mine.length + (working ? ' · 🔨' + working : '') + '</span>' +
     '<button class="lt-peek" title="watch this lieutenant\'s terminal live">👁</button>' +
     '<button class="lt-menu" title="lieutenant actions">⋯</button>' +
@@ -187,6 +188,8 @@ function tileHtml(c) {
     '<span class="grow"></span>' +
     (hasLink ? '<span class="t-ind" title="has link">📎</span>' : '') +
     (msgs ? '<span class="t-ind" title="' + msgs + ' messages">💬' + msgs + '</span>' : '') +
+    // Working tiles carry the worker's context bar (agentStatus, turn-end fed)
+    (c.column === 'working' ? ctxBarHtml((workerFor(c.id) || {}).agentStatus) : '') +
     // 👁 peek: every Working card can be watched live (its worker's terminal)
     (c.column === 'working' ? '<button class="t-peek" title="watch this worker\'s terminal live">👁</button>' : '') +
     agoSpanHtml(cardRecency(c), 't-ago') +

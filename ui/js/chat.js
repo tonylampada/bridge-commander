@@ -244,7 +244,7 @@ export function renderChat() {
   const viewKey = target + '|' + (window.innerWidth <= 760 ? S.view : 'desktop');
   const switched = viewKey !== lastViewKey;
   lastViewKey = viewKey;
-  if (target !== feed.key) { mainExpanded = false; collapsedHidden = -1; } // each conversation starts collapsed
+  if (target !== feed.key) { mainExpanded = false; collapsedHidden = -1; closeSlash(); } // each conversation starts collapsed (and drops the slash picker)
   const pinned = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
 
   const blocks = []; // {html, msg?} — msg only on lieutenant bubbles, for speak wiring
@@ -428,6 +428,65 @@ inputEl.addEventListener('paste', (e) => {
 
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
 
+// ---------- slash-command autocomplete ----------
+// A composer holding a single leading-"/" token opens the picker, fed by
+// /api/commands for the CURRENT target (lieutenant chat → its own session;
+// card thread → the card's worker session). Arrows move, Tab/Enter pick, Esc
+// closes; sending is unchanged (the server routes "/..." to runCommand and
+// both the command and its reply land in the thread). Commands are refetched
+// on every open — cheap, and the set changes when a worker starts.
+const slashEl = document.getElementById('chat-slash');
+const slash = { open: false, items: [], sel: 0, target: null };
+
+function slashMatches() {
+  const v = inputEl.value;
+  if (!/^\/\S*$/.test(v)) return [];
+  return slash.items.filter((c) => c && typeof c.name === 'string' && c.name.startsWith(v));
+}
+function closeSlash() {
+  slash.open = false;
+  slash.target = null;
+  slashEl.hidden = true;
+}
+function renderSlash() {
+  const matches = slashMatches();
+  if (!matches.length) { slashEl.hidden = true; return; }
+  slash.sel = Math.max(0, Math.min(slash.sel, matches.length - 1));
+  slashEl.hidden = false;
+  slashEl.innerHTML = matches.map((c, i) =>
+    '<button type="button" class="slash-it' + (i === slash.sel ? ' on' : '') + '" data-name="' + esc(c.name) + '">' +
+    '<span class="sn">' + esc(c.name) + '</span>' +
+    '<span class="sd">' + esc(c.description || '') + '</span></button>').join('');
+}
+function pickSlash(name) {
+  inputEl.value = name;
+  closeSlash();
+  inputEl.focus();
+  autoGrow(inputEl);
+}
+function updateSlash() {
+  const target = currentTarget();
+  if (!target || !/^\/\S*$/.test(inputEl.value)) { closeSlash(); return; }
+  if (!slash.open || slash.target !== target) { // opening: (re)fetch the target's commands
+    slash.open = true;
+    slash.target = target;
+    slash.sel = 0;
+    slash.items = [];
+    api.commands(target)
+      .then((r) => { if (slash.open && slash.target === target) { slash.items = r.commands || []; renderSlash(); } })
+      .catch(() => {});
+  }
+  renderSlash();
+}
+slashEl.addEventListener('mousedown', (e) => e.preventDefault()); // picking must not blur the composer
+slashEl.addEventListener('click', (e) => {
+  const it = e.target.closest('.slash-it');
+  if (it) pickSlash(it.dataset.name);
+});
+document.addEventListener('click', (e) => {
+  if (slash.open && !composerEl.contains(e.target)) closeSlash();
+});
+
 // The POST already triggered a broadcast, so the echo normally arrives over SSE
 // within a beat; poll the local state for it, with one direct refetch as a
 // fallback (e.g. the SSE stream is stale and hasn't been reaped yet).
@@ -479,6 +538,7 @@ async function send() {
     // 200 is the confirmation (the SSE board push renders the bubble a beat later).
     if (text && !(await waitForEcho(target, text))) throw new Error('sent, but no echo from the server');
     inputEl.value = '';
+    closeSlash();
     pendingAtts = [];
     renderPendingAtts();
   } catch (e) {
@@ -491,9 +551,25 @@ async function send() {
     autoGrow(inputEl);
   }
 }
-inputEl.oninput = () => { autoGrow(inputEl); clearSendError(); };
-// Enter inserts a newline; Cmd+Enter (mac) or Ctrl+Enter sends.
+inputEl.oninput = () => { autoGrow(inputEl); clearSendError(); updateSlash(); };
+// Enter inserts a newline; Cmd+Enter (mac) or Ctrl+Enter sends. With the slash
+// picker open, arrows/Tab/Enter drive the picker (Cmd/Ctrl+Enter still sends).
 inputEl.onkeydown = (e) => {
+  if (slash.open && !slashEl.hidden && !(e.metaKey || e.ctrlKey)) {
+    const matches = slashMatches();
+    if (matches.length && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+      e.preventDefault();
+      slash.sel = (slash.sel + (e.key === 'ArrowDown' ? 1 : matches.length - 1)) % matches.length;
+      renderSlash();
+      return;
+    }
+    if (matches.length && (e.key === 'Tab' || e.key === 'Enter')) {
+      e.preventDefault();
+      pickSlash(matches[slash.sel].name);
+      return;
+    }
+    if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
+  }
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
 };
 document.getElementById('chat-form').onsubmit = (e) => { e.preventDefault(); send(); };

@@ -46,6 +46,7 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const t = require('./tmux.js');
 const s = require('./tmux-session.js');
+const { claudeStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
@@ -246,6 +247,31 @@ async function kill(ref) {
   await s.killPane(ref.session, ref.window);
 }
 
+// ---------- slash commands + status (OPTIONAL capability verbs — port.js) ----------
+// status(ref) reads the session transcript claude already writes
+// (~/.claude/projects/<slug(cwd)>/<resumeId>.jsonl — agent-status.js); no
+// resumeId yet or no transcript → null, never a throw.
+function commands() {
+  return SLASH_COMMANDS.map((c) => ({ ...c }));
+}
+async function status(ref) {
+  return claudeStatus(ref);
+}
+async function runCommand(ref, name) {
+  const key = s.stateKey(ref.session, ref.window);
+  if (name === '/help') return helpText(commands());
+  if (name === '/status') {
+    const st = await status(ref);
+    if (!st) throw new Error('no status for ' + key + ' — session transcript not found');
+    return formatStatus(st);
+  }
+  if (name === '/compact') {
+    await send(ref, '/compact'); // verified submit; claude's own /compact runs in-session
+    return 'compaction requested — "/compact" submitted to ' + key;
+  }
+  throw new Error('unknown command ' + name + ' (see /help)');
+}
+
 // onTurnEnd / openPane / paneSnapshot — the shared implementations verbatim
 // (tmux-session.js): the Stop-hook relay writes the same turnend.jsonl shape
 // every tmux adapter tails, and pane viewing is pure capture-pane.
@@ -253,7 +279,7 @@ const { onTurnEnd, openPane, paneSnapshot } = s;
 
 // installHooks is exported beyond the seven port verbs so `bc-axi init` can
 // install the workspace-level Stop hook (session-agnostic; the server dedupes
-// turn-end POSTs by session_id). openPane/paneSnapshot are OPTIONAL capability
-// verbs (port.js) — pane viewing; every tmux specific of the feature lives in
-// tmux-session.js.
-module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks, openPane, paneSnapshot };
+// turn-end POSTs by session_id). openPane/paneSnapshot and
+// commands/runCommand/status are OPTIONAL capability verbs (port.js).
+module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks,
+  openPane, paneSnapshot, commands, runCommand, status };
