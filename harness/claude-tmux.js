@@ -46,6 +46,7 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const t = require('./tmux.js');
 const s = require('./tmux-session.js');
+const { claudeStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
@@ -246,6 +247,40 @@ async function kill(ref) {
   await s.killPane(ref.session, ref.window);
 }
 
+// ---------- slash commands + status (OPTIONAL capability verbs — port.js) ----------
+// status(ref) reads the session transcript claude already writes
+// (~/.claude/projects/<slug(cwd)>/<resumeId>.jsonl — agent-status.js); no
+// resumeId yet or no transcript → null, never a throw.
+// /autocompact is claude-specific (verified against the 2.1.207 binary — the
+// public docs lag behind); like /compact it is a PASS-THROUGH: the literal
+// command line (args included) is typed into the session via verified submit
+// and claude's own implementation runs in-place.
+const PASSTHROUGH = new Set(['/compact', '/autocompact']);
+function commands() {
+  return SLASH_COMMANDS.map((c) => ({ ...c })).concat([
+    { name: '/autocompact', description: 'set how full the context gets before auto-compaction' },
+  ]);
+}
+async function status(ref) {
+  return claudeStatus(ref);
+}
+async function runCommand(ref, command) {
+  const line = String(command || '').trim();
+  const name = line.split(/\s+/)[0];
+  const key = s.stateKey(ref.session, ref.window);
+  if (name === '/help') return helpText(commands());
+  if (name === '/status') {
+    const st = await status(ref);
+    if (!st) throw new Error('no status for ' + key + ' — session transcript not found');
+    return formatStatus(st);
+  }
+  if (PASSTHROUGH.has(name)) {
+    await send(ref, line); // verified submit; claude's own command runs in-session
+    return '"' + line + '" submitted to ' + key + ' — the session runs it in-place';
+  }
+  throw new Error('unknown command ' + name + ' (see /help)');
+}
+
 // onTurnEnd / openPane / paneSnapshot — the shared implementations verbatim
 // (tmux-session.js): the Stop-hook relay writes the same turnend.jsonl shape
 // every tmux adapter tails, and pane viewing is pure capture-pane.
@@ -253,7 +288,7 @@ const { onTurnEnd, openPane, paneSnapshot } = s;
 
 // installHooks is exported beyond the seven port verbs so `bc-axi init` can
 // install the workspace-level Stop hook (session-agnostic; the server dedupes
-// turn-end POSTs by session_id). openPane/paneSnapshot are OPTIONAL capability
-// verbs (port.js) — pane viewing; every tmux specific of the feature lives in
-// tmux-session.js.
-module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks, openPane, paneSnapshot };
+// turn-end POSTs by session_id). openPane/paneSnapshot and
+// commands/runCommand/status are OPTIONAL capability verbs (port.js).
+module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks,
+  openPane, paneSnapshot, commands, runCommand, status };

@@ -938,6 +938,99 @@ function targetLieutenant(target) {
   }
   return null;
 }
+// ---------- slash commands (the harness port's OPTIONAL commands/runCommand/status) ----------
+// The session a chat target's slash commands (and /api/commands) address: a
+// lieutenant target is the lieutenant's OWN session; a card target is the
+// card's WORKER session (the card thread's slash surface talks to the worker,
+// unlike say — whose interlocutor is the owning lieutenant).
+// → { ref } | { ref: null, why } (valid target, no live session to address)
+//   | { error, code } (bad/unknown target)
+function commandTargetRef(target) {
+  let m = /^lieutenant:(.+)$/.exec(target || '');
+  if (m) {
+    const lt = findLieutenant(m[1]);
+    if (!lt) return { error: 'unknown target: ' + target, code: 404 };
+    if (!isHarnessRef(lt.ref)) return { ref: null, why: 'lieutenant ' + lt.id + ' has no live session' };
+    return { ref: lt.ref };
+  }
+  m = /^card:(.+)$/.exec(target || '');
+  if (m) {
+    const card = findCard(m[1]);
+    if (!card) return { error: 'unknown target: ' + target, code: 404 };
+    const w = findWorker(card.id);
+    if (!w || !isHarnessRef(w.ref)) {
+      return { ref: null, why: 'no worker on card ' + card.id + ' — slash commands address the worker session (card start ' + card.id + ' first)' };
+    }
+    return { ref: w.ref };
+  }
+  return { error: 'bad target (use lieutenant:<id> or card:<id>)', code: 400 };
+}
+function harnessCommands(ref) {
+  let impl;
+  try { impl = getHarness(ref.harness); } catch { return []; }
+  return typeof impl.commands === 'function' ? impl.commands(ref) : [];
+}
+// A captain chat message starting with "/" routes HERE instead of becoming a
+// say: the command runs against the target session's harness and both the
+// command and its reply land in the thread — nothing rides the delivery queue
+// (no wake, no owed). Unknown commands and missing sessions answer in-thread
+// too (a composer conversation, not an HTTP failure).
+async function runChatCommand(target, thread, text) {
+  const stamp = (author, t) => {
+    const msg = { author, text: t, ts: now() };
+    thread.push(msg);
+    const m = /^card:(.+)$/.exec(target);
+    if (m) {
+      const card = findCard(m[1]);
+      if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
+    }
+  };
+  stamp('user', text);
+  const name = text.split(/\s+/)[0];
+  const r = commandTargetRef(target);
+  if (r.error) return r; // unknown target — the normal 404, same as a say
+  if (!r.ref) {
+    stamp('bridge', '⚠ ' + name + ' — ' + r.why);
+    return { ok: true, command: name };
+  }
+  const cmds = harnessCommands(r.ref);
+  if (!cmds.length) {
+    stamp('bridge', '⚠ ' + name + ' — the ' + r.ref.harness + ' harness has no slash commands');
+    return { ok: true, command: name };
+  }
+  if (!cmds.some((c) => c && c.name === name)) {
+    stamp('bridge', '⚠ unknown command ' + name + ' — available: ' + cmds.map((c) => c.name).join(', '));
+    return { ok: true, command: name };
+  }
+  try {
+    // the FULL line goes to the harness — pass-through commands (/compact,
+    // claude's /autocompact) may carry arguments; `name` only did the match
+    const result = await getHarness(r.ref.harness).runCommand(r.ref, text);
+    stamp(r.ref.harness, String(result == null ? name + ' done' : result));
+  } catch (e) {
+    stamp('bridge', '⚠ ' + name + ' failed: ' + String((e && e.message) || e));
+  }
+  return { ok: true, command: name };
+}
+// agentStatus — the port's OPTIONAL status() surfaced on the board payload
+// (model, context used/window, rate limits) for lieutenants and workers.
+// Refreshed at turn-end (the turn boundary the server already tracks — no
+// polling loops). Best-effort: no capability, no session, unreadable files →
+// the recorded status simply stays as it was. Returns true when it changed.
+async function refreshAgentStatus(rec) {
+  if (!rec || !isHarnessRef(rec.ref)) return false;
+  let impl;
+  try { impl = getHarness(rec.ref.harness); } catch { return false; }
+  if (typeof impl.status !== 'function') return false;
+  try {
+    const st = await impl.status(rec.ref);
+    if (!st || typeof st !== 'object') return false;
+    rec.agentStatus = Object.assign({}, st, { ts: now() });
+    return true;
+  } catch {
+    return false;
+  }
+}
 function columnTitle(id) {
   const c = board.columns.find((k) => k.id === id);
   return c ? c.title : id;
@@ -2088,6 +2181,8 @@ const server = http.createServer(async (req, res) => {
           if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
           w.lastTurnEnd = now();
           w.turns = (w.turns || 0) + 1;
+          // turn-end is the status refresh point (context bar / /status data)
+          const statusChanged = await refreshAgentStatus(w);
           // A worker turn-end IS the stop signal: a Working card whose worker
           // stopped without done would otherwise be invisible to its owner.
           // One item per stop-state — the flag clears on signal/done or when
@@ -2103,7 +2198,7 @@ const server = http.createServer(async (req, res) => {
             queuePush(card.owner, { kind: 'worker-stopped', card: card.id, text });
           }
           saveBoard();
-          if (stopped) broadcast();
+          if (stopped || statusChanged) broadcast();
           return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
         }
       }
@@ -2121,7 +2216,10 @@ const server = http.createServer(async (req, res) => {
       if (sid && lt.ref.resumeId !== sid) lt.ref.resumeId = sid; // hook payload is ground truth
       lt.lastTurnEnd = now();
       lt.turns = (lt.turns || 0) + 1;
+      // turn-end is the status refresh point (context bar / /status data)
+      const statusChanged = await refreshAgentStatus(lt);
       saveBoard();
+      if (statusChanged) broadcast();
       // Drain-at-turn-start backstop: the lieutenant just ended a turn with
       // items still unacked. Re-nudge unless a wake is already outstanding
       // since its last drain (a drained-but-unacked queue re-nudges here; an
@@ -2292,6 +2390,19 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true });
     }
 
+    // ----- slash commands -----
+    // The composer autocomplete's source: what the target session's harness
+    // answers. A valid target with no live session (or a harness without the
+    // capability) is an EMPTY list, not an error — the composer just shows
+    // nothing, and the in-thread reply explains if a command is sent anyway.
+    if (route === 'GET /api/commands') {
+      const target = String(url.searchParams.get('target') || '');
+      const r = commandTargetRef(target);
+      if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+      if (!r.ref) return sendJson(res, 200, { target, commands: [] });
+      return sendJson(res, 200, { target, harness: r.ref.harness, commands: harnessCommands(r.ref) });
+    }
+
     // ----- chat -----
     if (route === 'POST /api/message') { // lieutenant -> captain (chat.say, lieutenant side)
       const body = JSON.parse(await readBody(req) || '{}');
@@ -2345,6 +2456,15 @@ const server = http.createServer(async (req, res) => {
       const text = String(body.text || '');
       const attachments = resolveAttachments(body.attachments);
       if (!text.trim() && !attachments.length) return sendJson(res, 400, { error: 'text or attachments required' });
+      // A bare "/command" (no attachments riding along) is a slash command,
+      // not a say: it routes to the target harness's runCommand and both the
+      // command and its reply land in the thread — no QueueItem, no wake.
+      if (text.trim().startsWith('/') && !attachments.length) {
+        const r = await runChatCommand(target, thread, text.trim());
+        if (r.error) return sendJson(res, r.code || 400, { error: r.error });
+        saveBoard(); broadcast();
+        return sendJson(res, 200, r);
+      }
       const lt = targetLieutenant(target);
       if (!lt) return sendJson(res, 404, { error: 'no lieutenant behind target: ' + target });
       // Write-ahead delivery: the QueueItem lands FIRST; the send-keys wake half

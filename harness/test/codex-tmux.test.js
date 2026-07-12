@@ -99,3 +99,10 @@ test('spawn never puts the brief on the launch line — it is typed into the com
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+test('slash commands: the shared trio only — codex has NO /autocompact (config scope, not a command)', async () => {
+  const names = codex.commands().map((c) => c.name);
+  assert.deepStrictEqual(names, ['/status', '/compact', '/help']);
+  const ref = { harness: 'codex', session: 'bc-cmd', cwd: '/tmp' };
+  await assert.rejects(() => codex.runCommand(ref, '/autocompact 80'), /unknown command \/autocompact/);
+});

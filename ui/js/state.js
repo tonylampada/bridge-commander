@@ -40,6 +40,11 @@ export function lieutenantAvatar(id) {
   const a = l && l.avatar;
   return Number.isInteger(a) && a >= 0 && a <= 63 ? a : null;
 }
+// the worker registry record bound to a card (board.workers rides the payload);
+// its agentStatus feeds the Working-tile context bar
+export function workerFor(cardId) {
+  return ((S.doc && S.doc.workers) || []).find((w) => w.card === cardId);
+}
 
 export function reads() {
   const r = (S.doc && S.doc.reads && S.doc.reads[USER]) || {};

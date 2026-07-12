@@ -80,6 +80,50 @@ test('refs are JSON-serializable', async () => {
   assert.deepStrictEqual(JSON.parse(JSON.stringify(ref)), ref);
 });
 
+test('slash commands + status: canned capability verbs (commands/runCommand/status)', async () => {
+  const ref = await fake.spawn('/tmp/x', 'hi');
+  const cmds = fake.commands();
+  assert.deepStrictEqual(cmds.map((c) => c.name), ['/status', '/compact', '/help']);
+  for (const c of cmds) assert.ok(c.description, c.name + ' has a description');
+
+  const st = await fake.status(ref);
+  assert.deepStrictEqual(st, { model: 'fake-model', contextUsed: 50000, contextWindow: 200000 });
+
+  assert.match(await fake.runCommand(ref, '/status'), /fake-model[\s\S]*50,000 \/ 200,000 tokens \(25%\)/);
+  assert.match(await fake.runCommand(ref, '/help'), /\/status[\s\S]*\/compact[\s\S]*\/help/);
+  // /compact rides the send path: the literal FULL line (args included) lands
+  // in the transcript — pass-through commands forward their arguments
+  assert.match(await fake.runCommand(ref, '/compact'), /"\/compact" submitted/);
+  assert.match(await fake.runCommand(ref, '/compact focus on the API'), /submitted/);
+  assert.deepStrictEqual(fake.transcript(ref), ['hi', '/compact', '/compact focus on the API']);
+  await assert.rejects(() => fake.runCommand(ref, '/xyz'), /unknown command/);
+
+  // dead session: status null, /compact refuses (send path throws)
+  fake.kill(ref);
+  assert.strictEqual(await fake.status(ref), null);
+  await assert.rejects(() => fake.runCommand(ref, '/compact'), /not alive/);
+  // unknown session: status null too — never a throw
+  assert.strictEqual(await fake.status({ harness: 'fake', session: 'bc-ghost', cwd: '/x' }), null);
+});
+
+test('status counts a cross-process (marker-file) session as live', async () => {
+  const fs = require('node:fs');
+  const os = require('node:os');
+  const path = require('node:path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-status-'));
+  process.env.BC_FAKE_STATE = dir;
+  try {
+    fs.writeFileSync(path.join(dir, 'bc-far.json'), JSON.stringify({ cwd: '/tmp', resumeId: null }) + '\n');
+    const ref = { harness: 'fake', session: 'bc-far', cwd: '/tmp' };
+    assert.deepStrictEqual(await fake.status(ref),
+      { model: 'fake-model', contextUsed: 50000, contextWindow: 200000 });
+    assert.match(await fake.runCommand(ref, '/status'), /fake-model/);
+  } finally {
+    delete process.env.BC_FAKE_STATE;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('kill ends a session for good; idempotent; file-backed marker removed', async () => {
   const fs = require('node:fs');
   const os = require('node:os');
