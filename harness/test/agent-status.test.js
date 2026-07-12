@@ -92,14 +92,33 @@ test('claudeStatus: null on missing transcript / ref without resumeId — never 
 
 // A codex rollout fixture: session_meta + turn_context + token_count lines.
 const THREAD = '019ec130-a849-74b2-802e-a3d3bbb57ee0';
-function tokenCountLine(total, rateLimits) {
+// `last` is the current-turn occupancy we report; total_token_usage is the
+// CUMULATIVE session total and must be ignored — so the fixture always makes it
+// far larger (last * 100) to catch any regression back to the cumulative field.
+function tokenCountLine(last, rateLimits) {
+  return JSON.stringify({
+    timestamp: '2026-06-13T13:34:56.765Z',
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: { total_tokens: last * 100 },
+        last_token_usage: { total_tokens: last },
+        model_context_window: 258400,
+      },
+      rate_limits: rateLimits === undefined ? null : rateLimits,
+    },
+  }) + '\n';
+}
+// An old-shape token_count: info populated but WITHOUT last_token_usage.
+function legacyTokenCountLine(total) {
   return JSON.stringify({
     timestamp: '2026-06-13T13:34:56.765Z',
     type: 'event_msg',
     payload: {
       type: 'token_count',
       info: { total_token_usage: { total_tokens: total }, model_context_window: 258400 },
-      rate_limits: rateLimits === undefined ? null : rateLimits,
+      rate_limits: null,
     },
   }) + '\n';
 }
@@ -153,6 +172,45 @@ test('codexStatus: null rate_limits → field omitted; newest day dir wins the g
       codexRolloutFile(THREAD, sessionsDir).includes(path.join('2026', '07', '02')), true);
     const st = codexStatus({ resumeId: THREAD }, { sessionsDir });
     assert.deepStrictEqual(st, { model: 'gpt-5.5', contextUsed: 200, contextWindow: 258400 });
+  } finally {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+});
+
+test('codexStatus: reports last-turn occupancy, not the cumulative session total', () => {
+  // Real rollout evidence: cumulative 1,110,621 vs last-turn 17,814 / window
+  // 353,400 ≈ 5% (the true value; the cumulative total showed a false 100%+).
+  const sessionsDir = tmpdir('bc-status-codex-occ-');
+  try {
+    writeRollout(sessionsDir, '2026/07/10', THREAD,
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5' } }) + '\n'
+      + JSON.stringify({
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: { total_tokens: 1110621 },
+            last_token_usage: { total_tokens: 17814 },
+            model_context_window: 353400,
+          },
+          rate_limits: null,
+        },
+      }) + '\n');
+    const st = codexStatus({ resumeId: THREAD }, { sessionsDir });
+    assert.deepStrictEqual(st, { model: 'gpt-5.5', contextUsed: 17814, contextWindow: 353400 });
+    assert.match(formatStatus(st), /context: 17,814 \/ 353,400 tokens \(5%\)/);
+  } finally {
+    fs.rmSync(sessionsDir, { recursive: true, force: true });
+  }
+});
+
+test('codexStatus: legacy token_count without last_token_usage → null (no cumulative fallback)', () => {
+  const sessionsDir = tmpdir('bc-status-codex-legacy-');
+  try {
+    writeRollout(sessionsDir, '2026/04/12', THREAD,
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5' } }) + '\n'
+      + legacyTokenCountLine(999999));
+    assert.strictEqual(codexStatus({ resumeId: THREAD }, { sessionsDir }), null);
   } finally {
     fs.rmSync(sessionsDir, { recursive: true, force: true });
   }

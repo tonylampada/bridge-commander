@@ -157,9 +157,15 @@ function codexRateLimits(rl) {
 }
 
 // codexStatus(ref, opts?) -> status | null
-// The last token_count event carries the totals (info.total_token_usage) and
-// the model context window; the model rides every turn_context line, so the
+// The last token_count event carries current context occupancy
+// (info.last_token_usage.total_tokens = input+cached+output of the last turn)
+// and the model context window; the model rides every turn_context line, so the
 // tail always has a fresh one. rate_limits come from the same token_count.
+// NOTE: info.total_token_usage is the CUMULATIVE session total (grows forever,
+// exceeds the window) — it is NOT occupancy. Selecting on last_token_usage is
+// deliberate: rollouts where info is populated always carry it (verified on
+// real rollouts), and the only ones missing it have info === null, which the
+// null-guards below already reject — so no total_token_usage fallback is needed.
 function codexStatus(ref, opts = {}) {
   if (!ref || !ref.resumeId) return null;
   const sessionsDir = opts.sessionsDir || process.env.BC_CODEX_SESSIONS_DIR
@@ -177,7 +183,7 @@ function codexStatus(ref, opts = {}) {
     if (!usage && line.includes('"token_count"')) {
       try { doc = JSON.parse(line); } catch { continue; }
       const p = doc && doc.payload;
-      if (p && p.type === 'token_count' && p.info && p.info.total_token_usage) usage = p;
+      if (p && p.type === 'token_count' && p.info && p.info.last_token_usage) usage = p;
     } else if (!model && line.includes('"turn_context"')) {
       try { doc = JSON.parse(line); } catch { continue; }
       const p = doc && doc.payload;
@@ -187,7 +193,7 @@ function codexStatus(ref, opts = {}) {
   if (!usage) return null;
   const out = {
     model,
-    contextUsed: usage.info.total_token_usage.total_tokens || 0,
+    contextUsed: usage.info.last_token_usage.total_tokens || 0,
     contextWindow: usage.info.model_context_window || null,
   };
   const rl = codexRateLimits(usage.rate_limits);
