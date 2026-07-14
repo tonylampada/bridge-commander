@@ -438,13 +438,78 @@ test('worker send: delivers into the live worker session + level-2 card event; l
     assert.strictEqual(ev.level, 2);
     assert.match(ev.text, /also fix the flaky test/);
 
-    // empty text rejected; a done worker refuses (spawn fresh instead)
+    // empty text rejected
     assert.strictEqual((await s.api('POST', '/api/cards/steer/worker/send', { text: '  ' })).status, 400);
-    await s.api('POST', '/api/cards/steer/worker/done', { outcome: 'landed' });
-    r = await s.api('POST', '/api/cards/steer/worker/send', { text: 'one more thing' });
-    assert.strictEqual(r.status, 409);
-    assert.match(r.body.error, /already reported done/);
   } finally { await teardown(); }
+});
+
+test('worker send reopens a done-but-alive worker: turn re-enters Working, record reset, text delivered', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Reopen', id: 'reopen', attributes: { repo: 'proj' } }));
+    assert.strictEqual((await s.api('POST', '/api/cards/reopen/start', { harness: 'fake' })).status, 200);
+    const sess = workerKey(s.dir, 'reopen');
+
+    // worker finishes; the lieutenant hands off, so the card leaves Working
+    await s.api('POST', '/api/cards/reopen/worker/done', { outcome: 'first pass done' });
+    await s.api('POST', '/api/cards/reopen/move', { column: 'review', actor: 'agent' });
+    assert.strictEqual(boardOnDisk(s).workers[0].done, true);
+
+    // its session is still alive+idle → a send reopens the turn in place (no 409)
+    const r = await s.api('POST', '/api/cards/reopen/worker/send', { text: 'one more pass: add tests' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+
+    // the record is reset exactly like a resume; the card is back in Working
+    const disk = boardOnDisk(s);
+    assert.strictEqual(disk.workers[0].done, false);
+    assert.strictEqual(disk.workers[0].outcome, undefined);
+    const card = (await s.api('GET', '/api/cards/reopen')).body;
+    assert.strictEqual(card.column, 'working');
+    // a level-2 reopen event, then the send event
+    const reopened = card.events.find((e) => e.kind === 'started' && /reopened for a new turn/.test(e.text));
+    assert.ok(reopened, 'reopen event recorded');
+    assert.match(reopened.text, /👀 Your review → 🔨 Working/);
+    const sendEv = card.events[card.events.length - 1];
+    assert.strictEqual(sendEv.kind, 'worker-send');
+    assert.match(sendEv.text, /add tests/);
+
+    // the text really reached the session (the fake logs sends)
+    const sends = fs.readFileSync(path.join(fdir, sess + '.sends.jsonl'), 'utf8')
+      .trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepStrictEqual(sends.map((x) => x.text), ['one more pass: add tests']);
+  } finally { await teardown(); }
+});
+
+test('worker send on a done-but-DEAD worker still 409s and names the resume recipe', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Gone', id: 'gone', attributes: { repo: 'proj' } }));
+    await s.api('POST', '/api/cards/gone/start', { harness: 'fake' });
+    await s.api('POST', '/api/cards/gone/worker/done', { outcome: 'done' });
+
+    // the session dies (restart clears the in-process fake; drop its marker so
+    // cross-process alive() flips false) — done stays true on disk
+    await s.stop();
+    fs.rmSync(path.join(fdir, workerKey(wsDir, 'gone') + '.json'), { force: true });
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    const r = await s.api('POST', '/api/cards/gone/worker/send', { text: 'come back' });
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /card start gone --resume/);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('card start --resume refuses a brief and points at worker send (API + CLI)', async () => {
