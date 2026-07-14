@@ -1543,7 +1543,8 @@ async function doStartCard(card, body) {
     let up = false;
     try { up = await harnessFor(existing.ref).alive(existing.ref); } catch (e) { up = false; }
     if (up) {
-      return { error: 'previous worker session ' + workerName(existing.ref) + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it', code: 409 };
+      const reopenHint = existing.done ? ' (or, since it reported done, reopen it in place with worker send)' : '';
+      return { error: 'previous worker session ' + workerName(existing.ref) + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it' + reopenHint, code: 409 };
     }
     const prevProject = findProject(existing.project) || project;
     const rel = await releaseWorktree(existing.worktree, prevProject.path);
@@ -1663,12 +1664,24 @@ async function workerSend(card, body) {
   if (!w) {
     return { error: 'no worker bound to card ' + card.id + ' — start one first (card start ' + card.id + ')', code: 404 };
   }
-  if (w.done) {
-    return { error: 'worker for ' + card.id + ' already reported done — spawn a fresh one (card start ' + card.id + ') instead of sending into a finished session', code: 409 };
-  }
   let up = false;
   try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
-  if (!up) {
+  if (w.done) {
+    // A done-but-DEAD worker is a genuine restart: point at the resume recipe.
+    if (!up) {
+      return { error: 'worker for ' + card.id + ' reported done and its session is gone — revive it first (card start ' + card.id + ' --resume), then send', code: 409 };
+    }
+    // Done but its session is still alive+idle: reopen the turn in place (the
+    // reset mirrors the resume path) instead of 409-ing, so a send re-enters
+    // Working without the undiscoverable two-step resume.
+    w.done = false;
+    delete w.outcome;
+    delete w.flagged;
+    delete w.stopNotified;
+    delete w.staleNotified;
+    delete w.paused;
+    enterWorking(card, 'worker ' + workerName(w.ref) + ' reopened for a new turn');
+  } else if (!up) {
     return { error: 'worker session ' + workerName(w.ref) + ' is not alive — resume it first (card start ' + card.id + ' --resume), then send', code: 409 };
   }
   try {
