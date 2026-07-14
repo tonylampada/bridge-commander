@@ -174,21 +174,28 @@ bodyInput.onkeydown = (e) => {
 
 // ---------- artifact viewer (popup) ----------
 const avOverlay = document.getElementById('av-overlay');
+const avModal = document.getElementById('av-modal');
 const avName = document.getElementById('av-name');
 const avBody = document.getElementById('av-body');
 const avImgWrap = document.getElementById('av-img-wrap');
 const avImg = document.getElementById('av-img');
+const avFrame = document.getElementById('av-frame');
+const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
 const MD_EXT = /\.(md|markdown)$/i;
+const HTML_EXT = /\.html?$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
 function avReset(name, uri) {
   avName.textContent = name;
   avName.title = uri || name;
   avImgWrap.hidden = true;
   avImg.removeAttribute('src');
+  avFrame.hidden = true;
+  avFrame.removeAttribute('src'); // drop the previous page so it can't linger
   avBody.hidden = false;
   avBody.className = '';
   avDownload.hidden = true;
+  avModal.classList.remove('expanded'); // each open starts at the default size
   avOverlay.hidden = false;
 }
 async function openArtifact(uri) {
@@ -218,6 +225,16 @@ async function openArtifact(uri) {
   if (IMG_EXT.test(name)) {
     avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
     avBody.hidden = true; avImgWrap.hidden = false; avImg.src = rawUrl; avImg.alt = title;
+    return;
+  }
+  if (HTML_EXT.test(name)) {
+    // A rendered .html/.htm page (teach-me, report): show it live in a sandboxed
+    // iframe (allow-scripts, no same-origin) fed by the raw serve, which sends a
+    // matching CSP. These pages want room — open expanded by default.
+    avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
+    avBody.hidden = true; avImgWrap.hidden = true;
+    avFrame.hidden = false; avFrame.src = rawUrl;
+    avModal.classList.add('expanded');
     return;
   }
   if (BIN_EXT.test(name)) return offerDownload('No inline preview for this file type. Use ⬇ to download.');
@@ -288,6 +305,8 @@ export async function openAttachment(att) {
 export function closeArtifact() { avOverlay.hidden = true; }
 export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
+// Maximize / restore the viewer (pure CSS class toggle — see #av-modal.expanded).
+avExpand.onclick = () => { avModal.classList.toggle('expanded'); };
 avOverlay.onclick = (e) => { if (e.target === avOverlay) closeArtifact(); };
 
 // ---------- owner menu (reassign the owning lieutenant) ----------

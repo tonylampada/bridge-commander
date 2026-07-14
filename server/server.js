@@ -2061,12 +2061,23 @@ const server = http.createServer(async (req, res) => {
         if (!st.isFile()) return sendJson(res, 404, { error: 'not a file' });
         if (st.size > ARTIFACT_MAX_BYTES) return sendJson(res, 413, { error: 'artifact too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
         const ext = path.extname(name).toLowerCase();
-        const ctype = am ? (attMime || 'application/octet-stream') : (ARTIFACT_MIME[ext] || 'application/octet-stream');
-        // Images and pdf may render inline in the browser; other binaries
-        // download. Same hardening as the attachments serve: nosniff pins the
-        // Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
+        // A curated .html/.htm artifact (teach-me page, report) is a self-contained
+        // document meant to be *rendered*: serve it as text/html inline so the
+        // viewer iframe shows the page, not its source. It runs under a stricter-
+        // than-default CSP — `sandbox allow-scripts` gives it a unique origin (no
+        // same-origin access to the board, no top navigation, no forms) while its
+        // own inline JS/CSS still work. Scoped to plain file artifacts, not
+        // attachments (an uploaded .html keeps its neutralized download behavior).
+        const isHtml = !am && (ext === '.html' || ext === '.htm');
+        const ctype = isHtml ? 'text/html; charset=utf-8'
+          : am ? (attMime || 'application/octet-stream')
+          : (ARTIFACT_MIME[ext] || 'application/octet-stream');
+        // Images, pdf, and rendered html show inline in the browser; other
+        // binaries download. Same hardening as the attachments serve: nosniff pins
+        // the Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
         // is navigated to as a document (inline <img> subresources unaffected).
-        const inline = /^image\//.test(ctype) || ctype === 'application/pdf';
+        const inline = isHtml || /^image\//.test(ctype) || ctype === 'application/pdf';
+        const csp = isHtml ? 'sandbox allow-scripts' : 'sandbox';
         let data;
         try { data = fs.readFileSync(file); }
         catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
@@ -2075,7 +2086,7 @@ const server = http.createServer(async (req, res) => {
           'Content-Length': data.length,
           'Cache-Control': 'private, max-age=31536000, immutable',
           'X-Content-Type-Options': 'nosniff',
-          'Content-Security-Policy': 'sandbox',
+          'Content-Security-Policy': csp,
           'Content-Disposition': (inline ? 'inline' : 'attachment') + '; filename="' + name.replace(/["\\\r\n]/g, '_') + '"',
         });
         return res.end(data);
