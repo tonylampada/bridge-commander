@@ -9,6 +9,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   claudeProjectSlug, claudeContextWindow, claudeStatus,
+  claudeSidecarStatus, findBridgeWorkspace,
   codexRolloutFile, codexStatus, formatStatus,
 } = require('../agent-status.js');
 
@@ -87,6 +88,103 @@ test('claudeStatus: null on missing transcript / ref without resumeId — never 
     assert.strictEqual(claudeStatus(null, { projectsDir }), null);
   } finally {
     fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+// ---------- claude statusline sidecar ----------
+// The sidecar (statusline.js writes it) carries the REAL context window that the
+// transcript+map path can only guess. Written under <workspace>/
+// .bridge-commander/statusline/<session_id>.json.
+function writeSidecar(workspace, sid, payload, now) {
+  const dir = path.join(workspace, '.bridge-commander', 'statusline');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, sid + '.json'),
+    JSON.stringify({ receivedAt: now || '2026-07-14T00:00:00.000Z', payload }));
+}
+
+test('claudeStatus: prefers the sidecar — real 1M window + rate limits (Opus case)', () => {
+  const ws = tmpdir('bc-status-sidecar-');
+  try {
+    fs.mkdirSync(path.join(ws, '.bridge-commander'), { recursive: true });
+    const sid = 'sc-1111-2222';
+    writeSidecar(ws, sid, {
+      session_id: sid,
+      cwd: ws,
+      model: { id: 'claude-opus-4-8', display_name: 'Opus 4.8' },
+      context_window: { context_window_size: 1000000, total_input_tokens: 118213, used_percentage: 11.8 },
+      rate_limits: {
+        five_hour: { used_percentage: 42, resets_at: 2000000000 },
+        seven_day: { used_percentage: 7, resets_at: 2000100000 },
+      },
+    });
+    // A transcript with the OLD 200k guess also exists — the sidecar must win.
+    const projectsDir = tmpdir('bc-status-sidecar-tx-');
+    try {
+      const tdir = path.join(projectsDir, claudeProjectSlug(ws));
+      fs.mkdirSync(tdir, { recursive: true });
+      fs.writeFileSync(path.join(tdir, sid + '.jsonl'), assistantLine('claude-opus-4-8', USAGE));
+      const st = claudeStatus({ cwd: ws, resumeId: sid }, { projectsDir });
+      assert.strictEqual(st.contextWindow, 1000000);
+      assert.strictEqual(st.contextUsed, 118213);
+      assert.strictEqual(st.model, 'claude-opus-4-8');
+      assert.deepStrictEqual(st.rateLimits, {
+        primary: { usedPercent: 42, windowMinutes: 300, resetsAt: 2000000000 },
+        secondary: { usedPercent: 7, windowMinutes: 10080, resetsAt: 2000100000 },
+      });
+      assert.match(formatStatus(st), /context: 118,213 \/ 1,000,000 tokens \(12%\)/);
+      assert.match(formatStatus(st), /5h limit: 42% used/);
+      assert.match(formatStatus(st), /1w limit: 7% used/);
+    } finally {
+      fs.rmSync(projectsDir, { recursive: true, force: true });
+    }
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('claudeStatus: no sidecar → transcript+map fallback unchanged (opus → 200k)', () => {
+  const ws = tmpdir('bc-status-nosidecar-');
+  const projectsDir = tmpdir('bc-status-nosidecar-tx-');
+  try {
+    fs.mkdirSync(path.join(ws, '.bridge-commander'), { recursive: true }); // workspace, but NO statusline/ dir
+    const sid = 'nofile-1111';
+    const tdir = path.join(projectsDir, claudeProjectSlug(ws));
+    fs.mkdirSync(tdir, { recursive: true });
+    fs.writeFileSync(path.join(tdir, sid + '.jsonl'), assistantLine('claude-opus-4-8', USAGE));
+    const st = claudeStatus({ cwd: ws, resumeId: sid }, { projectsDir });
+    assert.deepStrictEqual(st, { model: 'claude-opus-4-8', contextUsed: USED, contextWindow: 200000 });
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+test('claudeSidecarStatus: bad JSON / missing window → null (falls through), never throws', () => {
+  const ws = tmpdir('bc-status-sidecar-bad-');
+  try {
+    const dir = path.join(ws, '.bridge-commander', 'statusline');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'bad.json'), '{not json');
+    assert.strictEqual(claudeSidecarStatus({ cwd: ws, resumeId: 'bad' }), null);
+    // valid JSON but no context_window_size → null (transcript fallback wins)
+    writeSidecar(ws, 'nowin', { session_id: 'nowin', cwd: ws, model: { id: 'claude-opus-4-8' } });
+    assert.strictEqual(claudeSidecarStatus({ cwd: ws, resumeId: 'nowin' }), null);
+    assert.strictEqual(claudeSidecarStatus({ cwd: ws, resumeId: 'absent' }), null);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('findBridgeWorkspace: nearest .bridge-commander/ ancestor, else null', () => {
+  const ws = tmpdir('bc-find-ws-');
+  try {
+    fs.mkdirSync(path.join(ws, '.bridge-commander'), { recursive: true });
+    const deep = path.join(ws, 'x', 'y');
+    fs.mkdirSync(deep, { recursive: true });
+    assert.strictEqual(findBridgeWorkspace(deep), ws);
+    assert.strictEqual(findBridgeWorkspace('/'), null);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
   }
 });
 

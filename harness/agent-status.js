@@ -72,13 +72,99 @@ function claudeContextWindow(model) {
   return CLAUDE_DEFAULT_WINDOW;
 }
 
+// ---------- claude statusline sidecar ----------
+// harness/statusline.js (the workspace's Claude Code `statusLine` command) tees
+// each stdin payload to <workspace>/.bridge-commander/statusline/<session_id>.json
+// — the ONLY source of the REAL context window (context_window_size), the
+// account rate limits, and the model display name. Lieutenants run with cwd =
+// workspace root, so the sidecar exists for them; workers in worktree cwds have
+// none and fall through to the transcript+map path below (accepted).
+const STATE_DIR_NAME = '.bridge-commander';
+function findBridgeWorkspace(startDir) {
+  if (!startDir) return null;
+  let dir = path.resolve(startDir);
+  for (;;) {
+    try {
+      if (fs.statSync(path.join(dir, STATE_DIR_NAME)).isDirectory()) return dir;
+    } catch { /* keep walking up */ }
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+
+// Map the statusline payload's rate_limits (five_hour/seven_day, each
+// {used_percentage, resets_at}) onto the shared status rateLimits shape
+// (primary/secondary, each {usedPercent, windowMinutes, resetsAt epoch secs}),
+// so formatStatus labels them 5h / 1w just like codex.
+function claudeSidecarRateLimits(rl) {
+  if (!rl || typeof rl !== 'object') return null;
+  const toEpochSecs = (v) => {
+    if (v == null) return undefined;
+    if (typeof v === 'number' && Number.isFinite(v)) return v > 1e11 ? Math.floor(v / 1000) : Math.floor(v);
+    if (typeof v === 'string' && v.trim() !== '') {
+      const n = Number(v);
+      if (Number.isFinite(n)) return n > 1e11 ? Math.floor(n / 1000) : Math.floor(n);
+      const p = Date.parse(v);
+      if (!Number.isNaN(p)) return Math.floor(p / 1000);
+    }
+    return undefined;
+  };
+  const pick = (w, windowMinutes) => {
+    if (!w || typeof w !== 'object' || w.used_percentage == null) return undefined;
+    const out = { usedPercent: Number(w.used_percentage), windowMinutes };
+    const r = toEpochSecs(w.resets_at);
+    if (r !== undefined) out.resetsAt = r;
+    return out;
+  };
+  const out = {};
+  const primary = pick(rl.five_hour, 300);
+  const secondary = pick(rl.seven_day, 10080);
+  if (primary) out.primary = primary;
+  if (secondary) out.secondary = secondary;
+  return Object.keys(out).length ? out : null;
+}
+
+// claudeSidecarStatus(ref, opts?) -> status | null
+// Prefer the sidecar when one exists for this session (file name == resumeId)
+// and it carries a real context_window_size. Any missing file / bad JSON /
+// absent window → null, so the caller falls back to the transcript path.
+function claudeSidecarStatus(ref, opts = {}) {
+  const dir = opts.sidecarDir
+    || (() => {
+      const ws = opts.workspace || findBridgeWorkspace(ref.cwd);
+      return ws ? path.join(ws, STATE_DIR_NAME, 'statusline') : null;
+    })();
+  if (!dir) return null;
+  let doc;
+  try {
+    doc = JSON.parse(fs.readFileSync(path.join(dir, ref.resumeId + '.json'), 'utf8'));
+  } catch {
+    return null;
+  }
+  const p = doc && doc.payload;
+  const cw = p && p.context_window;
+  const window = cw && Number(cw.context_window_size);
+  if (!p || !cw || !Number.isFinite(window) || window <= 0) return null;
+  const out = {
+    model: (p.model && (p.model.id || p.model.display_name)) || null,
+    contextUsed: Number(cw.total_input_tokens) || 0,
+    contextWindow: window,
+  };
+  const rl = claudeSidecarRateLimits(p.rate_limits);
+  if (rl) out.rateLimits = rl;
+  return out;
+}
+
 // claudeStatus(ref, opts?) -> status | null
-// The last assistant line's message.usage is the current context truth:
-// contextUsed = input + cache_read + cache_creation + output (what the next
-// turn starts from). No rate limits — claude does not persist them, so the
-// field is omitted rather than faked.
+// Prefer the statusline sidecar (real window + rate limits); else the last
+// assistant line's message.usage: contextUsed = input + cache_read +
+// cache_creation + output (what the next turn starts from), with the context
+// window guessed from the model→window map.
 function claudeStatus(ref, opts = {}) {
   if (!ref || !ref.cwd || !ref.resumeId) return null;
+  const sidecar = claudeSidecarStatus(ref, opts);
+  if (sidecar) return sidecar;
   const projectsDir = opts.projectsDir || process.env.BC_CLAUDE_PROJECTS_DIR
     || path.join(os.homedir(), '.claude', 'projects');
   const file = path.join(projectsDir, claudeProjectSlug(ref.cwd), ref.resumeId + '.jsonl');
@@ -256,6 +342,8 @@ module.exports = {
   tailRead,
   claudeProjectSlug,
   claudeContextWindow,
+  findBridgeWorkspace,
+  claudeSidecarStatus,
   claudeStatus,
   codexRolloutFile,
   codexStatus,

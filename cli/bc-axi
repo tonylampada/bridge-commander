@@ -233,6 +233,7 @@ async function ensureServer() {
 
 async function cmdOpen() {
   const { st, started } = await ensureServer();
+  installStatusLine(WORKSPACE); // self-heal the statusLine wiring on every open
   console.log('http://localhost:' + PORT + '/');
   console.log((started ? 'started' : 'already running') + ' workspace=' + st.workspace + ' cards=' + st.cards);
 }
@@ -255,6 +256,29 @@ function excludeFromGit(dir, entry) {
 }
 function slugId(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'lt';
+}
+
+// installStatusLine — MERGE the BC statusLine command into the WORKSPACE's
+// .claude/settings.local.json (create if absent), preserving every other key
+// (hooks, permissions, …). Re-run on every init/open so a rewrite self-heals.
+// NEVER touches user-global ~/.claude/settings.json. The statusline script tees
+// the real context window + rate limits into the sidecar the board reads.
+function installStatusLine(workspace) {
+  const { shellQuote } = require(path.join(SELF_DIR, '..', 'harness', 'tmux-session.js'));
+  const script = path.join(SELF_DIR, '..', 'harness', 'statusline.js');
+  const command = 'node ' + shellQuote(script);
+  const dir = path.join(workspace, '.claude');
+  const file = path.join(dir, 'settings.local.json');
+  let settings = {};
+  try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch (e) { settings = {}; }
+  if (typeof settings !== 'object' || settings === null || Array.isArray(settings)) settings = {};
+  const cur = settings.statusLine;
+  if (!cur || cur.type !== 'command' || cur.command !== command) {
+    settings.statusLine = { type: 'command', command };
+  }
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  excludeFromGit(workspace, '.claude/settings.local.json');
 }
 async function cmdInit() {
   if (!opts.name) {
@@ -318,6 +342,8 @@ async function cmdInit() {
   const harnessState = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
   await installHooks(WORKSPACE, 'ws', harnessState, 'http://127.0.0.1:' + PORT + '/api/turn-end');
   console.log('turn-end hook installed (.claude/settings.local.json -> /api/turn-end)');
+  installStatusLine(WORKSPACE);
+  console.log('statusLine installed (.claude/settings.local.json -> real context window sidecar)');
 
   // 5. shared memory scaffold (never overwrite what exists)
   const agentsMd = path.join(WORKSPACE, 'AGENTS.md');

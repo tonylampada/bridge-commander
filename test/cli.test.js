@@ -74,6 +74,37 @@ test('cli accepts global flags in any position relative to the verb', async () =
   }
 });
 
+test('cli open installs the statusLine, merging into .claude/settings.local.json', async () => {
+  const s = await startServerWithLieutenant();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
+  const settingsFile = path.join(s.dir, '.claude', 'settings.local.json');
+  try {
+    // Pre-seed unrelated keys — the merge must preserve them, never clobber.
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      permissions: { allow: ['Bash(ls:*)'] },
+      hooks: { Stop: [{ hooks: [{ type: 'command', command: 'keep-me' }] }] },
+    }));
+
+    let r = await runCli(['open', ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    let cfg = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.strictEqual(cfg.statusLine.type, 'command');
+    assert.match(cfg.statusLine.command, /statusline\.js/);
+    assert.deepStrictEqual(cfg.permissions, { allow: ['Bash(ls:*)'] }); // preserved
+    assert.strictEqual(cfg.hooks.Stop[0].hooks[0].command, 'keep-me'); // preserved
+
+    // Self-heal: delete the file, re-open, it is recreated with the statusLine.
+    fs.rmSync(settingsFile);
+    r = await runCli(['open', ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    cfg = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+    assert.match(cfg.statusLine.command, /statusline\.js/);
+  } finally {
+    await s.stop();
+  }
+});
+
 test('cli card create / board / say / drain / ack round-trip against a test server', async () => {
   const s = await startServerWithLieutenant();
   const args = ['--workspace', s.dir, '--port', String(s.port)];
