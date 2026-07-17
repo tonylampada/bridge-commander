@@ -7,7 +7,7 @@ import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu, appearancePopoverOpen, closeAppearancePopover } from './board.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
-import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, closeOwnerMenu, ownerMenuOpen } from './detail.js';
+import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
@@ -122,8 +122,14 @@ document.addEventListener('keydown', (e) => {
 });
 
 // ---------- render orchestration ----------
+// Reading-mode guard: while the artifact viewer popup is open, workers still
+// push board updates (S.doc keeps updating) but repainting the regions would
+// blink the text/iframe being read. So record the pending render and bail; when
+// the viewer closes, onArtifactClose below runs the one deferred pass.
+let renderPending = false;
 onRender(() => {
   if (!S.doc) return;
+  if (artifactOpen()) { renderPending = true; return; }
   document.title = S.doc.title || 'bridge command';
   document.getElementById('b-title').textContent = S.doc.title || 'bridge command';
   document.getElementById('b-subtitle').textContent = S.doc.subtitle || '';
@@ -140,6 +146,9 @@ onRender(() => {
   // text stays out of the compared markup so it never forces a rebuild)
   refreshAgoLabels();
 });
+// When the viewer closes, flush the render that was deferred while it was open
+// so the board catches up in one pass (no-op if nothing pushed meanwhile).
+onArtifactClose(() => { if (renderPending) { renderPending = false; render(); } });
 
 // ---------- SSE ----------
 // A half-open connection after a server restart can sit silent forever without

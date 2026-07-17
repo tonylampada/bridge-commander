@@ -302,7 +302,12 @@ export async function openAttachment(att) {
     avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.';
   } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
 }
-export function closeArtifact() { avOverlay.hidden = true; }
+// A close hook lets main.js run one deferred render when the viewer closes
+// (renders are skipped while it's open — see the reading-mode guard). Mirrors
+// state.js onRender: a setter avoids a circular import back into main.js.
+let onCloseFn = () => {};
+export function onArtifactClose(fn) { onCloseFn = fn; }
+export function closeArtifact() { avOverlay.hidden = true; onCloseFn(); }
 export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 // Maximize / restore the viewer (pure CSS class toggle — see #av-modal.expanded).
