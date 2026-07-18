@@ -77,9 +77,15 @@
   <section id="chat">
     <div id="chat-head">
       <button id="chat-back" hidden>←</button>
+      <!-- lieutenant switcher trigger: the current lieutenant's face + name +
+           model/context; tapping it opens the #lt-switcher dropdown below -->
+      <button id="chat-lt" type="button" hidden aria-haspopup="listbox" aria-expanded="false"></button>
       <div id="chat-title">💬 chat</div>
       <button id="chat-card-open" title="open card" hidden>open card</button>
     </div>
+    <!-- lieutenant switcher dropdown: one row per lieutenant (avatar, name,
+         model, context bar, unread/owed) + the ＋ lieutenant row -->
+    <div id="lt-switcher" role="listbox" hidden></div>
     <div id="chat-feed"></div>
     <div id="chat-send-err" hidden></div>
     <div id="chat-atts" hidden></div>
@@ -95,9 +101,8 @@
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right — lieutenant lane above the columns -->
+  <!-- board: right -->
   <section id="board-wrap">
-    <div id="lane"></div>
     <div id="board"><div class="empty">waiting for board…</div></div>
   </section>
 </main>
@@ -147,7 +152,7 @@
 <!-- owner menu (detail ✎ on the lieutenant chip — reassign the owning lieutenant) -->
 <div id="owner-menu" hidden></div>
 
-<!-- lieutenant appearance popover (lane ⋯ → appearance): avatar + color, edits commit on pick -->
+<!-- lieutenant appearance popover (switcher ⋯ → appearance): avatar + color, edits commit on pick -->
 <div id="ap-popover" hidden>
   <div class="ap-head">
     <span class="ap-title">appearance</span>

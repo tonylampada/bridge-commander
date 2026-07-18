@@ -2,9 +2,9 @@
 // the lieutenant's main chat or one of its card threads (a card thread's
 // interlocutor is always the owning lieutenant). Whole-window mode switch,
 // premium composer.
-import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
+import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
-import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml } from './util.js';
+import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
 import { md, mdEnhance } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
@@ -12,6 +12,7 @@ import { avatarHtml } from './avatars.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
+const ltBtn = document.getElementById('chat-lt'); // switcher trigger (ltswitcher.js owns its click)
 const backBtn = document.getElementById('chat-back');
 const openBtn = document.getElementById('chat-card-open');
 const inputEl = document.getElementById('chat-input');
@@ -43,7 +44,7 @@ function currentLieutenant() {
   return c ? lieutenant(c.owner) : null;
 }
 
-// Open a lieutenant's main chat (lane card click, new-lieutenant create).
+// Open a lieutenant's main chat (switcher row tap, new-lieutenant create).
 export function openLieutenantChat(id) {
   S.chatMode = { mode: 'lieutenant', id };
   S.view = 'chat'; // on mobile, switch to the chat tab
@@ -226,16 +227,44 @@ function wireSpeak(blocks, target) {
   });
 }
 
+// The switcher trigger: the current lieutenant's face + name (the lane chip's
+// content, relocated) plus model (+effort), context bar and owed state. A
+// badge with the OTHER lieutenants' unread total keeps their activity visible
+// now that the chips are gone.
+function ltTriggerHtml(lt) {
+  const av = lieutenantAvatar(lt.id);
+  const face = av != null
+    ? '<span class="lt-face" style="border-color:' + esc(lieutenantColor(lt.id)) + '">' + avatarHtml(av) + '</span>'
+    : '<span class="lt-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span>';
+  const owed = targetOwedState('lieutenant:' + lt.id);
+  const ind = owedIndHtml(owed, owed && targetOwedStale('lieutenant:' + lt.id));
+  const st = lt.agentStatus || {};
+  const model = st.model
+    ? '<span class="clt-model">' + esc(st.model) + (st.effort ? ' <span class="clt-effort">(' + esc(st.effort) + ')</span>' : '') + '</span>'
+    : '';
+  const meta = model || ctxBarHtml(st) ? '<span class="clt-meta">' + model + ctxBarHtml(st) + '</span>' : '';
+  const others = lieutenants().reduce((n, l) => n + (l.id === lt.id ? 0 : lieutenantUnread(l)), 0);
+  return face +
+    '<span class="clt-main">' +
+    '<span class="clt-name">' + esc(lt.name || lt.id) + ind + '</span>' + meta +
+    '</span>' +
+    '<span class="clt-caret">▾</span>' +
+    (others ? '<span class="badge-n" title="unread in other lieutenants\' chats">' + (others > 99 ? '99+' : others) + '</span>' : '');
+}
+
 export function renderChat() {
   const target = currentTarget();
   if (!target) {
     backBtn.hidden = true;
     openBtn.hidden = true;
-    setHtmlIfChanged(titleEl, '💬 chat');
+    titleEl.hidden = true;
+    // no lieutenants yet: the trigger doubles as the create button
+    ltBtn.hidden = false;
+    setHtmlIfChanged(ltBtn, '<span class="clt-main"><span class="clt-name">＋ lieutenant</span></span>');
     inputEl.placeholder = 'create a lieutenant to start…';
     inputEl.disabled = true;
     attachBtn.disabled = true;
-    if (feed.key !== '') feedEl.innerHTML = '<div class="empty">no lieutenants yet — add one above the board to start commanding</div>';
+    if (feed.key !== '') feedEl.innerHTML = '<div class="empty">no lieutenants yet — tap ＋ lieutenant above to start commanding</div>';
     feed = { key: '', blocks: [], tail: '' };
     return;
   }
@@ -248,13 +277,12 @@ export function renderChat() {
 
   backBtn.hidden = !isCard;
   openBtn.hidden = !isCard;
-  const titleAv = lt ? lieutenantAvatar(lt.id) : null;
-  const titleFace = titleAv != null
-    ? '<span class="lt-face" style="border-color:' + esc(lieutenantColor(lt.id)) + '">' + avatarHtml(titleAv) + '</span>'
-    : '<span class="lt-dot" style="background:' + esc(lieutenantColor((lt || {}).id)) + '"></span>';
-  setHtmlIfChanged(titleEl, isCard
-    ? esc(cardEmoji(c) + ' ' + (c.title || c.id))
-    : titleFace + ' ' + esc(ltName));
+  // card thread: plain card title (back returns to the lieutenant, where the
+  // switcher lives); lieutenant chat: the switcher trigger IS the header
+  ltBtn.hidden = isCard || !lt;
+  titleEl.hidden = !ltBtn.hidden;
+  if (isCard || !lt) setHtmlIfChanged(titleEl, esc(cardEmoji(c) + ' ' + (c.title || c.id)));
+  else setHtmlIfChanged(ltBtn, ltTriggerHtml(lt));
   inputEl.placeholder = isCard ? 'message ' + ltName + ' about this card…' : 'message ' + ltName + '…';
 
   // Land at the newest message when the visible conversation changes (first
