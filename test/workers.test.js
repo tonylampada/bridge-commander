@@ -156,7 +156,7 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     // at the SAME persisted prompt file the harness port treats as the
     // source of truth — and it is servable through the artifact preview endpoint
     const briefFile = path.join(s.dir, '.bridge-commander', 'harness', sess + '.prompt');
-    assert.deepStrictEqual(card.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief' }]);
+    assert.deepStrictEqual(card.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief', type: 'markdown' }]);
     const art = await s.api('GET', '/api/artifact?uri=' + encodeURIComponent('file://' + briefFile));
     assert.strictEqual(art.status, 200);
     assert.match(art.body.content, /Worker brief — card "Fix login"/);
@@ -237,7 +237,7 @@ test('investigation: brief carries the report contract, no branch; done attaches
 
     // card.start already auto-attached the brief itself, ahead of the report
     const briefFile = path.join(s.dir, '.bridge-commander', 'harness', workerKey(s.dir, 'why-slow') + '.prompt');
-    assert.deepStrictEqual(card0.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief' }]);
+    assert.deepStrictEqual(card0.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief', type: 'markdown' }]);
 
     // the worker writes the report, then reports done → auto-attached artifact
     const report = path.join(s.dir, '.bridge-commander', 'reports', 'why-slow.md');
@@ -246,7 +246,7 @@ test('investigation: brief carries the report contract, no branch; done attaches
     await s.api('POST', '/api/cards/why-slow/worker/done', { outcome: 'report written: it was DNS' });
     const card = (await s.api('GET', '/api/cards/why-slow')).body;
     assert.deepStrictEqual(card.attributes.artifacts, [
-      { uri: 'file://' + briefFile, label: 'brief' },
+      { uri: 'file://' + briefFile, label: 'brief', type: 'markdown' },
       { uri: 'file://' + report, label: 'report' },
     ]);
     // and the artifact is servable through the artifact preview endpoint
@@ -350,7 +350,7 @@ test('card start --resume reincarnates a dead recorded worker in the same worktr
     assert.strictEqual(cardAfter.column, 'working');
 
     // idempotent: resume re-attaches the SAME brief uri, no duplicate entry
-    assert.deepStrictEqual(cardAfter.attributes.artifacts, [{ uri: briefUri, label: 'brief' }]);
+    assert.deepStrictEqual(cardAfter.attributes.artifacts, [{ uri: briefUri, label: 'brief', type: 'markdown' }]);
 
     // resume with no recorded worker refuses
     await s.api('POST', '/api/cards', withOwner({ title: 'Fresh', id: 'fresh', attributes: { repo: 'proj' } }));

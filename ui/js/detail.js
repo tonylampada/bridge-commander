@@ -1,7 +1,7 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
 import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename, setHtmlIfChanged, isImageMime } from './util.js';
-import { md } from './md.js';
+import { md, mdEnhance } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
@@ -72,6 +72,7 @@ document.addEventListener('click', (e) => {
     t.closest('#settings-panel') ||
     t.closest('#label-picker') ||
     t.closest('#av-overlay') ||               // artifact viewer sits above the detail
+    t.closest('#mmd-overlay') ||              // fullscreen mermaid diagram overlay
     t.closest('#tts-bubble') ||               // floating stop-speaking control
     t.closest('[data-label-add]')
   )) return;
@@ -182,6 +183,7 @@ const avImg = document.getElementById('av-img');
 const avFrame = document.getElementById('av-frame');
 const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
+const avSrcBtn = document.getElementById('av-src');
 const MD_EXT = /\.(md|markdown)$/i;
 const HTML_EXT = /\.html?$/i;
 // Reset the shared overlay to a clean text-mode state (used by both openers).
@@ -195,9 +197,32 @@ function avReset(name, uri) {
   avBody.hidden = false;
   avBody.className = '';
   avDownload.hidden = true;
+  avMd = null;
+  avShowSrc = false;
+  avSrcBtn.hidden = true;
+  avSrcBtn.classList.remove('on');
   avModal.classList.remove('expanded'); // each open starts at the default size
   avOverlay.hidden = false;
 }
+// Markdown preview with a rendered ⇄ source toggle (the </> button in the
+// head). avMd holds the raw text while a markdown preview is up; the toggle
+// re-renders in place, so it also survives expand/restore.
+let avMd = null, avShowSrc = false;
+function showMarkdown(text) {
+  avMd = text;
+  avSrcBtn.hidden = false;
+  renderAvMd();
+}
+function renderAvMd() {
+  avSrcBtn.classList.toggle('on', avShowSrc);
+  if (avShowSrc) { avBody.className = ''; avBody.textContent = avMd; }
+  else { avBody.className = 'md'; avBody.innerHTML = md(avMd); mdEnhance(avBody); }
+}
+avSrcBtn.onclick = () => { avShowSrc = !avShowSrc; renderAvMd(); };
+// An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
+// the auto-attached worker brief is markdown in a `.prompt` file. The hint
+// wins; the extension regex is the fallback.
+const isMdArtifact = (art, name) => (art && art.type) === 'markdown' || MD_EXT.test(name);
 async function openArtifact(uri) {
   const name = uriBasename(uri) || uri;
   avReset(name, uri);
@@ -211,7 +236,7 @@ async function openArtifact(uri) {
   avName.textContent = title;
   const am = /^attachment:\/\/(.+)$/.exec(uri);
   if (am) {
-    return openAttachment({ id: am[1], name: (at && at.label) || name, mime: '' });
+    return openAttachment({ id: am[1], name: (at && at.label) || name, mime: '', type: at && at.type });
   }
   // Non-attachment artifact (file:// / bare path). Dispatch by extension: an
   // image renders inline from the raw byte serve; text/markdown keeps the text
@@ -243,10 +268,8 @@ async function openArtifact(uri) {
   // download offer, carrying the server's message.
   try {
     const r = await api.artifact(uri);
-    if (MD_EXT.test(name)) {
-      // reuse the board's card-body markdown renderer (md.js) — no new library
-      avBody.className = 'md';
-      avBody.innerHTML = md(r.content);
+    if (isMdArtifact(at, name)) {
+      showMarkdown(r.content); // rendered via md.js, with the ⇄ source toggle
     } else {
       avBody.className = '';
       avBody.textContent = r.content; // non-markdown: plain preformatted text
@@ -272,7 +295,7 @@ export async function openAttachment(att) {
   avDownload.hidden = false;
   const showImage = () => { avBody.hidden = true; avImgWrap.hidden = false; avImg.src = url; avImg.alt = name; };
   const showText = (text) => {
-    if (MD_EXT.test(name)) { avBody.className = 'md'; avBody.innerHTML = md(text); }
+    if (isMdArtifact(att, name)) showMarkdown(text);
     else { avBody.className = ''; avBody.textContent = text; }
   };
   const mime = String(att.mime || '');
@@ -467,8 +490,14 @@ export function renderDetail() {
     labWrap.appendChild(add);
   }
 
-  // body (don't clobber an in-progress description edit)
-  if (!editingBody) setHtmlIfChanged(bodyEl, md(c.body || ''));
+  // body (don't clobber an in-progress description edit). mdEnhance runs
+  // unconditionally: it is per-node guarded, so an unchanged body is a no-op,
+  // and enhanced DOM (copy buttons, diagrams) never changes the cached html
+  // string setHtmlIfChanged compares against.
+  if (!editingBody) {
+    setHtmlIfChanged(bodyEl, md(c.body || ''));
+    mdEnhance(bodyEl);
+  }
 
   // artifacts: attributes.artifacts [{uri, label}] — shown by FILENAME, not the
   // raw uri. http(s) uris open normally; anything else (file:// / local paths)
