@@ -187,9 +187,13 @@ test('wake heartbeat: a live lieutenant with pending items is woken by the sweep
     await sleep(600);
     assert.strictEqual(readSends(fdir, 'bc-lt-ada').length, 1, 'coalesced while the nudge is fresh');
     assert.strictEqual((await s.api('GET', '/api/board')).body.events.filter((e) => e.kind === 'respawned').length, 0);
-    // drained AND acked -> nothing pending -> the sweep goes quiet
-    const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
-    await s.api('POST', '/api/feed/ack', { seq: items[items.length - 1].seq });
+    // acked -> nothing pending -> the sweep goes quiet. Ack the seeded item by
+    // its global seq (1) directly rather than draining first: a GET /api/feed
+    // drain clears the nudge while the item is still pending, and any sweep tick
+    // landing in the drain->ack gap re-fires the wake (the historic flake under
+    // load — the drain deletes the nudge entry, so a wide TTL can't suppress it).
+    // Acking closes the queue atomically, leaving no pending-but-un-nudged window.
+    await s.api('POST', '/api/feed/ack', { seq: 1 });
     await sleep(600);
     assert.strictEqual(readSends(fdir, 'bc-lt-ada').length, 1, 'no re-nudge after the queue is handled');
   } finally {
@@ -234,6 +238,9 @@ test('wake heartbeat: a stale nudge lapses after BC_WAKE_TTL_MS and the sweep re
 test('dead worker without done: worker-died QueueItem + card event, card stays Working, flagged once', async () => {
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
   const nowIso = new Date().toISOString();
+  fakeSession(fdir, 'bc-lt-ada:w-fine'); // alive BEFORE boot: if the first supervise
+  // tick raced ahead of this marker it would flag the live 'fine' worker died too,
+  // yielding two worker-died items. w-doomed and w-finished windows stay dead.
   const s = await startServer({
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
@@ -266,7 +273,6 @@ test('dead worker without done: worker-died QueueItem + card event, card stays W
     }),
   });
   try {
-    fakeSession(fdir, 'bc-lt-ada:w-fine'); // alive via marker; w-doomed and w-finished windows are dead
     await until('worker-died queue item', async () => {
       const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
       return items.some((i) => i.kind === 'worker-died' && i.card === 'doomed');

@@ -57,12 +57,14 @@ function stallSeed(cardId, ageMs) {
 
 test('alive worker silent past the threshold: ONE worker-stalled item + level-1 card event, no duplicates on later ticks', async () => {
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  fakeSession(fdir, 'bc-lt-ada:w-slug'); // ALIVE before the server boots — if the
+  // first supervise tick raced ahead of this marker the worker would read DEAD,
+  // get flagged worker-died once (permanent), and the stall path would never run.
   const s = await startServer({
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0', BC_WORKER_STALE_SECS: '1' },
     seed: (dir) => seedBoard(dir, stallSeed('slug', 10000)),
   });
   try {
-    fakeSession(fdir, 'bc-lt-ada:w-slug'); // ALIVE — the whole point: not dead, just silent
     await until('worker-stalled queue item', async () => {
       const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
       return items.some((i) => i.kind === 'worker-stalled' && i.card === 'slug');
@@ -86,12 +88,13 @@ test('alive worker silent past the threshold: ONE worker-stalled item + level-1 
 
 test('a fresh worker.signal re-arms the watchdog: lastSignalAt resets the clock, then a second stall fires AGAIN', async () => {
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  fakeSession(fdir, 'bc-lt-ada:w-slug'); // ALIVE before boot (see the first test): a
+  // first tick that raced ahead of the marker would flag worker-died and never stall.
   const s = await startServer({
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0', BC_WORKER_STALE_SECS: '1' },
     seed: (dir) => seedBoard(dir, stallSeed('slug', 10000)),
   });
   try {
-    fakeSession(fdir, 'bc-lt-ada:w-slug');
     await until('first worker-stalled item', async () => {
       const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
       return items.filter((i) => i.kind === 'worker-stalled').length === 1;
@@ -153,12 +156,13 @@ test('a DEAD silent worker takes the worker-died path, never worker-stalled (mut
 
 test('leaving Working clears staleNotified (mirrors the stopNotified lifecycle)', async () => {
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  fakeSession(fdir, 'bc-lt-ada:w-slug'); // ALIVE before boot (see the first test): a
+  // first tick that raced ahead of the marker would flag worker-died and never stall.
   const s = await startServer({
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0', BC_WORKER_STALE_SECS: '1' },
     seed: (dir) => seedBoard(dir, stallSeed('slug', 10000)),
   });
   try {
-    fakeSession(fdir, 'bc-lt-ada:w-slug');
     await until('worker-stalled fired (flag set)', async () => {
       const b = (await s.api('GET', '/api/board')).body;
       return b.workers[0] && b.workers[0].staleNotified;
