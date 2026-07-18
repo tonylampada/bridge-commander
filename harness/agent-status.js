@@ -8,7 +8,9 @@
 // null, never a throw.
 //
 // Status shape (the port's `status(ref)` return value):
-//   { model, contextUsed, contextWindow, rateLimits? }
+//   { model, contextUsed, contextWindow, effort?, rateLimits? }
+//   effort (reasoning level, e.g. "high") — from the claude sidecar or the codex
+//   turn_context; absent when unknown (e.g. the claude transcript fallback).
 //   rateLimits (codex only — claude does not persist them): { primary?,
 //   secondary? } each { usedPercent, windowMinutes, resetsAt (epoch secs) }.
 //
@@ -151,6 +153,8 @@ function claudeSidecarStatus(ref, opts = {}) {
     contextUsed: Number(cw.total_input_tokens) || 0,
     contextWindow: window,
   };
+  const effort = p.effort && p.effort.level;
+  if (effort) out.effort = String(effort);
   const rl = claudeSidecarRateLimits(p.rate_limits);
   if (rl) out.rateLimits = rl;
   return out;
@@ -263,6 +267,7 @@ function codexStatus(ref, opts = {}) {
   const lines = text.split('\n');
   let usage = null;
   let model = null;
+  let effort = null;
   for (let i = lines.length - 1; i >= 0 && !(usage && model); i--) {
     const line = lines[i];
     let doc = null;
@@ -273,7 +278,10 @@ function codexStatus(ref, opts = {}) {
     } else if (!model && line.includes('"turn_context"')) {
       try { doc = JSON.parse(line); } catch { continue; }
       const p = doc && doc.payload;
-      if (doc.type === 'turn_context' && p && p.model) model = String(p.model);
+      if (doc.type === 'turn_context' && p && p.model) {
+        model = String(p.model);
+        if (p.effort) effort = String(p.effort);
+      }
     }
   }
   if (!usage) return null;
@@ -282,6 +290,7 @@ function codexStatus(ref, opts = {}) {
     contextUsed: usage.info.last_token_usage.total_tokens || 0,
     contextWindow: usage.info.model_context_window || null,
   };
+  if (effort) out.effort = effort;
   const rl = codexRateLimits(usage.rate_limits);
   if (rl) out.rateLimits = rl;
   return out;
@@ -317,7 +326,8 @@ function fmtWindowLabel(minutes) {
 
 // formatStatus(status) -> the human /status reply.
 function formatStatus(st) {
-  const lines = ['model: ' + (st.model || 'unknown')];
+  const modelLine = 'model: ' + (st.model || 'unknown') + (st.effort ? ' (' + st.effort + ')' : '');
+  const lines = [modelLine];
   if (Number.isFinite(st.contextUsed) && st.contextWindow > 0) {
     const pct = Math.round((st.contextUsed / st.contextWindow) * 100);
     lines.push('context: ' + fmtInt(st.contextUsed) + ' / ' + fmtInt(st.contextWindow)

@@ -111,6 +111,7 @@ test('claudeStatus: prefers the sidecar — real 1M window + rate limits (Opus c
       session_id: sid,
       cwd: ws,
       model: { id: 'claude-opus-4-8', display_name: 'Opus 4.8' },
+      effort: { level: 'high' },
       context_window: { context_window_size: 1000000, total_input_tokens: 118213, used_percentage: 11.8 },
       rate_limits: {
         five_hour: { used_percentage: 42, resets_at: 2000000000 },
@@ -127,16 +128,36 @@ test('claudeStatus: prefers the sidecar — real 1M window + rate limits (Opus c
       assert.strictEqual(st.contextWindow, 1000000);
       assert.strictEqual(st.contextUsed, 118213);
       assert.strictEqual(st.model, 'claude-opus-4-8');
+      assert.strictEqual(st.effort, 'high');
       assert.deepStrictEqual(st.rateLimits, {
         primary: { usedPercent: 42, windowMinutes: 300, resetsAt: 2000000000 },
         secondary: { usedPercent: 7, windowMinutes: 10080, resetsAt: 2000100000 },
       });
+      assert.match(formatStatus(st), /model: claude-opus-4-8 \(high\)/);
       assert.match(formatStatus(st), /context: 118,213 \/ 1,000,000 tokens \(12%\)/);
       assert.match(formatStatus(st), /5h limit: 42% used/);
       assert.match(formatStatus(st), /1w limit: 7% used/);
     } finally {
       fs.rmSync(projectsDir, { recursive: true, force: true });
     }
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
+test('claudeSidecarStatus: no effort field → effort absent from the status shape', () => {
+  const ws = tmpdir('bc-status-sidecar-noeffort-');
+  try {
+    const sid = 'noeffort-1';
+    writeSidecar(ws, sid, {
+      session_id: sid,
+      cwd: ws,
+      model: { id: 'claude-opus-4-8' },
+      context_window: { context_window_size: 200000, total_input_tokens: 5000 },
+    });
+    const st = claudeSidecarStatus({ cwd: ws, resumeId: sid });
+    assert.deepStrictEqual(st, { model: 'claude-opus-4-8', contextUsed: 5000, contextWindow: 200000 });
+    assert.strictEqual(formatStatus(st), 'model: claude-opus-4-8\n\ncontext: 5,000 / 200,000 tokens (3%)');
   } finally {
     fs.rmSync(ws, { recursive: true, force: true });
   }
@@ -233,7 +254,7 @@ test('codexStatus: last token_count wins — totals, window, model, rate limits'
   try {
     writeRollout(sessionsDir, '2026/06/13', THREAD,
       JSON.stringify({ type: 'session_meta', payload: { id: THREAD } }) + '\n'
-      + JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5' } }) + '\n'
+      + JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-5.5', effort: 'medium' } }) + '\n'
       + tokenCountLine(11111) // stale — must not win
       + tokenCountLine(58034, {
         primary: { used_percent: 1.0, window_minutes: 300, resets_at: 1781371082 },
@@ -242,6 +263,7 @@ test('codexStatus: last token_count wins — totals, window, model, rate limits'
     const st = codexStatus({ resumeId: THREAD }, { sessionsDir });
     assert.deepStrictEqual(st, {
       model: 'gpt-5.5',
+      effort: 'medium',
       contextUsed: 58034,
       contextWindow: 258400,
       rateLimits: {
@@ -250,7 +272,7 @@ test('codexStatus: last token_count wins — totals, window, model, rate limits'
       },
     });
     const text = formatStatus(st);
-    assert.match(text, /model: gpt-5\.5/);
+    assert.match(text, /model: gpt-5\.5 \(medium\)/);
     assert.match(text, /context: 58,034 \/ 258,400 tokens \(22%\)/);
     assert.match(text, /5h limit: 1% used/);
     assert.match(text, /1w limit: 21% used/);
