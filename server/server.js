@@ -1457,7 +1457,9 @@ function attachBriefArtifact(card, ref) {
   if (!Array.isArray(card.attributes.artifacts)) card.attributes.artifacts = [];
   const uri = 'file://' + briefFile;
   if (!card.attributes.artifacts.some((a) => a && a.uri === uri)) {
-    card.attributes.artifacts.push({ uri, label: 'brief' });
+    // type: the brief is markdown in a `.prompt` file (the harness's resume
+    // contract owns that name) — the hint lets the viewer render it as such
+    card.attributes.artifacts.push({ uri, label: 'brief', type: 'markdown' });
   }
 }
 

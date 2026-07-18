@@ -5,7 +5,7 @@
 import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml } from './util.js';
-import { md } from './md.js';
+import { md, mdEnhance } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
 import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
@@ -306,11 +306,13 @@ export function renderChat() {
     if (typingEl) typingEl.remove();
     const fresh = blocks.slice(prev.blocks.length);
     feedEl.insertAdjacentHTML('beforeend', fresh.map((b) => b.html).join('') + tail);
+    mdEnhance(feedEl);
     wireSpeak(fresh, target);
     if (switched) scrollFeedToBottom();
     else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
   } else {
     feedEl.innerHTML = blocks.map((b) => b.html).join('') + tail || emptyFeedHtml(lt);
+    mdEnhance(feedEl);
     wireSpeak(blocks, target);
     if (switched) scrollFeedToBottom(); // deferred: the feed may still be hidden this frame
     else if (pinned) feedEl.scrollTop = feedEl.scrollHeight;
