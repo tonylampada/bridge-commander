@@ -56,6 +56,7 @@ const crypto = require('crypto');
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
+const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
@@ -294,6 +295,8 @@ const BUILTIN_KINDS = {
   signal: { emoji: '📡', level: 2 },
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
+  'hook-ran': { emoji: '🪝', level: 2 },
+  'hook-failed': { emoji: '🧨', level: 1 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
   'worker-stalled': { emoji: '🐢', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
@@ -1426,6 +1429,69 @@ function ownerSession(card) {
 function workerName(ref) { return ref.window ? ref.session + ':' + ref.window : ref.session; }
 function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
 
+// ---------- lifecycle hooks (workspace-owned scripts; server/hooks.js) ----------
+// Events v1: worker-done, worker-died, card-archived. Fire-and-forget — a hook
+// never blocks or fails the lifecycle outcome it observes. The ONE ordering
+// guarantee: card-archived hooks are AWAITED before the worktree release (the
+// PR-watch path), so a hook can still reach paths inside $BC_WORKTREE.
+const HOOK_TIMEOUT_MS = parseInt(process.env.BC_HOOK_TIMEOUT_MS, 10) > 0
+  ? parseInt(process.env.BC_HOOK_TIMEOUT_MS, 10) : 0; // 0 = the module default (~120s)
+
+// Hook env context: prefer the live worker record, fall back to the card's
+// own attributes (the worker registry entry may already be gone on archive).
+function hookContext(card, w) {
+  const attrs = (card && card.attributes) || {};
+  const project = findProject(String((w && w.project) || attrs.repo || ''));
+  return {
+    workspace: WORKSPACE,
+    card: card.id,
+    repo: project ? project.path : '',
+    worktree: (w && w.worktree && w.worktree.path) || String(attrs.worktree || ''),
+    branch: (w && w.branch) || String(attrs.branch || ''),
+  };
+}
+
+// fireHooks(event, card, w, opts) — run the workspace's hooks for a lifecycle
+// event and land each result as a timeline event: hook-ran (level 2, routine)
+// per success, hook-failed (level 1 — the captain's bell) per failure, text =
+// filename + exit detail + trimmed output. Failures also queuePush to the
+// owner. Never throws (so every call site can stay fire-and-forget); the
+// returned promise resolves after the events landed, which is what lets the
+// card-archived call site await it BEFORE releasing the worktree.
+//
+// An ARCHIVED card can't take timeline events — it left the board and its
+// archive.jsonl snapshot is already frozen — so when the card is gone (or the
+// call site knows it is leaving: opts.boardLevel) the events land on the
+// board-level stream with a card reference instead of being dropped.
+async function fireHooks(event, card, w, opts) {
+  try {
+    const results = await runHooks(event, hookContext(card, w),
+      HOOK_TIMEOUT_MS ? { timeoutMs: HOOK_TIMEOUT_MS } : undefined);
+    if (!results.length) return;
+    const live = (opts && opts.boardLevel) ? null : findCard(card.id);
+    for (const r of results) {
+      const detail = r.timedOut ? 'timed out'
+        : r.error ? String(r.error)
+        : 'exit ' + r.code;
+      const text = event + ' hook ' + r.hook + (r.ok ? ' ok' : ' FAILED') + ' (' + detail + ')'
+        + (r.output ? ': ' + r.output : '');
+      const ev = mkEvent({ text, actor: 'server' }, { kind: r.ok ? 'hook-ran' : 'hook-failed' });
+      if (live) {
+        live.events.push(ev);
+        live.updated = now();
+      } else {
+        ev.card = card.id;
+        ev.cardTitle = card.title;
+        board.events.push(ev);
+      }
+      if (!r.ok) queuePush(card.owner, { kind: 'hook-failed', card: card.id, text: text.slice(0, 2000) });
+    }
+    saveBoard(); broadcast();
+  } catch (e) {
+    console.error(now() + ' ' + event + ' hooks for ' + card.id + ' failed: ' + String((e && e.message) || e));
+  }
+}
+
 // The system move into Working — card.start is the ONE way in (invariant:
 // Working ⇔ live worker). Clears any pendingOrder (a start-order just executed).
 function enterWorking(card, text) {
@@ -1904,6 +1970,7 @@ async function superviseTick() {
           kind: 'worker-died', card: card.id,
           text: 'worker session ' + workerName(w.ref) + ' died without reporting done',
         });
+        fireHooks('worker-died', card, w); // fire-and-forget
       }
     }
     if (changed) { saveBoard(); broadcast(); }
@@ -1959,6 +2026,9 @@ async function prWatchTick() {
         const wtRec = w ? w.worktree
           : (card.attributes && card.attributes.worktree ? { path: card.attributes.worktree, tool: 'git' } : null);
         let note = merged.url;
+        // card-archived hooks run — and finish or time out — BEFORE the
+        // worktree release: a hook may need paths inside $BC_WORKTREE.
+        await fireHooks('card-archived', card, w, { boardLevel: true });
         if (wtRec && project) {
           const rel = await releaseWorktree(wtRec, project.path);
           if (!rel.released) {
@@ -2325,6 +2395,7 @@ const server = http.createServer(async (req, res) => {
         const r = workerDone(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, 400, { error: r.error });
         saveBoard(); broadcast();
+        fireHooks('worker-done', card, findWorker(card.id)); // fire-and-forget
         return sendJson(res, 200, { ok: true, event: r.event, card: publicCard(card, 'user') });
       }
       if (!sub && req.method === 'GET') return sendJson(res, 200, publicCard(card, url.searchParams.get('user') || 'user'));
@@ -2356,9 +2427,13 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true, event: ev });
       }
       if (sub === 'archive' && req.method === 'POST') {
+        const w = findWorker(card.id); // captured BEFORE archiveCard drops the registry entry
         const r = archiveCard(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, 400, { error: r.error });
         saveBoard(); broadcast();
+        // Fire-and-forget is safe here: this path never releases the worktree,
+        // so the hooks-before-release ordering holds trivially.
+        fireHooks('card-archived', card, w, { boardLevel: true });
         return sendJson(res, 200, r);
       }
       // promote-to-artifact — the deliberate tool. POST adds, DELETE removes an

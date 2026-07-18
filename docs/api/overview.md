@@ -183,6 +183,23 @@ session status):
 | worker session dies without `done` | `worker-died` QueueItem to the owner + level-2 event; card stays Working, flagged |
 | lieutenant session dies | server auto-respawn (resume when possible; else relaunch with charter + owned cards + pending queue as the prompt), level-1 event, drain nudge; 3 failed attempts → level-1 needs-captain |
 | level-1 event / owed reply | captain's bell: unseen = level-1 events ∪ unseen lieutenant thread replies, per user, cleared by reading — bridge semantics |
+| `worker.done` · worker death · card archived | lifecycle hooks: the workspace's own executable scripts in `.bridge-commander/hooks/<event>/` run (see below) |
+
+### Lifecycle hooks
+
+The workspace owns deterministic teardown: every executable file in
+`.bridge-commander/hooks/<event>/` runs on that lifecycle event — alphabetical, sequential,
+cwd = workspace root, context via env (`BC_EVENT`, `BC_CARD`, `BC_REPO`, `BC_WORKTREE`,
+`BC_BRANCH`; empty when N/A). Events v1: `worker-done`, `worker-died`, `card-archived`.
+Missing dir = no-op; non-executables are skipped.
+
+Hooks are fire-and-forget — they never block or fail the lifecycle outcome they observe
+(per-hook timeout ~120s, `BC_HOOK_TIMEOUT_MS` overrides, then kill; output captured and
+capped). The ONE ordering guarantee: `card-archived` hooks finish (or time out) BEFORE the
+worktree release, so a hook can still reach paths inside `$BC_WORKTREE`. Each run lands on
+the timeline: `hook-ran` level 2 per success, `hook-failed` level 1 (the captain's bell) with
+filename + exit detail + trimmed output; an archived card's events land on the board stream
+with a card reference, and failures also queue to the owner.
 
 ## Memory
 

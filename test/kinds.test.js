@@ -22,6 +22,8 @@ const BUILTINS = {
   signal: { emoji: '📡', level: 2 },
   'worker-done': { emoji: '✅', level: 2 },
   'worker-died': { emoji: '💀', level: 2 },
+  'hook-ran': { emoji: '🪝', level: 2 },
+  'hook-failed': { emoji: '🧨', level: 1 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
   'worker-stalled': { emoji: '🐢', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
