@@ -138,7 +138,7 @@ function windowLabel(minutes) {
 export function statusBlockHtml(st) {
   if (!st || typeof st !== 'object') return '';
   const rows = [];
-  rows.push('<div class="st-model">' + esc(st.model || 'unknown') + '</div>');
+  rows.push('<div class="st-model">' + esc(st.model || 'unknown') + (st.effort ? ' <span class="st-effort">(' + esc(st.effort) + ')</span>' : '') + '</div>');
   if (st.contextUsed > 0 && st.contextWindow > 0) {
     const pct = Math.min(100, Math.round((st.contextUsed / st.contextWindow) * 100));
     rows.push(barRowHtml('context', pct, fmtTokens(st.contextUsed) + ' / ' + fmtTokens(st.contextWindow) + ' · ' + pct + '%'));

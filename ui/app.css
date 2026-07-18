@@ -184,6 +184,7 @@ body.resizing { user-select: none; cursor: col-resize; }
    visual language reused from the lane chips) */
 .status-block { display: flex; flex-direction: column; gap: 7px; }
 .status-block .st-model { color: var(--text); font-size: 13px; }
+.status-block .st-effort { color: var(--dim); }
 .status-block .st-row { display: flex; align-items: center; gap: 9px; }
 .status-block .st-lbl { color: var(--dim); flex: none; width: 68px; }
 .status-block .st-bar { flex: 1; min-width: 40px; height: 7px; }
