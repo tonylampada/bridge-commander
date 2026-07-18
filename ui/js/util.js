@@ -115,6 +115,16 @@ export function ctxBarHtml(st) {
     + '<span class="ctx-fill' + cls + '" style="width:' + pct + '%"></span></span>';
 }
 
+// owed-reply indicator (chat header trigger + switcher rows): same tri-state
+// visual language as the tile corner and the chat typing bubble — animated dots
+// (owed, seen), static ⏳ (queued, not picked up), static amber ⚠ (stale).
+export function owedIndHtml(state, stale) {
+  if (!state) return '';
+  if (stale) return '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>';
+  if (state === 'queued') return '<span class="t-typing queued" title="delivered — not picked up yet">⏳</span>';
+  return '<span class="t-typing" title="owes you a reply"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>';
+}
+
 // green → yellow (≥60%) → red (≥80%) — the shared context-bar thresholds
 function ctxFillCls(pct) { return pct >= 80 ? ' red' : pct >= 60 ? ' yellow' : ''; }
 function barRowHtml(label, pct, val) {
@@ -133,7 +143,7 @@ function windowLabel(minutes) {
   return minutes + 'min';
 }
 // /status rich reply: model name, context usage as a real progress bar (reusing
-// the lane-chip context-bar visual language), plus rate-limit rows when present
+// the chat-header context-bar visual language), plus rate-limit rows when present
 // (codex). Fed the structured `status` payload the server attaches to the reply.
 export function statusBlockHtml(st) {
   if (!st || typeof st !== 'object') return '';

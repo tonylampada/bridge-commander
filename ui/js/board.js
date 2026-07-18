@@ -1,131 +1,20 @@
-// board: lieutenant lane above the columns, dense tiles, drag&drop, long-press
-// move menu, new-card / new-lieutenant modals.
-import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, lieutenantAvatar, lieutenantUnread, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, render, workerFor } from './state.js';
+// board: dense card tiles, drag&drop, long-press move menu, new-card /
+// new-lieutenant modals. (Lieutenant switching lives in the chat header —
+// ltswitcher.js — not on the board.)
+import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, workerFor } from './state.js';
 import { api } from './api.js';
-import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, setHtmlIfChanged, ctxBarHtml } from './util.js';
+import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, ctxBarHtml } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
-import { openCardPane, openLieutenantPane } from './pane.js';
-import { avatarHtml, avatarGridHtml, wireAvatarGrid } from './avatars.js';
+import { openCardPane } from './pane.js';
+import { avatarGridHtml, wireAvatarGrid } from './avatars.js';
 
-const laneEl = document.getElementById('lane');
 const boardEl = document.getElementById('board');
 
 function byRecency(a, b) {
   return (new Date(cardRecency(b) || 0).getTime() || 0) - (new Date(cardRecency(a) || 0).getTime() || 0);
 }
-
-// ---------- lieutenant lane (above the columns) ----------
-// One card per lieutenant: color, name, charter tooltip, live counts, unread
-// badge for his main chat. Clicking it opens that lieutenant's chat — the
-// captain converses only with lieutenants.
-function ltCardHtml(l) {
-  const mine = cards().filter((c) => c.owner === l.id);
-  const working = mine.filter((c) => c.column === 'working').length;
-  const unread = lieutenantUnread(l);
-  const active = S.chatMode && S.chatMode.mode === 'lieutenant' && S.chatMode.id === l.id;
-  const owed = targetOwedState('lieutenant:' + l.id);
-  const staleW = owed && targetOwedStale('lieutenant:' + l.id);
-  const ind = staleW
-    ? '<span class="t-typing stale" title="no response yet — the lieutenant may be stuck">⚠</span>'
-    : owed === 'queued'
-    ? '<span class="t-typing queued" title="delivered — not picked up yet">⏳</span>'
-    : owed
-    ? '<span class="t-typing" title="owes you a reply"><span class="tdot"></span><span class="tdot"></span><span class="tdot"></span></span>'
-    : '';
-  const av = lieutenantAvatar(l.id);
-  const face = av != null
-    ? '<span class="lt-face" style="border-color:' + esc(lieutenantColor(l.id)) + '">' + avatarHtml(av) + '</span>'
-    : '<span class="lt-dot" style="background:' + esc(lieutenantColor(l.id)) + '"></span>';
-  return '<div class="lt-card' + (active ? ' on' : '') + (filterSelected('owner', l.id) ? ' filtered' : '') + '" data-id="' + esc(l.id) + '"' +
-    ' style="border-left-color:' + esc(lieutenantColor(l.id)) + '"' +
-    (l.charter ? ' title="' + esc(l.charter.split('\n')[0].slice(0, 160)) + '"' : '') + '>' +
-    face +
-    '<span class="lt-name">' + esc(l.name || l.id) + '</span>' +
-    ind +
-    ctxBarHtml(l.agentStatus) +
-    '<span class="lt-counts">' + mine.length + (working ? ' · 🔨' + working : '') + '</span>' +
-    '<button class="lt-peek" title="watch this lieutenant\'s terminal live">👁</button>' +
-    '<button class="lt-menu" title="lieutenant actions">⋯</button>' +
-    (unread ? '<span class="badge-n">' + (unread > 99 ? '99+' : unread) + '</span>' : '') +
-    '</div>';
-}
-
-function renderLane() {
-  const html = lieutenants().map(ltCardHtml).join('') +
-    '<button class="lt-add" title="new lieutenant">＋ lieutenant</button>';
-  if (!setHtmlIfChanged(laneEl, html)) return; // unchanged — keep the DOM (and its handlers)
-  laneEl.querySelectorAll('.lt-card').forEach((el) => {
-    el.onclick = (e) => {
-      if (e.target.closest('.lt-menu')) { e.stopPropagation(); openLtMenu(el.dataset.id, e.clientX, e.clientY); return; }
-      if (e.target.closest('.lt-peek')) { e.stopPropagation(); openLieutenantPane(el.dataset.id); return; }
-      openLieutenantChat(el.dataset.id);
-    };
-    el.oncontextmenu = (e) => { e.preventDefault(); toggleFilter('owner', el.dataset.id); };
-  });
-  laneEl.querySelector('.lt-add').onclick = openNewLieutenant;
-}
-
-// lieutenant ⋯ menu — lieutenant.retire lives here (explicit only, per the DNA:
-// the server refuses while the lieutenant still owns non-archived cards).
-function openLtMenu(ltId, x, y) {
-  const l = lieutenant(ltId);
-  if (!l) return;
-  menuEl.textContent = '';
-  const head = document.createElement('div');
-  head.className = 'mm-head';
-  head.textContent = l.name || ltId;
-  menuEl.appendChild(head);
-  const appearance = document.createElement('button');
-  appearance.textContent = '🖼 appearance';
-  appearance.onclick = (e) => { e.stopPropagation(); closeMoveMenu(); openAppearancePopover(ltId, x, y); };
-  menuEl.appendChild(appearance);
-  const owned = cards().filter((c) => c.owner === ltId).length;
-  const retire = document.createElement('button');
-  retire.className = 'danger';
-  retire.textContent = '⚓ retire' + (owned ? ' (' + owned + ' card' + (owned > 1 ? 's' : '') + ' in the way)' : '');
-  retire.onclick = async () => {
-    closeMoveMenu();
-    if (!confirm('Retire ' + (l.name || ltId) + '? Its live session is killed and its queue removed.')) return;
-    try { await api.retireLieutenant(ltId); } catch (e) { alert(e.message); }
-  };
-  menuEl.appendChild(retire);
-  menuEl.hidden = false;
-  const r = menuEl.getBoundingClientRect();
-  menuEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
-  menuEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
-}
-
-// ---------- appearance popover (⋯ → appearance): avatar + color, each pick
-// PATCHes immediately (mirrors the label manager's recolor-on-change) ----------
-const apEl = document.getElementById('ap-popover');
-const apColor = document.getElementById('ap-color');
-const apGrid = document.getElementById('ap-grid');
-let apLtId = null;
-function openAppearancePopover(ltId, x, y) {
-  const l = lieutenant(ltId);
-  if (!l) return;
-  apLtId = ltId;
-  apColor.value = lieutenantColor(ltId);
-  apGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
-  wireAvatarGrid(apGrid, async (idx) => {
-    try { await api.updateLieutenant(ltId, { avatar: idx }); } catch (e) { alert(e.message); }
-  });
-  apEl.hidden = false;
-  const r = apEl.getBoundingClientRect();
-  apEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
-  apEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
-}
-export function closeAppearancePopover() { apLtId = null; apEl.hidden = true; }
-export function appearancePopoverOpen() { return !apEl.hidden; }
-apColor.onchange = async () => {
-  if (!apLtId) return;
-  try { await api.updateLieutenant(apLtId, { color: apColor.value }); } catch (e) { alert(e.message); }
-};
-document.addEventListener('click', (e) => {
-  if (!apEl.hidden && !apEl.contains(e.target) && !e.target.closest('.lt-menu')) closeAppearancePopover();
-});
 
 // ---------- tiles ----------
 function tileHtml(c) {
@@ -197,7 +86,6 @@ function tileHtml(c) {
 }
 
 export function renderBoard() {
-  renderLane();
   const cols = columns();
   const html = !cols.length
     ? '<div class="empty">waiting for board…</div>'
@@ -402,7 +290,7 @@ document.getElementById('lt-modal').onsubmit = async (e) => {
   e.preventDefault();
   const name = document.getElementById('lt-name').value.trim();
   if (!name) return;
-  // The lane button births a REAL lieutenant: the server spawns its agent
+  // This modal births a REAL lieutenant: the server spawns its agent
   // session (doctrine + charter as launch prompt) and persists the ref. Slow
   // (up to a minute) — keep the modal up, button disabled, until it lands.
   const btn = document.getElementById('lt-create');

@@ -47,8 +47,8 @@ document.getElementById('dt-close').onclick = closeDetail;
 // the one closeDetail path (which also returns the left chat to the lieutenant on
 // desktop). Excluded from "outside": the left chat pane (#chat — on desktop it
 // shows the selected card's own thread, so it's part of the card context, not
-// outside), a .tile (its own handler switches to that card's detail — a switch,
-// not a close), a .lt-card (switches the chat to that lieutenant), the transient
+// outside — and the lieutenant switcher dropdown lives inside it), a .tile (its
+// own handler switches to that card's detail — a switch, not a close), the transient
 // popovers (move menu, label picker, notif/settings panels) so dismissing one of
 // those never also closes the detail, and the floating stop-speaking bubble
 // (stopping TTS is not a navigation intent). Net effect: only a click on the
@@ -64,7 +64,6 @@ document.addEventListener('click', (e) => {
   if (t.closest && (
     t.closest('#chat') ||                     // left chat = the selected card's thread; part of its context
     t.closest('.tile') ||                     // another card — switch, handled by its onclick
-    t.closest('.lt-card') ||                  // a lane card — switches the chat, not a close
     t.closest('#lt-overlay') ||               // new-lieutenant modal
     t.closest('#move-menu') ||                // transient popovers dismiss on their own
     t.closest('#owner-menu') ||

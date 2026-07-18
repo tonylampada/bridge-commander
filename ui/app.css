@@ -181,7 +181,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg.cmd-reply .cmd-out p { margin: 0 0 4px; }
 .msg.cmd-reply .cmd-out p:last-child { margin-bottom: 0; }
 /* /status rich block: model line + context/rate progress bars (context-bar
-   visual language reused from the lane chips) */
+   visual language reused from the chat header) */
 .status-block { display: flex; flex-direction: column; gap: 7px; }
 .status-block .st-model { color: var(--text); font-size: 13px; }
 .status-block .st-effort { color: var(--dim); }
@@ -284,38 +284,67 @@ body.resizing { user-select: none; cursor: col-resize; }
 .att-file .att-pin { position: static; margin-left: 4px; align-self: center; background: var(--panel2); color: var(--dim); }
 @media (hover: none) { .att-pin { opacity: .7; } }
 
-/* ---------- lieutenant lane (above the columns) ---------- */
-#lane {
-  flex: none; display: flex; gap: 8px; align-items: stretch; padding: 10px 14px 0;
-  overflow-x: auto; overflow-y: hidden;
+/* ---------- lieutenant switcher (chat header) ----------
+   The header trigger carries the current lieutenant (face, name, model+effort,
+   context bar, owed state); the dropdown lists every lieutenant with the same
+   info + unread/owed and the per-lieutenant controls (👁 / ⋯ / ＋ lieutenant). */
+#chat-lt {
+  position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px;
+  padding: 3px 8px; margin-left: -4px; border-radius: 8px; text-align: left;
+  transition: background .12s;
 }
-.lt-card {
-  position: relative; flex: none; display: inline-flex; align-items: center; gap: 7px;
-  background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--faint);
-  border-radius: 9px; padding: 7px 11px; cursor: pointer; user-select: none; -webkit-user-select: none;
-  transition: border-color .15s, transform .12s, box-shadow .15s;
+#chat-lt:hover { background: var(--panel); }
+.lt-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
+.clt-main { flex: 0 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.clt-name {
+  display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-size: 13.5px;
+  max-width: 100%; overflow: hidden; white-space: nowrap;
 }
-.lt-card:hover { border-top-color: var(--line2); border-right-color: var(--line2); border-bottom-color: var(--line2); transform: translateY(-1px); }
-.lt-card.on { border-top-color: var(--accent2); border-right-color: var(--accent2); border-bottom-color: var(--accent2); background: var(--accent-soft); }
-.lt-card.filtered { box-shadow: 0 0 0 1px var(--accent2) inset; }
-.lt-card .lt-dot, #chat-title .lt-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; display: inline-block; }
-.lt-card .lt-name { font-size: 13px; font-weight: 620; white-space: nowrap; }
-.lt-card .lt-counts { color: var(--faint); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
-.lt-card .badge-n { top: -6px; right: -6px; }
-.lt-card .t-typing { display: inline-flex; align-items: center; gap: 3px; flex: none; }
-.lt-card .t-typing .tdot { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: typing-blink 1.2s infinite; }
-.lt-card .t-typing .tdot:nth-child(2) { animation-delay: .2s; }
-.lt-card .t-typing .tdot:nth-child(3) { animation-delay: .4s; }
-.lt-card .t-typing.stale { color: var(--warn); font-size: 11px; line-height: 1; }
-.lt-card .t-typing.queued { color: var(--dim); font-size: 11px; line-height: 1; }
-.lt-card .lt-menu { color: var(--faint); font-size: 14px; line-height: 1; padding: 0 3px; border-radius: 5px; opacity: 0; flex: none; transition: opacity .12s, color .12s; }
-.lt-card:hover .lt-menu { opacity: 1; }
-.lt-card .lt-menu:hover { color: var(--fg); background: var(--panel2); }
-.lt-add {
-  flex: none; color: var(--faint); font-size: 12px; border: 1px dashed var(--line2);
-  border-radius: 9px; padding: 7px 12px; white-space: nowrap; transition: color .15s, border-color .15s;
+.clt-meta {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  color: var(--dim); font-size: 10.5px; font-family: var(--mono); white-space: nowrap;
 }
-.lt-add:hover { color: var(--accent); border-color: var(--accent2); }
+.clt-model { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.clt-effort { color: var(--faint); }
+.clt-caret { color: var(--faint); font-size: 10px; flex: none; }
+#chat-lt:hover .clt-caret { color: var(--accent); }
+#chat-lt .badge-n { top: -3px; right: -3px; }
+/* owed indicator (trigger + rows): same dots/⏳/⚠ language as tiles and chat */
+#chat-lt .t-typing, .lts-row .t-typing { display: inline-flex; align-items: center; gap: 3px; flex: none; }
+#chat-lt .t-typing .tdot, .lts-row .t-typing .tdot { width: 4px; height: 4px; border-radius: 50%; background: var(--accent); animation: typing-blink 1.2s infinite; }
+#chat-lt .t-typing .tdot:nth-child(2), .lts-row .t-typing .tdot:nth-child(2) { animation-delay: .2s; }
+#chat-lt .t-typing .tdot:nth-child(3), .lts-row .t-typing .tdot:nth-child(3) { animation-delay: .4s; }
+#chat-lt .t-typing.stale, .lts-row .t-typing.stale { color: var(--warn); font-size: 11px; line-height: 1; }
+#chat-lt .t-typing.queued, .lts-row .t-typing.queued { color: var(--dim); font-size: 11px; line-height: 1; }
+
+#lt-switcher {
+  position: absolute; top: 47px; left: 8px; right: 8px; z-index: 60;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 12px;
+  box-shadow: var(--shadow); animation: pop-in .14s ease-out;
+  max-height: min(440px, 72vh); overflow-y: auto;
+}
+.lts-row {
+  display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 9px;
+  cursor: pointer; user-select: none; -webkit-user-select: none; transition: background .12s;
+}
+.lts-row:hover { background: var(--panel2); }
+.lts-row.on { background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.lts-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.lts-name { display: inline-flex; align-items: center; gap: 6px; font-size: 13.5px; font-weight: 620; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.lts-name .badge-n { position: static; flex: none; }
+.lts-meta { display: flex; align-items: center; gap: 7px; min-width: 0; color: var(--dim); font-size: 11px; font-family: var(--mono); white-space: nowrap; }
+.lts-model { overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.lts-counts { flex: none; color: var(--faint); }
+.lts-cur { flex: none; color: var(--accent); font-size: 12px; }
+.lts-peek, .lts-menu { flex: none; color: var(--faint); font-size: 14px; line-height: 1; padding: 8px 7px; border-radius: 7px; transition: color .12s, background .12s; }
+.lts-peek:hover, .lts-menu:hover { color: var(--accent); background: var(--accent-soft); }
+.lts-add {
+  display: flex; align-items: center; justify-content: center; margin-top: 4px;
+  color: var(--faint); font-size: 12.5px; border: 1px dashed var(--line2);
+  border-radius: 9px; padding: 10px; transition: color .15s, border-color .15s;
+}
+.lts-add:hover { color: var(--accent); border-color: var(--accent2); }
 
 /* ---------- board ---------- */
 #board { flex: 1; min-height: 0; display: flex; gap: 12px; padding: 14px; overflow-x: auto; }
@@ -793,11 +822,13 @@ a.a-uri { color: var(--accent); }
   display: inline-block; flex: none; background-image: url('/ui/img/avatars.png');
   background-size: 800% 800%; background-repeat: no-repeat; border-radius: 5px;
 }
-.lt-card .lt-face, #chat-title .lt-face {
+.lt-face {
   width: 20px; height: 20px; border-radius: 50%; flex: none; padding: 1px;
   border: 1.5px solid; display: inline-flex;
 }
-.lt-card .lt-face .avatar, #chat-title .lt-face .avatar { width: 100%; height: 100%; border-radius: 50%; }
+.lt-face .avatar { width: 100%; height: 100%; border-radius: 50%; }
+#chat-lt .lt-face { width: 26px; height: 26px; }
+.lts-row .lt-face { width: 30px; height: 30px; }
 /* an avatar-bearing agent bubble anchors the face top-left, inside the balloon,
    with the text indented to flow beside it; bubbles with no avatar (fallback:
    no face rendered anywhere for messages) keep the plain look exactly as
@@ -826,7 +857,7 @@ a.a-uri { color: var(--accent); }
 }
 .avatar-cell.none:hover { color: var(--text); }
 
-/* ---------- appearance popover (lane ⋯ → appearance) ---------- */
+/* ---------- appearance popover (switcher ⋯ → appearance) ---------- */
 #ap-popover {
   position: fixed; z-index: 70; display: flex; flex-direction: column; gap: 8px;
   background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; padding: 10px;
@@ -865,16 +896,13 @@ a.a-uri { color: var(--accent); }
   white-space: pre; overscroll-behavior: contain;
 }
 #pane-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 13px; padding: 24px; text-align: center; }
-/* 👁 affordances: hover-revealed on the tile foot and the lieutenant chip */
+/* 👁 affordance: hover-revealed on the tile foot */
 .tile .t-peek { color: var(--faint); font-size: 12px; line-height: 1; padding: 0 2px; border-radius: 5px; opacity: 0; flex: none; transition: opacity .12s, color .12s; }
 .tile:hover .t-peek { opacity: 1; }
 .tile .t-peek:hover { color: var(--accent); background: var(--accent-soft); }
-.lt-card .lt-peek { color: var(--faint); font-size: 12px; line-height: 1; padding: 0 3px; border-radius: 5px; opacity: 0; flex: none; transition: opacity .12s, color .12s; }
-.lt-card:hover .lt-peek { opacity: 1; }
-.lt-card .lt-peek:hover { color: var(--accent); background: var(--accent-soft); }
-@media (hover: none) { .tile .t-peek, .lt-card .lt-peek { opacity: .6; } } /* touch: always visible */
+@media (hover: none) { .tile .t-peek { opacity: .6; } } /* touch: always visible */
 
-/* context bar (lane chips + Working tiles): used ÷ window from agentStatus.
+/* context bar (chat header, switcher rows, Working tiles): used ÷ window from agentStatus.
    Green → yellow → red; red ≈ auto-compact territory (~80%). Rendered only
    when status data exists — graceful absence, like avatars. */
 .ctx-bar {
