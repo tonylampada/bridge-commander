@@ -116,6 +116,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | worker stop | — | ⚙️ turn-end | a worker turn-end IS the stop signal: card still Working and no `done` → immediate `worker-stopped` QueueItem to the owner + level-2 event (coalesced — one per stop, not per turn). After `done`, turn-ends only update counters |
 | worker death | — | ⚙️ supervision loop | a worker ref dead without `done` → `worker-died` QueueItem to the owner + level-2 event; the card stays Working, flagged — the owner resumes (`card.start --resume`) or parks it |
 | worker stall | — | ⚙️ supervision loop | a worker alive but silent too long (no signal/turn-end) → `worker-stalled` level-1 event + QueueItem to the owner; re-armed by real activity |
+| `sysload.watch` | `() → stream of samples` | 🤠 | on-demand monitoring (⚙️ → machine load): machine CPU/RAM/disk + per-worker/per-lieutenant process-tree load + container count, over a dedicated stream. A pure, side-effect-free read — samples exist only while someone watches (first subscriber starts the sampler, last disconnect stops it); nothing lands on the board |
 
 ### harness port (internal seam — the multi-harness contract)
 

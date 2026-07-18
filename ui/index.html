@@ -57,6 +57,10 @@
     </div>
     <div id="ns-list"></div>
   </div>
+  <div class="sp-title">monitoring</div>
+  <div class="sp-row">
+    <button id="mon-open" title="live machine & per-agent load (samples only while open)">📈 machine load</button>
+  </div>
   <div class="sp-title">labels</div>
   <div id="lm-list"></div>
   <form id="lm-new">
@@ -223,6 +227,24 @@
     </div>
     <pre id="pane-body"></pre>
     <div id="pane-msg" hidden></div>
+  </div>
+</div>
+
+<!-- machine-load monitor (⚙️ → monitoring): on-demand, samples only while open -->
+<div id="mon-overlay" hidden>
+  <div id="mon-modal">
+    <div class="pane-head">
+      <span class="pane-live" id="mon-live" title="not sampling"></span>
+      <span class="pane-live-lbl">live</span>
+      <span class="pane-title">machine load</span>
+      <button id="mon-close" title="close">✕</button>
+    </div>
+    <div id="mon-body">
+      <div id="mon-machine"></div>
+      <div class="mon-sec">agents</div>
+      <div id="mon-agents"></div>
+      <div id="mon-containers" hidden></div>
+    </div>
   </div>
 </div>
 

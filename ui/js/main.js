@@ -10,6 +10,7 @@ import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
+import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
 import './resize.js'; // draggable side-panel widths
@@ -79,6 +80,12 @@ document.addEventListener('click', (e) => {
     gearBtn.classList.remove('on');
   }
 });
+// ⚙️ → monitoring: the settings row hands off to the monitor panel
+document.getElementById('mon-open').onclick = () => {
+  spEl.hidden = true;
+  gearBtn.classList.remove('on');
+  openMonitor();
+};
 
 // ---------- mobile tabs ----------
 const tabChat = document.getElementById('tab-chat');
@@ -109,6 +116,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     if (artifactOpen()) closeArtifact();
     else if (paneOpen()) closePane();
+    else if (monitorOpen()) closeMonitor();
     else if (newCardOpen()) closeNewCard();
     else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();
