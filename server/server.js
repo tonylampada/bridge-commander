@@ -57,6 +57,7 @@ const crypto = require('crypto');
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
+const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
@@ -813,6 +814,30 @@ function paneStream(req, res, ref, reason) {
     catch (e) { /* closing a dead pane is a no-op */ }
   });
 }
+
+// ---------- sysload (⚙️ → monitoring: on-demand machine/agent load) ----------
+// Zero cost when closed: the sampler loop (server/sysload.js) exists only
+// while /api/sysload/stream has subscribers — first EventSource starts it,
+// last disconnect stops it. Never rides the board push: samples are per-viewer
+// telemetry, not board state. targets() re-reads the live registries every
+// sample, so rows appear/disappear with workers and lieutenants.
+const SYSLOAD_MS = parseInt(process.env.BC_SYSLOAD_MS, 10) > 0
+  ? parseInt(process.env.BC_SYSLOAD_MS, 10) : 2000;
+function sysloadTargets() {
+  const out = [];
+  for (const w of board.workers) {
+    if (w.done || !isHarnessRef(w.ref)) continue;
+    const card = findCard(w.card);
+    out.push({ kind: 'worker', id: w.card, label: (card && card.title) || w.card,
+      session: w.ref.session, window: w.ref.window || null });
+  }
+  for (const lt of board.lieutenants) {
+    if (!isHarnessRef(lt.ref)) continue;
+    out.push({ kind: 'lieutenant', id: lt.id, label: lt.name, session: lt.ref.session, window: null });
+  }
+  return out;
+}
+const sysload = createSampler({ workspace: WORKSPACE, targets: sysloadTargets, intervalMs: SYSLOAD_MS });
 
 // Named ping (not an SSE comment): comments are invisible to EventSource, so
 // the client's staleness watchdog couldn't see the stream is alive. Pane
@@ -2085,6 +2110,7 @@ const server = http.createServer(async (req, res) => {
         queue_seq: qseq, queue_pending: pending,
         projects: board.projects.length, workers: board.workers.length,
         pid: process.pid,
+        sysload: sysload.stats(), // the monitoring refcount probe: {subscribers, sampling}
       });
     }
     if (route === 'GET /api/archive') {
@@ -2747,6 +2773,19 @@ const server = http.createServer(async (req, res) => {
         else ref = lt.ref;
       }
       return paneStream(req, res, ref, reason);
+    }
+
+    // ----- sysload stream (⚙️ → monitoring; see the sysload section above) -----
+    // The HTTP connection's lifetime IS the subscription, exactly like the
+    // pane streams: connect to watch, disconnect to release. Each sample lands
+    // as one `sample` event; samples flow every ~2s, so no extra ping rides here.
+    if (route === 'GET /api/sysload/stream') {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      const unsubscribe = sysload.subscribe((sample) => {
+        res.write('event: sample\ndata: ' + JSON.stringify(sample) + '\n\n');
+      });
+      req.on('close', unsubscribe);
+      return;
     }
 
     // ----- SSE -----
