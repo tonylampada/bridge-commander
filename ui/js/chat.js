@@ -13,6 +13,8 @@ import { avatarHtml } from './avatars.js';
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
 const ltBtn = document.getElementById('chat-lt'); // switcher trigger (ltswitcher.js owns its click)
+const ltPeekBtn = document.getElementById('chat-lt-peek'); // current lt's 👁/⋯ (ltswitcher.js owns clicks)
+const ltMenuBtn = document.getElementById('chat-lt-menu');
 const backBtn = document.getElementById('chat-back');
 const openBtn = document.getElementById('chat-card-open');
 const inputEl = document.getElementById('chat-input');
@@ -260,6 +262,7 @@ export function renderChat() {
     titleEl.hidden = true;
     // no lieutenants yet: the trigger doubles as the create button
     ltBtn.hidden = false;
+    ltPeekBtn.hidden = ltMenuBtn.hidden = true;
     setHtmlIfChanged(ltBtn, '<span class="clt-main"><span class="clt-name">＋ lieutenant</span></span>');
     inputEl.placeholder = 'create a lieutenant to start…';
     inputEl.disabled = true;
@@ -280,6 +283,7 @@ export function renderChat() {
   // card thread: plain card title (back returns to the lieutenant, where the
   // switcher lives); lieutenant chat: the switcher trigger IS the header
   ltBtn.hidden = isCard || !lt;
+  ltPeekBtn.hidden = ltMenuBtn.hidden = ltBtn.hidden; // current lt's 👁/⋯ ride with the trigger
   titleEl.hidden = !ltBtn.hidden;
   if (isCard || !lt) setHtmlIfChanged(titleEl, esc(cardEmoji(c) + ' ' + (c.title || c.id)));
   else setHtmlIfChanged(ltBtn, ltTriggerHtml(lt));

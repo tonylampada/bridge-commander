@@ -32,6 +32,22 @@ document.addEventListener('click', (e) => {
   if (open && !panelEl.contains(e.target) && !trigEl.contains(e.target)) closeLtSwitcher();
 });
 
+// The current lieutenant's 👁/⋯ sit right in the chat header (chat.js toggles
+// their visibility with the trigger) — no need to open the dropdown for them.
+const headPeekEl = document.getElementById('chat-lt-peek');
+const headMenuEl = document.getElementById('chat-lt-menu');
+function currentLtId() { return S.chatMode && S.chatMode.mode === 'lieutenant' ? S.chatMode.id : null; }
+headPeekEl.onclick = () => {
+  const id = currentLtId();
+  if (id) { closeLtSwitcher(); openLieutenantPane(id); }
+};
+headMenuEl.onclick = (e) => {
+  // stop before the board's document closer would dismiss the menu we just opened
+  e.stopPropagation();
+  const id = currentLtId();
+  if (id) { closeLtSwitcher(); openLtMenu(id, e.clientX, e.clientY); }
+};
+
 // One row per lieutenant: everything its lane chip used to carry.
 function rowHtml(l) {
   const mine = cards().filter((c) => c.owner === l.id);
