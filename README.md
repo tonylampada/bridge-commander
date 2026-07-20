@@ -1,5 +1,11 @@
 # Bridge Commander
 
+<p align="center">
+  <a href="https://youtu.be/CfJs03Jyum0">
+    <img src="https://github.com/user-attachments/assets/048b00c1-bae8-4a49-aa7c-4ae8f0d8656c" width="420" alt="Watch the video">
+  </a>
+</p>
+
 As you work with AI, your **attention gets fragmented** — driving multiple planning tasks while
 overseeing multiple implementation tasks. Chat quickly becomes the wrong UX for piloting a fleet
 of agents.
