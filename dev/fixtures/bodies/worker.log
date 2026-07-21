@@ -1,0 +1,7 @@
+2026-07-21T11:58:02Z spawn worker wk-ci-shard on bc/ci-sharding
+2026-07-21T11:58:14Z checkout ok — 325 tests discovered
+2026-07-21T11:59:41Z shard 1/4: 82 pass
+2026-07-21T12:00:03Z shard 2/4: 81 pass
+2026-07-21T12:00:19Z shard 3/4: 80 pass, 1 flake (sysload.test.js retry ok)
+2026-07-21T12:00:44Z shard 4/4: 81 pass
+2026-07-21T12:00:45Z all green — pushing branch

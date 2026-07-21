@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2030"/>
+      <stop offset="1" stop-color="#252c42"/>
+    </linearGradient>
+  </defs>
+  <rect width="640" height="360" fill="url(#bg)"/>
+  <text x="24" y="40" fill="#e8ecf6" font-family="sans-serif" font-size="20" font-weight="bold">bridge-commander — fake screenshot</text>
+  <g font-family="sans-serif" font-size="12" fill="#aab3c8">
+    <rect x="24" y="64" width="140" height="260" rx="8" fill="#242b3f"/>
+    <text x="36" y="88">📋 Backlog</text>
+    <rect x="34" y="100" width="120" height="44" rx="6" fill="#2e3650"/>
+    <rect x="34" y="152" width="120" height="44" rx="6" fill="#2e3650"/>
+    <rect x="180" y="64" width="140" height="260" rx="8" fill="#242b3f"/>
+    <text x="192" y="88">🔨 Working</text>
+    <rect x="190" y="100" width="120" height="44" rx="6" fill="#2e5040" stroke="#3fae7a"/>
+    <rect x="190" y="152" width="120" height="44" rx="6" fill="#2e5040" stroke="#3fae7a"/>
+    <rect x="336" y="64" width="140" height="260" rx="8" fill="#242b3f"/>
+    <text x="348" y="88">👀 Your review</text>
+    <rect x="346" y="100" width="120" height="44" rx="6" fill="#4a4030" stroke="#d8a03c"/>
+    <rect x="492" y="64" width="140" height="260" rx="8" fill="#242b3f"/>
+    <text x="504" y="88">🤝 Peer review</text>
+    <rect x="502" y="100" width="120" height="44" rx="6" fill="#2e3650"/>
+  </g>
+</svg>

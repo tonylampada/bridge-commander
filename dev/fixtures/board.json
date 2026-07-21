@@ -1,0 +1,321 @@
+{
+  "title": "bridge-commander (dev playground)",
+  "subtitle": "frontend-only fixtures — nothing here is real",
+  "seq": 0,
+  "kinds": {
+    "pr-merged": { "emoji": "🟪", "level": 2 },
+    "deploy": { "emoji": "🛳️", "level": 1 }
+  },
+  "labels": [
+    { "name": "infra", "color": "#66788a" },
+    { "name": "ux", "color": "#e05c78" },
+    { "name": "spike", "color": "#d8a03c" },
+    { "name": "auth", "color": "#7c5cff" },
+    { "name": "ci", "color": "#2aa876" },
+    { "name": "tests", "color": "#4c9be8" },
+    { "name": "flake", "color": "#d86b3c" },
+    { "name": "hooks", "color": "#9a6be8" },
+    { "name": "pipeline", "color": "#3fae7a" },
+    { "name": "epic", "color": "#c0a030" },
+    { "name": "docs", "color": "#888888" }
+  ],
+  "projects": [
+    { "name": "bridge-commander", "path": "/fake/ws/bridge-commander", "mode": "direct-pr", "added": "T-864000" }
+  ],
+  "owedSeed": {
+    "card:oauth-token-refresh": "seen",
+    "card:fix-flaky-sysload": "seen",
+    "lieutenant:quill": "queued"
+  },
+  "lieutenants": [
+    {
+      "id": "monica", "name": "Monica", "color": "#7c5cff", "avatar": 12,
+      "charter": "Owns auth + captain experience. Keeps the board honest, ships small PRs.",
+      "created": "T-864000", "lastTurnEnd": "T-120", "turns": 342,
+      "ref": { "harness": "claude", "session": "bc-lt-monica", "cwd": "/fake/ws" },
+      "chat": [
+        { "author": "user", "text": "morning — status on the oauth card?", "ts": "T-7200" },
+        { "author": "monica", "text": "Worker is mid-flight:\n\n- single-flight refresh **done**\n- retry-once path in progress\n- ETA for review: today\n\nI'll hand off with a PR link.", "ts": "T-7100" },
+        { "author": "monica", "text": "heads up — CI is green again ✅ (the coverage gate was counting fixtures, rex fixed the globs)", "ts": "T-300" }
+      ]
+    },
+    {
+      "id": "rex", "name": "Rex", "color": "#2aa876", "avatar": 33,
+      "charter": "CI, tests, and everything that flakes at 3am. Runs many workers at once.",
+      "created": "T-700000", "lastTurnEnd": "T-90", "turns": 891,
+      "ref": { "harness": "claude", "session": "bc-lt-rex", "cwd": "/fake/ws" },
+      "chat": [
+        { "author": "user", "text": "how many workers are you running right now?", "ts": "T-50000" },
+        { "author": "rex", "text": "Three live (`wk-oauth` is monica's):\n\n| worker | card | ctx |\n|---|---|---|\n| wk-ci-shard | ci sharding | 86% 🔴 |\n| wk-flaky | sysload flake | 22% |\n| wk-mega | (parked) | — |\n\nwk-ci-shard needs a compact soon.", "ts": "T-49900" }
+      ]
+    },
+    {
+      "id": "ada", "name": "Ada", "color": "#d8a03c", "avatar": 7,
+      "charter": "Frontend polish. (Session died — the gnarly fixture state.)",
+      "created": "T-500000", "lastTurnEnd": "T-4000", "turns": 57,
+      "ref": null,
+      "chat": [
+        { "author": "user", "text": "ada, the dark-mode card is yours when you're ready", "ts": "T-90500" },
+        { "author": "ada", "text": "on it — starting with the palette tokens", "ts": "T-90000" },
+        { "author": "ada", "text": "…I think something's wrong with my sess—", "ts": "T-4000" }
+      ]
+    },
+    {
+      "id": "quill", "name": "Quill", "color": "#e05c78", "avatar": 21,
+      "charter": "Docs, UX spikes, peer review. Slow and thorough.",
+      "created": "T-600000", "lastTurnEnd": "T-39000", "turns": 210,
+      "ref": { "harness": "claude", "session": "bc-lt-quill", "cwd": "/fake/ws" },
+      "chat": [
+        { "author": "quill", "text": "archive sweep landed. README overhaul is in peer review with rex.", "ts": "T-70000" },
+        { "author": "user", "text": "can you take the archive prune card next?", "ts": "T-400" }
+      ]
+    }
+  ],
+  "workers": [
+    {
+      "card": "oauth-token-refresh", "project": "bridge-commander", "branch": "bc/oauth-refresh",
+      "ref": { "harness": "claude", "session": "bc-w-oauth", "cwd": "/fake/wt/oauth" },
+      "worktree": { "path": "/fake/wt/oauth", "tool": "git" },
+      "spawnedAt": "T-80000", "turns": 41, "lastTurnEnd": "T-600",
+      "agentStatus": { "model": "claude-fable-5", "contextUsed": 88000, "contextWindow": 200000, "ts": "T-600" }
+    },
+    {
+      "card": "ci-sharding", "project": "bridge-commander", "branch": "bc/ci-sharding",
+      "ref": { "harness": "claude", "session": "bc-w-ci", "cwd": "/fake/wt/ci" },
+      "worktree": { "path": "/fake/wt/ci", "tool": "git" },
+      "spawnedAt": "T-60000", "turns": 77, "lastTurnEnd": "T-120",
+      "agentStatus": { "model": "claude-fable-5", "contextUsed": 172000, "contextWindow": 200000, "ts": "T-120" }
+    },
+    {
+      "card": "fix-flaky-sysload", "project": "bridge-commander", "branch": "bc/flaky-sysload",
+      "ref": { "harness": "claude", "session": "bc-w-flaky", "cwd": "/fake/wt/flaky" },
+      "worktree": { "path": "/fake/wt/flaky", "tool": "git" },
+      "spawnedAt": "T-30000", "turns": 12, "lastTurnEnd": "T-1200",
+      "agentStatus": { "model": "claude-fable-5", "contextUsed": 45000, "contextWindow": 200000, "ts": "T-1200" }
+    }
+  ],
+  "events": [
+    { "seq": 5, "ts": "T-600000", "level": 2, "kind": "signal", "text": "project bridge-commander registered", "actor": "monica" },
+    { "seq": 40, "ts": "T-86400", "level": 1, "kind": "resurrected", "text": "card \"archive sweep cron\" resurrected from the archive", "actor": "user", "card": "archive-sweep-cron", "cardTitle": "Archive sweep cron" },
+    { "seq": 70, "ts": "T-3600", "level": 1, "kind": "needs-captain", "text": "ada's session died mid-turn — her working card has no live worker", "actor": "bridge" },
+    { "seq": 78, "ts": "T-1900", "level": 2, "kind": "worker-died", "text": "worker wk-dark-mode vanished (tmux session gone)", "actor": "bridge", "card": "dashboard-dark-mode", "cardTitle": "Dashboard dark mode" }
+  ],
+  "cards": [
+    {
+      "id": "refactor-queue-backoff", "title": "Refactor queue drain backoff", "type": "implementation",
+      "owner": "monica", "column": "backlog", "labels": ["infra"],
+      "attributes": { "repo": "bridge-commander" },
+      "body": "The drain retry backoff is linear; make it exponential with jitter, cap at 90s.\n\n- keep the wake TTL semantics\n- `test/queue.test.js` must stay green",
+      "created": "T-172800", "updated": "T-172800",
+      "events": [
+        { "seq": 10, "ts": "T-172800", "level": 2, "kind": "created", "text": "card created", "actor": "user" }
+      ],
+      "thread": []
+    },
+    {
+      "id": "voice-input-spike", "title": "Spike: voice input for the composer", "type": "investigation",
+      "owner": "quill", "column": "backlog", "labels": ["ux", "spike"],
+      "attributes": { "repo": "bridge-commander" },
+      "body": "Can the chat composer take dictation? Timebox: one day.\n\nQuestions:\n1. WebSpeech API vs whisper.cpp sidecar\n2. does it survive the zero-dep rule? (browser-side only would)",
+      "created": "T-160000", "updated": "T-6800",
+      "events": [
+        { "seq": 12, "ts": "T-160000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 60, "ts": "T-7200", "level": 1, "kind": "question", "text": "is wake-word detection in scope, or push-to-talk only?", "actor": "quill" }
+      ],
+      "thread": [
+        { "author": "user", "text": "push-to-talk only for now", "ts": "T-7000" },
+        { "author": "quill", "text": "ack — scoping to push-to-talk. WebSpeech first, notes to follow.", "ts": "T-6800" }
+      ],
+      "threadStart": "T-7000"
+    },
+    {
+      "id": "mega-spec", "title": "Unified event pipeline v2 (mega spec)", "type": "plan",
+      "owner": "rex", "column": "backlog", "labels": ["pipeline", "epic"],
+      "pendingOrder": { "kind": "start-order", "by": "user", "ts": "T-1000" },
+      "attributes": {
+        "repo": "bridge-commander",
+        "emoji": "🐋",
+        "artifacts": [
+          { "uri": "file:///fake/artifacts/event-pipeline-brief.md", "label": "worker brief" },
+          { "uri": "file:///fake/artifacts/board-mock.svg", "label": "board mock" },
+          { "uri": "file:///fake/artifacts/worker.log", "label": "sample log" }
+        ]
+      },
+      "bodyFile": "bodies/mega-spec.md",
+      "created": "T-259200", "updated": "T-1000",
+      "events": [
+        { "seq": 8, "ts": "T-259200", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 15, "ts": "T-250000", "level": 2, "kind": "moved", "text": "backlog → working", "actor": "rex" },
+        { "seq": 16, "ts": "T-249000", "level": 2, "kind": "started", "text": "worker spawned on bc/pipeline-spike", "actor": "rex" },
+        { "seq": 17, "ts": "T-230000", "level": 2, "kind": "signal", "text": "phase-0 sketch pushed", "actor": "wk-mega" },
+        { "seq": 19, "ts": "T-220000", "level": 2, "kind": "hook-ran", "text": "hook lint-spec ran clean", "actor": "bridge" },
+        { "seq": 21, "ts": "T-210000", "level": 1, "kind": "question", "text": "do read-markers belong in the log?", "actor": "rex" },
+        { "seq": 23, "ts": "T-200000", "level": 2, "kind": "signal", "text": "sizing napkin added (appendix B)", "actor": "wk-mega" },
+        { "seq": 24, "ts": "T-190000", "level": 2, "kind": "worker-paused", "text": "paused — waiting on captain answer", "actor": "bridge" },
+        { "seq": 27, "ts": "T-120000", "level": 2, "kind": "parked", "text": "worker parked; card back to backlog for re-scope", "actor": "rex" },
+        { "seq": 29, "ts": "T-119000", "level": 2, "kind": "moved", "text": "working → backlog", "actor": "rex" },
+        { "seq": 31, "ts": "T-110000", "level": 2, "kind": "worker-stopped", "text": "worker wk-mega stopped (park)", "actor": "bridge" },
+        { "seq": 33, "ts": "T-100000", "level": 2, "kind": "signal", "text": "spec rewritten as v2 (this body)", "actor": "rex" },
+        { "seq": 74, "ts": "T-1000", "level": 2, "kind": "ordered", "text": "start order sent to rex", "actor": "user" }
+      ],
+      "thread": [
+        { "author": "user", "text": "this is getting huge — split phases into their own cards?", "ts": "T-105000" },
+        { "author": "rex", "text": "Kept it one card on purpose: the *spec* is the deliverable, phases become implementation cards after you bless it.\n\n```text\nmega-spec (plan)  →  phase-0, phase-1, phase-2 (implementation)\n```", "ts": "T-104000" },
+        { "author": "user", "text": "fine. keep appendix C, it's soothing.", "ts": "T-100500" }
+      ],
+      "threadStart": "T-105000"
+    },
+    {
+      "id": "oauth-token-refresh", "title": "OAuth token refresh", "type": "implementation",
+      "owner": "monica", "column": "working", "labels": ["auth"],
+      "attributes": {
+        "repo": "bridge-commander", "session": "bc-w-oauth", "harness": "claude", "model": "fable",
+        "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/53", "state": "open" }]
+      },
+      "bodyFile": "bodies/oauth.md",
+      "created": "T-90000", "updated": "T-60",
+      "status": { "worker": { "id": "wk-oauth", "state": "working", "expires": "T+600" } },
+      "events": [
+        { "seq": 20, "ts": "T-90000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 22, "ts": "T-85000", "level": 2, "kind": "ordered", "text": "start order sent to monica", "actor": "user" },
+        { "seq": 25, "ts": "T-80000", "level": 2, "kind": "started", "text": "worker spawned on bc/oauth-refresh", "actor": "monica" },
+        { "seq": 30, "ts": "T-20000", "level": 2, "kind": "signal", "text": "single-flight refresh in, tests green", "actor": "wk-oauth" },
+        { "seq": 46, "ts": "T-9000", "level": 2, "kind": "hook-ran", "text": "hook fmt-check ran clean", "actor": "bridge" }
+      ],
+      "thread": [
+        { "author": "monica", "text": "Worker is mid-flight. Landed so far:\n\n- [x] refresh 5 min before expiry\n- [x] single-flight dedupe\n- [ ] retry-once after refresh\n\nPR #53 is up as a draft.", "ts": "T-15000" },
+        { "author": "user", "text": "how's the retry-once path?", "ts": "T-60" }
+      ],
+      "threadStart": "T-15000"
+    },
+    {
+      "id": "ci-sharding", "title": "Migrate CI to sharded tests", "type": "implementation",
+      "owner": "rex", "column": "working", "labels": ["ci"],
+      "attributes": { "repo": "bridge-commander", "session": "bc-w-ci" },
+      "body": "Split the 325-test suite into 4 shards; gate on all four.\n\nWatch out: the coverage gate must merge shard reports before comparing to the threshold.",
+      "created": "T-100000", "updated": "T-4000",
+      "status": { "worker": { "id": "wk-ci-shard", "state": "working", "expires": "T+600" } },
+      "events": [
+        { "seq": 18, "ts": "T-100000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 26, "ts": "T-60000", "level": 2, "kind": "started", "text": "worker spawned on bc/ci-sharding", "actor": "rex" },
+        { "seq": 50, "ts": "T-6000", "level": 2, "kind": "hook-ran", "text": "hook test-sharder ran (4 shards)", "actor": "bridge" },
+        { "seq": 55, "ts": "T-5000", "level": 1, "kind": "hook-failed", "text": "hook coverage-gate failed: merged coverage 78% < 80%", "actor": "bridge" },
+        { "seq": 58, "ts": "T-4100", "level": 2, "kind": "signal", "text": "coverage gate was counting fixtures — fixing the globs", "actor": "wk-ci-shard" }
+      ],
+      "thread": [
+        { "author": "rex", "text": "shard timings attached — shard 3 carries the flake. Context is at 86%, I'll `/compact` the worker after the coverage fix.", "ts": "T-4000", "attachments": [{ "id": "att-log1", "name": "worker.log", "mime": "text/plain", "size": 421 }] }
+      ],
+      "threadStart": "T-4000"
+    },
+    {
+      "id": "fix-flaky-sysload", "title": "Fix flaky sysload test", "type": "investigation",
+      "owner": "rex", "column": "working", "labels": ["tests", "flake"],
+      "attributes": { "repo": "bridge-commander", "session": "bc-w-flaky" },
+      "body": "`test/sysload.test.js` fails ~1/400 locally, more in CI shard 3. Find it, pin it, fix it.",
+      "created": "T-40000", "updated": "T-900",
+      "status": { "worker": { "id": "wk-flaky", "state": "idle", "expires": "T+600" } },
+      "events": [
+        { "seq": 28, "ts": "T-40000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 34, "ts": "T-30000", "level": 2, "kind": "started", "text": "worker spawned on bc/flaky-sysload", "actor": "rex" },
+        { "seq": 62, "ts": "T-10000", "level": 1, "kind": "worker-stalled", "text": "no turn in 20m — nudged the worker", "actor": "bridge" }
+      ],
+      "thread": [
+        { "author": "rex", "text": "repro'd once in 400 runs — the first sample after a loop restart reads 0% cpu and the assertion races it. Bisecting the interval handling now.", "ts": "T-1200" },
+        { "author": "user", "text": "any luck with the bisect?", "ts": "T-900" }
+      ],
+      "threadStart": "T-1200"
+    },
+    {
+      "id": "dashboard-dark-mode", "title": "Dashboard dark mode", "type": "implementation",
+      "owner": "ada", "column": "working", "labels": ["ux"],
+      "attributes": { "repo": "bridge-commander" },
+      "body": "Palette tokens + `prefers-color-scheme` + the theme toggle. Ada's card — her session died mid-turn (fixture gnarly state: expired worker lease, dead lieutenant).",
+      "created": "T-95000", "updated": "T-1900",
+      "status": { "worker": { "id": "wk-dark-mode", "state": "working", "expires": "T-3500" } },
+      "events": [
+        { "seq": 32, "ts": "T-95000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 35, "ts": "T-91000", "level": 2, "kind": "started", "text": "worker spawned on bc/dark-mode", "actor": "ada" },
+        { "seq": 76, "ts": "T-1900", "level": 2, "kind": "worker-died", "text": "tmux session bc-w-dark gone", "actor": "bridge" }
+      ],
+      "thread": [
+        { "author": "ada", "text": "starting with the palette tokens — draft in `ui/app.css` behind a `data-theme` attr", "ts": "T-90000" }
+      ],
+      "threadStart": "T-90000"
+    },
+    {
+      "id": "lifecycle-hooks-polish", "title": "Card-lifecycle hooks polish", "type": "implementation",
+      "owner": "monica", "column": "review", "labels": ["hooks"],
+      "attributes": {
+        "repo": "bridge-commander",
+        "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/54", "state": "open" }]
+      },
+      "body": "Extract the hook runner, add per-hook timeout, surface stderr in the event text.",
+      "created": "T-140000", "updated": "T-5400",
+      "events": [
+        { "seq": 36, "ts": "T-140000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 37, "ts": "T-130000", "level": 2, "kind": "started", "text": "worker spawned on bc/hooks-polish", "actor": "monica" },
+        { "seq": 64, "ts": "T-5500", "level": 2, "kind": "worker-done", "text": "worker done: PR #54 open, 6 new tests", "actor": "bridge" },
+        { "seq": 66, "ts": "T-5400", "level": 1, "kind": "handoff", "text": "ready for your review — PR #54", "actor": "monica" }
+      ],
+      "thread": [
+        { "author": "monica", "text": "PR up: extracted the hook runner, 6 new tests. Screenshot of the new event chips attached. Diff is small, promise 🤞", "ts": "T-5400", "attachments": [{ "id": "att-shot1", "name": "board-screenshot.svg", "mime": "image/svg+xml", "size": 1650 }] }
+      ],
+      "threadStart": "T-5400"
+    },
+    {
+      "id": "archive-sweep-cron", "title": "Archive sweep cron", "type": "implementation",
+      "owner": "quill", "column": "review", "labels": ["infra"],
+      "attributes": {
+        "repo": "bridge-commander",
+        "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/49", "state": "merged" }]
+      },
+      "body": "Nightly sweep: archive cards dead >30d. Landed — kept in review as the merged-PR fixture.",
+      "created": "T-300000", "updated": "T-70000",
+      "events": [
+        { "seq": 38, "ts": "T-300000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 41, "ts": "T-86000", "level": 2, "kind": "started", "text": "worker spawned on bc/archive-sweep", "actor": "quill" },
+        { "seq": 44, "ts": "T-70500", "level": 1, "kind": "landed", "text": "merged & deployed", "actor": "quill" },
+        { "seq": 45, "ts": "T-70000", "level": 2, "kind": "pr-merged", "text": "PR #49 merged (registered-kind fixture)", "actor": "bridge" }
+      ],
+      "thread": [
+        { "author": "quill", "text": "merged. The sweep dry-runs on Sundays and posts what it *would* archive before doing it Monday.", "ts": "T-70000" }
+      ],
+      "threadStart": "T-70000"
+    },
+    {
+      "id": "readme-overhaul", "title": "README overhaul", "type": "plan",
+      "owner": "rex", "column": "peer", "labels": ["docs"],
+      "attributes": {
+        "repo": "bridge-commander",
+        "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/55", "state": "open" }]
+      },
+      "body": "Rewrite the README top-down: what it is → 90-second demo → concepts → reference. Quill peer-reviews.",
+      "created": "T-200000", "updated": "T-39000",
+      "events": [
+        { "seq": 42, "ts": "T-200000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+        { "seq": 48, "ts": "T-40000", "level": 2, "kind": "moved", "text": "review → peer (quill reviewing)", "actor": "user" }
+      ],
+      "thread": [
+        { "author": "rex", "text": "quill — tear it apart. Especially the concepts section.", "ts": "T-40000" },
+        { "author": "quill", "text": "3 nits posted inline on the PR. The demo GIF idea is good; placeholder for now.", "ts": "T-39000" }
+      ],
+      "threadStart": "T-40000"
+    }
+  ],
+  "reads": {
+    "user": {
+      "notifSeq": 60,
+      "notifSeqs": [62],
+      "threads": {
+        "lieutenant:monica": "T-200",
+        "lieutenant:rex": "T-49000",
+        "card:voice-input-spike": "T-6000",
+        "card:mega-spec": "T-100000",
+        "card:oauth-token-refresh": "T-10000",
+        "card:fix-flaky-sysload": "T-1000",
+        "card:archive-sweep-cron": "T-60000",
+        "card:readme-overhaul": "T-30000"
+      }
+    }
+  }
+}
