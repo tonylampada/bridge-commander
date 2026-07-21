@@ -24,6 +24,11 @@
     </select>
     <button id="filter-clear" title="clear filter">✕</button>
   </span>
+  <!-- board ⇄ table: two views over the same cards -->
+  <span id="view-seg" role="group" aria-label="board view">
+    <button id="vs-board" class="on" title="kanban board">▦</button>
+    <button id="vs-table" title="table view">☰</button>
+  </span>
   <span id="status-dot" title="connecting…"></span>
   <button id="bell" title="notifications">🔔<span id="bell-n" class="badge-n" hidden></span></button>
   <button id="gear" title="settings">⚙️</button>
@@ -108,9 +113,10 @@
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right -->
+  <!-- board: right (kanban and table are two views over the same region) -->
   <section id="board-wrap">
     <div id="board"><div class="empty">waiting for board…</div></div>
+    <div id="table"></div>
   </section>
 </main>
 

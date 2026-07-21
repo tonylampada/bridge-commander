@@ -11,6 +11,7 @@ export const S = {
   chatMode: null,          // {mode:'lieutenant', id} | {mode:'card', id} | null
   openCardId: null,        // detail panel
   view: 'chat',            // mobile tab: 'chat' | 'board'
+  boardMode: 'board',      // the board region's view: 'board' (kanban) | 'table'
   filters: { text: '', age: '', sel: [] },  // sel: [{kind:'label'|'owner', value}]
   notifOpen: false,
   notifShowAll: false,

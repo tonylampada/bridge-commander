@@ -106,6 +106,22 @@ test('a write route mutates the fixture and rebroadcasts', async () => {
   assert.strictEqual(card.status.owed, true, 'captain message marks the target owed');
 });
 
+test('archive list + restore round-trip (the table view backing)', async () => {
+  const a = await getJson('/api/archive');
+  assert.ok(a.archive.length >= 3, 'fixture archived cards present');
+  assert.ok(a.archive.every((r) => r.card && r.card.id && (r.reason === 'merged' || r.reason === 'killed')));
+  const r = await postJson('/api/cards/websocket-transport-spike/restore', { actor: 'user' });
+  assert.strictEqual(r.status, 200);
+  const doc = await getJson('/api/board');
+  const card = doc.cards.find((c) => c.id === 'websocket-transport-spike');
+  assert.ok(card, 'restored card is live');
+  assert.strictEqual(card.column, 'backlog', 'frozen Working snapshot restores to backlog');
+  assert.strictEqual(card.status.worker.state, 'absent', 'lease starts absent');
+  assert.strictEqual(card.events.at(-1).kind, 'resurrected');
+  const again = await postJson('/api/cards/websocket-transport-spike/restore', {});
+  assert.strictEqual(again.status, 409, 'restore refuses a live card');
+});
+
 test('a drag to working becomes a start-order (pendingOrder, no move)', async () => {
   const r = await postJson('/api/cards/refactor-queue-backoff/move', { column: 'working', actor: 'user' });
   assert.strictEqual(r.status, 200);

@@ -78,6 +78,10 @@ function createDevServer() {
   // here it's just this map, seeded from the fixture and driven by the fake replies)
   const owed = new Map(Object.entries(raw.owedSeed || {}));
   delete raw.owedSeed;
+  // frozen card snapshots, newest last — the fake of archive.jsonl. Append-only
+  // here too: restore does NOT remove the record (the board is truth for liveness).
+  const archive = raw.archive || [];
+  delete raw.archive;
   const board = Object.assign({ columns: COLUMNS }, raw);
   board.columns = COLUMNS;
   for (const c of board.cards) {
@@ -365,6 +369,10 @@ function createDevServer() {
         return sendJson(res, 200, { target, harness: 'claude', commands: COMMANDS });
       }
       if (route === 'GET /api/notifications') return sendJson(res, 200, { items: [], unread: 0 });
+      if (route === 'GET /api/archive') {
+        const n = parseInt(url.searchParams.get('limit') || '50', 10) || 50;
+        return sendJson(res, 200, { archive: archive.slice(-n).reverse() });
+      }
       if (route === 'GET /api/artifact') {
         const uri = url.searchParams.get('uri') || '';
         const raw2 = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
@@ -509,13 +517,37 @@ function createDevServer() {
         const id = decodeURIComponent(m[1]);
         const i = board.cards.findIndex((c) => c.id === id);
         if (i < 0) return sendJson(res, 404, { error: 'unknown card' });
+        const body = JSON.parse(await readBody(req) || '{}');
+        const reason = body.reason === 'merged' ? 'merged' : 'killed';
         const card = board.cards[i];
         board.cards.splice(i, 1);
         board.workers = board.workers.filter((w) => w.card !== id);
         owed.delete('card:' + id);
-        board.events.push(Object.assign(mkEvent('killed', 'card archived', 'user'), { card: id, cardTitle: card.title }));
+        archive.push({ ts: now(), actor: 'user', reason, card: JSON.parse(JSON.stringify(card)) });
+        board.events.push(Object.assign(
+          mkEvent(reason === 'merged' ? 'landed' : 'killed', reason + ': ' + card.title, 'user'),
+          { card: id, cardTitle: card.title, archived: true }));
         broadcast();
         return sendJson(res, 200, { ok: true });
+      }
+      m = /^\/api\/cards\/([^/]+)\/restore$/.exec(p);
+      if (m && req.method === 'POST') {
+        const id = decodeURIComponent(m[1]);
+        if (findCard(id)) return sendJson(res, 409, { error: 'card already on the board: ' + id });
+        let rec = null;
+        for (const r of archive) if (r.card && r.card.id === id) rec = r; // last = most recent
+        if (!rec) return sendJson(res, 404, { error: 'not in archive: ' + id });
+        const card = JSON.parse(JSON.stringify(rec.card)); // frozen snapshot, in full
+        card.status = { worker: null };
+        card.pendingOrder = null;
+        const wasWorking = card.column === 'working';
+        if (wasWorking) card.column = 'backlog'; // Working ⇔ live worker: restore workerless
+        for (const e of card.events) if (e.seq > board.seq) board.seq = e.seq;
+        card.events.push(mkEvent('resurrected', 'resurrected' + (wasWorking ? ' — restored to backlog (was working)' : ''), 'user'));
+        card.updated = now();
+        board.cards.push(card);
+        broadcast();
+        return sendJson(res, 200, { ok: true, card });
       }
       m = /^\/api\/cards\/([^/]+)\/artifacts$/.exec(p);
       if (m && (req.method === 'POST' || req.method === 'DELETE')) {

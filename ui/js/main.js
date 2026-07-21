@@ -6,6 +6,7 @@ import { trackMessages } from './voice.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
+import { renderTable } from './table.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
@@ -87,6 +88,22 @@ document.getElementById('mon-open').onclick = () => {
   openMonitor();
 };
 
+// ---------- board ⇄ table toggle ----------
+// One region, two views over the same cards. The choice sticks per browser.
+const vsBoard = document.getElementById('vs-board');
+const vsTable = document.getElementById('vs-table');
+function setBoardMode(mode) {
+  S.boardMode = mode;
+  try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
+  document.getElementById('board-wrap').classList.toggle('table-mode', mode === 'table');
+  vsBoard.classList.toggle('on', mode === 'board');
+  vsTable.classList.toggle('on', mode === 'table');
+  render();
+}
+vsBoard.onclick = () => setBoardMode('board');
+vsTable.onclick = () => setBoardMode('table');
+try { if (localStorage.getItem('bc-board-mode') === 'table') setBoardMode('table'); } catch (e) {}
+
 // ---------- mobile tabs ----------
 const tabChat = document.getElementById('tab-chat');
 const tabBoard = document.getElementById('tab-board');
@@ -145,7 +162,7 @@ onRender(() => {
   document.getElementById('b-subtitle').textContent = S.doc.subtitle || '';
   syncFilterInputs();
   renderStatusDot();
-  renderBoard();
+  if (S.boardMode === 'table') renderTable(); else renderBoard();
   renderChat();
   renderLtSwitcher();
   renderDetail();

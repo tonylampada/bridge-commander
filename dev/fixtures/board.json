@@ -27,6 +27,58 @@
     "card:fix-flaky-sysload": "seen",
     "lieutenant:quill": "queued"
   },
+  "archive": [
+    {
+      "ts": "T-400000", "actor": "user", "reason": "merged",
+      "card": {
+        "id": "onboarding-checklist", "title": "First-run onboarding checklist", "type": "implementation",
+        "owner": "quill", "column": "review", "labels": ["ux", "docs"],
+        "attributes": { "repo": "bridge-commander", "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/30", "state": "merged" }] },
+        "body": "A first-run checklist in the empty board: create a lieutenant → register a project → make a card. Landed in PR #30.",
+        "created": "T-900000", "updated": "T-400000",
+        "events": [
+          { "seq": 1, "ts": "T-900000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+          { "seq": 2, "ts": "T-410000", "level": 1, "kind": "landed", "text": "merged & deployed", "actor": "quill" }
+        ],
+        "thread": [
+          { "author": "quill", "text": "landed — the checklist collapses itself once all three steps are done", "ts": "T-410000" }
+        ]
+      }
+    },
+    {
+      "ts": "T-350000", "actor": "user", "reason": "killed", "note": "superseded by the SSE approach",
+      "card": {
+        "id": "websocket-transport-spike", "title": "Spike: websocket transport", "type": "investigation",
+        "owner": "rex", "column": "working", "labels": ["spike", "infra"],
+        "attributes": { "repo": "bridge-commander" },
+        "body": "Would websockets beat SSE for the board push? (Answer: no — SSE + refetch-on-open is simpler and reconnects for free.)",
+        "created": "T-800000", "updated": "T-350000",
+        "events": [
+          { "seq": 3, "ts": "T-800000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+          { "seq": 4, "ts": "T-360000", "level": 1, "kind": "question", "text": "SSE already covers reconnect — kill this?", "actor": "rex" }
+        ],
+        "thread": [
+          { "author": "rex", "text": "verdict: SSE wins. Recommend killing the card.", "ts": "T-360000" },
+          { "author": "user", "text": "agreed, kill it", "ts": "T-355000" }
+        ]
+      }
+    },
+    {
+      "ts": "T-150000", "actor": "user", "reason": "merged",
+      "card": {
+        "id": "rate-limit-dashboard", "title": "Rate-limit dashboard row", "type": "implementation",
+        "owner": "monica", "column": "review", "labels": ["ux"],
+        "attributes": { "repo": "bridge-commander", "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/44", "state": "merged" }] },
+        "body": "Surface the harness rate-limit windows in the /status reply block.",
+        "created": "T-500000", "updated": "T-150000",
+        "events": [
+          { "seq": 6, "ts": "T-500000", "level": 2, "kind": "created", "text": "card created", "actor": "user" },
+          { "seq": 7, "ts": "T-160000", "level": 1, "kind": "landed", "text": "merged in PR #44", "actor": "monica" }
+        ],
+        "thread": []
+      }
+    }
+  ],
   "lieutenants": [
     {
       "id": "monica", "name": "Monica", "color": "#7c5cff", "avatar": 12,
