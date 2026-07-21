@@ -2007,10 +2007,11 @@ if (Number.isInteger(SUPERVISE_MS) && SUPERVISE_MS > 0) setInterval(superviseTic
 
 // ---------- PR watch (F6: merged PR ⇒ archive + release, no agent turn) ----------
 // Every ~2min: for every card whose `prs` attribute holds an open URL, ask gh.
-// MERGED -> release the worktree (only when clean — uncommitted work is never
-// discarded), archive the card (reason merged: the landed level-1 event), and
-// queue a pr-merged item to the owner. CLOSED (unmerged) -> mark the state and
-// tell the owner; the card stays. gh failures leave state untouched.
+// MERGED -> a pr-merged event + owner item per PR that landed; then, ONLY when
+// no PR of the card is left open (a stack merges one at a time), release the
+// worktree (only when clean — uncommitted work is never discarded) and archive
+// the card (reason merged: the landed level-1 event). CLOSED (unmerged) -> mark
+// the state and tell the owner; the card stays. gh failures leave state untouched.
 const PRWATCH_MS = process.env.BC_PRWATCH_INTERVAL_MS !== undefined
   ? parseInt(process.env.BC_PRWATCH_INTERVAL_MS, 10) : 120000;
 const GH_CMD = process.env.BC_GH_CMD || 'gh'; // injectable for tests
@@ -2030,13 +2031,13 @@ async function prWatchTick() {
     for (const card of [...board.cards]) {
       const prs = card.attributes && card.attributes.prs;
       if (!Array.isArray(prs) || !prs.some((p) => p && p.state === 'open' && p.url)) continue;
-      let merged = null;
+      const merged = []; // every PR of this card that landed in THIS tick
       let changed = false;
       for (const pr of prs) {
         if (!pr || pr.state !== 'open' || !pr.url) continue;
         const st = await ghPrState(pr.url);
         if (!st || !st.state) continue;
-        if (st.state === 'MERGED') { pr.state = 'merged'; merged = pr; changed = true; }
+        if (st.state === 'MERGED') { pr.state = 'merged'; merged.push(pr); changed = true; }
         else if (st.state === 'CLOSED') {
           pr.state = 'closed';
           changed = true;
@@ -2045,12 +2046,20 @@ async function prWatchTick() {
         }
       }
       if (!changed) continue;
-      if (merged) {
+      // one signal per PR that landed — a stack can flip several between polls
+      for (const pr of merged) {
+        card.events.push(mkEvent({ text: 'PR merged: ' + pr.url, actor: 'server' }, { kind: 'pr-merged' }));
+        queuePush(card.owner, { kind: 'pr-merged', card: card.id, text: pr.url });
+      }
+      // a stack card only finishes when nothing is left open: a partial merge
+      // keeps the card on the board, the worktree alive and the hooks unfired.
+      const anyOpenLeft = prs.some((p) => p && p.state === 'open');
+      if (merged.length && !anyOpenLeft) {
         const w = findWorker(card.id);
         const project = findProject(w ? w.project : String((card.attributes && card.attributes.repo) || ''));
         const wtRec = w ? w.worktree
           : (card.attributes && card.attributes.worktree ? { path: card.attributes.worktree, tool: 'git' } : null);
-        let note = merged.url;
+        let note = merged.map((p) => p.url).join(' ');
         // card-archived hooks run — and finish or time out — BEFORE the
         // worktree release: a hook may need paths inside $BC_WORKTREE.
         await fireHooks('card-archived', card, w, { boardLevel: true });
@@ -2061,7 +2070,6 @@ async function prWatchTick() {
             console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
           }
         }
-        queuePush(card.owner, { kind: 'pr-merged', card: card.id, text: merged.url });
         archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
       }
       saveBoard(); broadcast();
