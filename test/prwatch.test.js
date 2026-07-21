@@ -158,6 +158,91 @@ test('merged PR with a DIRTY worktree: card archived, worktree left in place (ne
   } finally { await teardown(); }
 });
 
+// ---------- stacks: a card tracking several PRs finishes only when none is open ----------
+
+function shHook(ws, event, name, script) {
+  const dir = path.join(ws, '.bridge-commander', 'hooks', event);
+  fs.mkdirSync(dir, { recursive: true });
+  const file = path.join(dir, name);
+  fs.writeFileSync(file, '#!/bin/sh\n' + script + '\n');
+  fs.chmodSync(file, 0o755);
+}
+
+const PR_A = 'https://github.com/acme/proj/pull/101';
+const PR_B = 'https://github.com/acme/proj/pull/102';
+
+test('stack card: the first merge does NOT archive — card, worktree and hooks all stay put', async () => {
+  const { s, root, gh, teardown } = await boot();
+  try {
+    const archived = path.join(root, 'archived.out');
+    shHook(s.dir, 'card-archived', 'mark.sh', 'echo fired >> ' + JSON.stringify(archived));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Stack', id: 'stack', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/stack/start', { harness: 'fake' })).body.worker;
+    gh.setState(PR_A, 'OPEN'); gh.setState(PR_B, 'OPEN');
+    await s.api('POST', '/api/cards/stack/worker/done', { outcome: 'PRs: ' + PR_A + ' and ' + PR_B });
+
+    // --- the base PR lands; the tip is still open ---
+    gh.setState(PR_A, 'MERGED');
+    // the event lands at the end of the tick — poll it, not the mid-tick pr.state
+    await until('pr-merged event for the base PR', async () => {
+      const c = (await s.api('GET', '/api/cards/stack')).body;
+      return c.events && c.events.some((e) => e.kind === 'pr-merged');
+    });
+    const card = (await s.api('GET', '/api/cards/stack')).body;
+    assert.strictEqual(card.column, 'working', 'card stays — a PR is still open');
+    assert.strictEqual(card.attributes.prs[0].state, 'merged');
+    assert.strictEqual(card.attributes.prs[1].state, 'open');
+    const ev = card.events.filter((e) => e.kind === 'pr-merged');
+    assert.strictEqual(ev.length, 1, 'one pr-merged event, for the PR that landed');
+    assert.strictEqual(ev[0].level, 2);
+    assert.match(ev[0].text, /pull\/101/);
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
+    assert.ok(items.some((i) => i.kind === 'pr-merged' && i.card === 'stack' && i.text === PR_A));
+    assert.ok(fs.existsSync(w.worktree.path), 'worktree untouched on a partial merge');
+    assert.strictEqual((await s.api('GET', '/api/status')).body.workers, 1);
+    assert.ok(!fs.existsSync(archived), 'no card-archived hooks on a partial merge');
+
+    // --- the tip lands too: nothing open left, so now it archives ---
+    gh.setState(PR_B, 'MERGED');
+    await until('card archived once the stack is fully merged', async () =>
+      (await s.api('GET', '/api/cards/stack')).status === 404);
+    const rec = (await s.api('GET', '/api/archive')).body.archive.find((r) => r.card.id === 'stack');
+    assert.strictEqual(rec.reason, 'merged');
+    assert.match(rec.note, /pull\/102/);
+    assert.strictEqual(rec.card.events.filter((e) => e.kind === 'pr-merged').length, 2);
+    const b = (await s.api('GET', '/api/board')).body;
+    const landed = b.events.find((e) => e.kind === 'landed' && e.card === 'stack');
+    assert.ok(landed, 'landed event');
+    assert.strictEqual(landed.level, 1);
+    assert.ok(!fs.existsSync(w.worktree.path), 'worktree released once nothing is open');
+    await until('card-archived hooks fired', async () => fs.existsSync(archived));
+  } finally { await teardown(); }
+});
+
+test('stack card: two PRs merging in the same tick — an event each, one archive', async () => {
+  const { s, gh, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Both', id: 'both', attributes: { repo: 'proj' } }));
+    gh.setState(PR_A, 'OPEN'); gh.setState(PR_B, 'OPEN');
+    await s.api('POST', '/api/cards/both/start', { harness: 'fake' });
+    await s.api('POST', '/api/cards/both/worker/done', { outcome: 'PRs: ' + PR_A + ' ' + PR_B });
+    // both flip between two polls
+    gh.setState(PR_A, 'MERGED'); gh.setState(PR_B, 'MERGED');
+
+    await until('card archived', async () => (await s.api('GET', '/api/cards/both')).status === 404);
+    const rec = (await s.api('GET', '/api/archive')).body.archive.find((r) => r.card.id === 'both');
+    assert.strictEqual(rec.reason, 'merged');
+    const ev = rec.card.events.filter((e) => e.kind === 'pr-merged');
+    assert.deepStrictEqual(ev.map((e) => e.text.replace(/^PR merged: /, '')), [PR_A, PR_B]);
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
+    assert.deepStrictEqual(
+      items.filter((i) => i.kind === 'pr-merged' && i.card === 'both').map((i) => i.text).sort(),
+      [PR_A, PR_B]);
+    const b = (await s.api('GET', '/api/board')).body;
+    assert.strictEqual(b.events.filter((e) => e.kind === 'landed' && e.card === 'both').length, 1);
+  } finally { await teardown(); }
+});
+
 test('gh failure leaves state untouched (no archive, still open)', async () => {
   const { s, teardown } = await boot();
   try {
