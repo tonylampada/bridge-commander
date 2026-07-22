@@ -1,0 +1,5 @@
+{
+  "file:///fake/artifacts/event-pipeline-brief.md": { "name": "event-pipeline-brief.md", "mime": "text/markdown", "contentFile": "bodies/artifact-brief.md" },
+  "file:///fake/artifacts/board-mock.svg": { "name": "board-mock.svg", "mime": "image/svg+xml", "contentFile": "bodies/board-mock.svg" },
+  "file:///fake/artifacts/worker.log": { "name": "worker.log", "mime": "text/plain", "contentFile": "bodies/worker.log" }
+}

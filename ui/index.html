@@ -13,21 +13,29 @@
   <h1 id="b-title">bridge command</h1>
   <div id="b-subtitle"></div>
   <span id="filter-wrap">
-    <span id="filter-chips"></span>
     <input id="filter" placeholder="filter ( / )" autocomplete="off">
-    <select id="filter-age" title="only cards updated recently">
-      <option value="">any time</option>
-      <option value="3600">last hour</option>
-      <option value="today">today</option>
-      <option value="259200">last 3 days</option>
-      <option value="604800">last week</option>
-    </select>
-    <button id="filter-clear" title="clear filter">✕</button>
+    <!-- the richer filters live in a popup; the badge counts what's active in there -->
+    <button id="filter-btn" title="filters">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor"
+           stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"></polygon>
+      </svg>
+      <span id="filter-btn-n" class="badge-n" hidden></span>
+    </button>
+  </span>
+  <!-- board ⇄ table over the live cards; 🧊 is the archived cards' own mode -->
+  <span id="view-seg" role="group" aria-label="board view">
+    <button id="vs-board" class="on" title="kanban board">▦</button>
+    <button id="vs-table" title="table view">☰</button>
+    <button id="vs-arch" title="archived cards">🧊</button>
   </span>
   <span id="status-dot" title="connecting…"></span>
   <button id="bell" title="notifications">🔔<span id="bell-n" class="badge-n" hidden></span></button>
   <button id="gear" title="settings">⚙️</button>
 </header>
+
+<!-- filter popup (filterpop.js renders its content) -->
+<div id="filter-panel" hidden></div>
 
 <!-- notifications dropdown -->
 <div id="notif-panel" hidden>
@@ -108,9 +116,11 @@
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right -->
+  <!-- board: right — one region, three modes (kanban | table | archived) -->
   <section id="board-wrap">
     <div id="board"><div class="empty">waiting for board…</div></div>
+    <div id="table"></div>
+    <div id="archive"></div>
   </section>
 </main>
 
@@ -133,6 +143,8 @@
     </div>
     <button id="dt-talk" title="talk in this card's thread">💬 talk</button>
     <button id="dt-menu-btn" title="move / archive">⋯</button>
+    <!-- archived snapshots only: the one action a frozen card offers -->
+    <button id="dt-unarch" class="tv-unarch" hidden>🧟 unarchive</button>
     <button id="dt-close" title="close">✕</button>
   </div>
   <div class="dt-attrs" id="dt-attrs"></div>
@@ -148,6 +160,9 @@
       </div>
     </div>
     <div class="dt-artifacts" id="dt-artifacts"></div>
+    <!-- archived snapshots: the frozen thread, inline (live cards chat on the left) -->
+    <div class="dt-events-head" id="dt-thread-head" hidden>thread (frozen)</div>
+    <div id="dt-thread" hidden></div>
     <div class="dt-events-head">timeline</div>
     <div class="dt-events" id="dt-events"></div>
   </div>

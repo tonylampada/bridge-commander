@@ -6,6 +6,9 @@ import { trackMessages } from './voice.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
+import { renderTable } from './table.js';
+import { renderArchive } from './archtable.js';
+import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
@@ -20,39 +23,12 @@ notifOnOpenCard(openDetail);
 toastOnOpenCard(openDetail);
 
 // ---------- header: filter ----------
+// Just the text input here — every richer filter lives in the popup
+// (filterpop.js), behind the one button with the active-count badge.
 const filterInput = document.getElementById('filter');
-const filterAge = document.getElementById('filter-age');
-const filterClear = document.getElementById('filter-clear');
-const chipsEl = document.getElementById('filter-chips');
 filterInput.oninput = () => { S.filters.text = filterInput.value; render(); };
-filterAge.onchange = () => { S.filters.age = filterAge.value; render(); };
-filterClear.onclick = () => { clearFilters(); syncFilterInputs(); };
 function syncFilterInputs() {
   if (filterInput.value !== S.filters.text) filterInput.value = S.filters.text;
-  if (filterAge.value !== S.filters.age) filterAge.value = S.filters.age;
-  filterClear.style.display = filtersActive() ? 'inline' : 'none';
-  // rebuild the chips only when the selection actually changed (the chip
-  // handlers close over the f objects, so identity is per-selection anyway)
-  const sig = S.filters.sel.map((f) => f.kind + ':' + f.value).join('|');
-  if (chipsEl.__bcSig === sig) return;
-  chipsEl.__bcSig = sig;
-  chipsEl.textContent = '';
-  for (const f of S.filters.sel) {
-    const chip = document.createElement('span');
-    chip.className = 'fchip';
-    chip.title = 'remove this filter';
-    const t = document.createElement('span');
-    t.textContent = (f.kind === 'owner' ? '@' : '') + f.value;
-    const x = document.createElement('span');
-    x.className = 'x';
-    x.textContent = '✕';
-    chip.append(t, x);
-    chip.onclick = () => {
-      S.filters.sel = S.filters.sel.filter((g) => g !== f);
-      render();
-    };
-    chipsEl.appendChild(chip);
-  }
 }
 
 // ---------- header: status dot ----------
@@ -86,6 +62,27 @@ document.getElementById('mon-open').onclick = () => {
   gearBtn.classList.remove('on');
   openMonitor();
 };
+
+// ---------- board region mode: kanban ⇄ table ⇄ archived ----------
+// Board and table are two views over the LIVE cards; 🧊 is the archived
+// snapshots' own read-only mode. The choice sticks per browser.
+const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch' };
+function setBoardMode(mode) {
+  if (!MODE_BTN[mode]) mode = 'board';
+  S.boardMode = mode;
+  try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
+  const wrap = document.getElementById('board-wrap');
+  wrap.classList.toggle('table-mode', mode === 'table');
+  wrap.classList.toggle('archive-mode', mode === 'archive');
+  for (const [m, id] of Object.entries(MODE_BTN)) {
+    document.getElementById(id).classList.toggle('on', m === mode);
+  }
+  render();
+}
+for (const [m, id] of Object.entries(MODE_BTN)) {
+  document.getElementById(id).onclick = () => setBoardMode(m);
+}
+try { setBoardMode(localStorage.getItem('bc-board-mode') || 'board'); } catch (e) {}
 
 // ---------- mobile tabs ----------
 const tabChat = document.getElementById('tab-chat');
@@ -121,6 +118,7 @@ document.addEventListener('keydown', (e) => {
     else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();
     else if (appearancePopoverOpen()) closeAppearancePopover();
+    else if (filterPanelOpen()) closeFilterPanel();
     else if (ltSwitcherOpen()) closeLtSwitcher();
     else if (ownerMenuOpen()) closeOwnerMenu(); // just the menu — keep the detail open
     else if (S.notifOpen) { S.notifOpen = false; render(); }
@@ -144,8 +142,11 @@ onRender(() => {
   document.getElementById('b-title').textContent = S.doc.title || 'bridge command';
   document.getElementById('b-subtitle').textContent = S.doc.subtitle || '';
   syncFilterInputs();
+  renderFilterUI();
   renderStatusDot();
-  renderBoard();
+  if (S.boardMode === 'archive') renderArchive();
+  else if (S.boardMode === 'table') renderTable();
+  else renderBoard();
   renderChat();
   renderLtSwitcher();
   renderDetail();

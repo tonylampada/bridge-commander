@@ -11,7 +11,13 @@ export const S = {
   chatMode: null,          // {mode:'lieutenant', id} | {mode:'card', id} | null
   openCardId: null,        // detail panel
   view: 'chat',            // mobile tab: 'chat' | 'board'
-  filters: { text: '', age: '', sel: [] },  // sel: [{kind:'label'|'owner', value}]
+  boardMode: 'board',      // the board region's view: 'board' (kanban) | 'table' | 'archive'
+  // The ONE filter state, shared by every board-region mode. `text` lives in
+  // the topbar input; the rest is configured in the filter popup (filterpop.js).
+  // Every dimension is MULTI: sel holds {kind:'label'|'owner', value} chips,
+  // types/columns hold toggled values. Semantics: OR within a dimension, AND
+  // across dimensions.
+  filters: { text: '', age: '', sel: [], types: [], columns: [] },
   notifOpen: false,
   notifShowAll: false,
   notifExpanded: new Set(), // seq of level-1 item whose preceding gap is expanded
@@ -187,11 +193,25 @@ export function toggleFilter(kind, value) {
   render();
 }
 export function clearFilters() {
-  S.filters = { text: '', age: '', sel: [] };
+  S.filters = { text: '', age: '', sel: [], types: [], columns: [] };
   render();
 }
 export function filtersActive() {
-  return !!(S.filters.text || S.filters.age || S.filters.sel.length);
+  return !!(S.filters.text || S.filters.age || S.filters.sel.length
+    || S.filters.types.length || S.filters.columns.length);
+}
+// what the filter button's badge counts: every active filter VALUE except text
+// (the text is already visible in the input itself) — three labels = 3
+export function activeFilterCount() {
+  const f = S.filters;
+  return f.sel.length + (f.age ? 1 : 0) + f.types.length + f.columns.length;
+}
+// toggle a value in a multi dimension array (types / columns)
+export function toggleDim(dim, value) {
+  const arr = S.filters[dim];
+  const i = arr.indexOf(value);
+  if (i >= 0) arr.splice(i, 1); else arr.push(value);
+  render();
 }
 function ageCutoff() {
   const v = S.filters.age;
@@ -213,9 +233,16 @@ export function cardVisible(c) {
   if (q && !haystack(c).includes(q)) return false;
   const cutoff = ageCutoff();
   if (cutoff) { const t = cardRecency(c); if (!t || new Date(t).getTime() < cutoff) return false; }
-  for (const f of S.filters.sel) {
-    if (f.kind === 'owner') { if ((c.owner || '') !== f.value) return false; }
-    else if (!(c.labels || []).includes(f.value)) return false;
-  }
+  if (S.filters.types.length && !S.filters.types.includes(c.type)) return false;
+  if (S.filters.columns.length && !S.filters.columns.includes(c.column)) return false;
+  return selMatches(c);
+}
+// the owner/label chips: OR within each dimension, AND across them — two
+// owners selected means "either owner", never the impossible "both"
+export function selMatches(c) {
+  const owners = [], labels = [];
+  for (const f of S.filters.sel) (f.kind === 'owner' ? owners : labels).push(f.value);
+  if (owners.length && !owners.includes(c.owner || '')) return false;
+  if (labels.length && !labels.some((n) => (c.labels || []).includes(n))) return false;
   return true;
 }
