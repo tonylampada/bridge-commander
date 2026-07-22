@@ -1,23 +1,18 @@
 // table.js — the card ledger: every card as a sortable row, dual to the kanban.
-// Same cards, same global filter (text/age/chips all still apply); the toolbar
-// adds table-native filters (status/owner/type/label selects) plus the archive:
-// archived cards are frozen snapshots fetched on demand from /api/archive,
-// rendered dimmed with their reason, and restorable in place (🧟 unarchive).
-import { S, cards, columns, lieutenants, lieutenant, lieutenantColor, cardVisible, cardStatus, cardRecency, targetOwedState, workerFor, render } from './state.js';
-import { api } from './api.js';
+// Filtering is the SAME state the board uses (S.filters): the topbar text input
+// plus the filter popup (filterpop.js). Clicking a label or an owner in a row
+// toggles it as a popup chip. With the popup's 🧊 toggle on, archived cards
+// interleave as dimmed frozen rows with a sticky unarchive action.
+import { S, cards, columns, lieutenant, lieutenantColor, cardVisible, cardStatus, cardRecency, targetOwedState, workerFor, render, toggleFilter, filterSelected } from './state.js';
 import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, ctxBarHtml, setHtmlIfChanged } from './util.js';
-import { labelChipHtml, registryLabels } from './labels.js';
+import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
+import { ensureArchive, archivedRows, unarchive } from './archive.js';
 
 const tableEl = document.getElementById('table');
 
-// view state (module-local: the table owns its filters, the board never sees them)
-const T = {
-  sort: { key: 'activity', dir: -1 },
-  status: '', owner: '', type: '', label: '',   // toolbar selects; '' = any
-  archived: false,                              // include archived rows
-  recs: [], fetched: false, fetching: false,    // /api/archive cache
-};
+// the table owns nothing but its sort — every filter is shared state
+const T = { sort: { key: 'activity', dir: -1 } };
 
 // ---------- columns ----------
 const COLS = [
@@ -34,32 +29,11 @@ const COLS = [
 ];
 
 // ---------- rows ----------
-// A row is {c: card, arch: null | archiveRec}. Archived rows use the frozen
-// snapshot; a record whose card is live again (restored) is skipped.
+// A row is {c: card, arch: null | archiveRec}; frozen rows come from archive.js.
 function rows() {
-  const out = [];
-  for (const c of cards()) out.push({ c, arch: null });
-  if (T.archived) {
-    const live = new Set(cards().map((c) => c.id));
-    const seen = new Set();
-    for (let i = 0; i < T.recs.length; i++) { // newest first — keep only the latest record per id
-      const r = T.recs[i];
-      if (!r || !r.card || live.has(r.card.id) || seen.has(r.card.id)) continue;
-      seen.add(r.card.id);
-      out.push({ c: r.card, arch: r });
-    }
-  }
-  return out.filter(rowVisible).sort(cmp);
-}
-function rowVisible(row) {
-  const c = row.c;
-  if (!row.arch && !cardVisible(c)) return false; // the global filter still rules live cards
-  if (T.status === 'archived') { if (!row.arch) return false; }
-  else if (T.status) { if (row.arch || c.column !== T.status) return false; }
-  if (T.owner && c.owner !== T.owner) return false;
-  if (T.type && c.type !== T.type) return false;
-  if (T.label && !(c.labels || []).includes(T.label)) return false;
-  return true;
+  const out = cards().filter(cardVisible).map((c) => ({ c, arch: null }));
+  if (S.filters.archived) out.push(...archivedRows());
+  return out.sort(cmp);
 }
 const colIndex = (id) => columns().findIndex((k) => k.id === id);
 function sortVal(row, key) {
@@ -82,28 +56,6 @@ function cmp(a, b) {
 }
 
 // ---------- html ----------
-function optionList(list, cur) {
-  return list.map((o) => '<option value="' + esc(o.v) + '"' + (o.v === cur ? ' selected' : '') + '>' + esc(o.t) + '</option>').join('');
-}
-function toolbarHtml(shown, archivedN) {
-  const statuses = [{ v: '', t: 'any status' }]
-    .concat(columns().map((k) => ({ v: k.id, t: k.title })))
-    .concat(T.archived ? [{ v: 'archived', t: '🧊 archived' }] : []);
-  const owners = [{ v: '', t: 'any owner' }].concat(lieutenants().map((l) => ({ v: l.id, t: l.name || l.id })));
-  const types = [{ v: '', t: 'any type' }, { v: 'plan', t: '🧠 plan' }, { v: 'implementation', t: '🔥 implementation' }, { v: 'investigation', t: '🕵️ investigation' }];
-  const labels = [{ v: '', t: 'any label' }].concat(registryLabels().map((l) => ({ v: l.name, t: l.name })));
-  return '<div class="tv-bar">' +
-    '<select data-tf="status" title="status">' + optionList(statuses, T.status) + '</select>' +
-    '<select data-tf="owner" title="owner">' + optionList(owners, T.owner) + '</select>' +
-    '<select data-tf="type" title="type">' + optionList(types, T.type) + '</select>' +
-    '<select data-tf="label" title="label">' + optionList(labels, T.label) + '</select>' +
-    '<label class="tv-arch" title="include archived cards">' +
-    '<input type="checkbox" id="tv-archived"' + (T.archived ? ' checked' : '') + '> 🧊 archived' +
-    (T.archived ? ' (' + archivedN + ')' : '') + '</label>' +
-    '<span class="grow"></span>' +
-    '<span class="tv-n">' + shown + ' card' + (shown === 1 ? '' : 's') + '</span>' +
-    '</div>';
-}
 function headHtml() {
   return '<tr>' + COLS.map((col) => {
     const on = T.sort.key === col.key;
@@ -144,8 +96,9 @@ function rowHtml(row) {
     '<td class="c-title">' + titleCellHtml(row) + '</td>' +
     '<td class="c-status">' + statusCellHtml(row) + '</td>' +
     '<td class="c-type hide-m">' + esc(c.type || '') + '</td>' +
-    '<td class="c-owner"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((l && l.name) || c.owner) + '</td>' +
-    '<td class="c-labels hide-m">' + (c.labels || []).map((n) => labelChipHtml(n, false)).join('') + '</td>' +
+    '<td class="c-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) + '" title="filter by lieutenant">' +
+    '<span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((l && l.name) || c.owner) + '</td>' +
+    '<td class="c-labels hide-m">' + (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('') + '</td>' +
     '<td class="c-prs">' + cardPrs(c).map((pr) => prChipHtml(pr)).join('') + '</td>' +
     '<td class="c-msgs">' + ((c.thread || []).length || '') + '</td>' +
     '<td class="c-act">' + agoSpanHtml(row.arch ? row.arch.ts : cardRecency(c), 'tv-ago') + wst + '</td>' +
@@ -154,23 +107,12 @@ function rowHtml(row) {
     '</tr>';
 }
 
-// ---------- archive fetch (on demand, cached until the next toggle/restore) ----------
-function fetchArchive() {
-  if (T.fetching) return;
-  T.fetching = true;
-  api.archive()
-    .then((r) => { T.recs = r.archive || []; T.fetched = true; })
-    .catch(() => { T.recs = []; })
-    .finally(() => { T.fetching = false; render(); });
-}
-
 // ---------- render + wiring ----------
 export function renderTable() {
   if (S.boardMode !== 'table') return;
+  if (S.filters.archived) ensureArchive();
   const list = rows();
-  const archivedN = T.archived ? list.filter((r) => r.arch).length : 0;
-  const html = toolbarHtml(list.length, archivedN) +
-    '<div class="tv-scroll"><table class="tv"><thead>' + headHtml() + '</thead><tbody>' +
+  const html = '<div class="tv-scroll"><table class="tv"><thead>' + headHtml() + '</thead><tbody>' +
     (list.length ? list.map(rowHtml).join('') : '<tr><td colspan="10" class="tv-empty">no cards match</td></tr>') +
     '</tbody></table></div>';
   if (!setHtmlIfChanged(tableEl, html)) return;
@@ -185,27 +127,16 @@ function wire() {
       render();
     };
   }
-  for (const sel of tableEl.querySelectorAll('[data-tf]')) {
-    sel.onchange = () => { T[sel.dataset.tf] = sel.value; render(); };
-  }
-  const arch = tableEl.querySelector('#tv-archived');
-  if (arch) arch.onchange = () => {
-    T.archived = arch.checked;
-    if (T.status === 'archived' && !T.archived) T.status = '';
-    if (T.archived && !T.fetched) fetchArchive();
-    render();
-  };
   for (const tr of tableEl.querySelectorAll('tbody tr[data-id]')) {
     tr.onclick = (e) => {
       if (e.target.closest('a')) return; // PR chip: let the link navigate
       const un = e.target.closest('[data-unarch]');
-      if (un) {
-        un.disabled = true;
-        api.restoreCard(un.dataset.unarch)
-          .then(() => { T.fetched = false; fetchArchive(); }) // the broadcast brings the live card
-          .catch((err) => { un.disabled = false; alert(err.message); });
-        return;
-      }
+      if (un) { e.stopPropagation(); unarchive(un.dataset.unarch, un); return; }
+      // label / owner clicks feed the shared filter (a chip in the popup)
+      const lab = e.target.closest('.label');
+      if (lab) { toggleFilter('label', lab.dataset.label); return; }
+      const own = e.target.closest('.c-owner');
+      if (own) { toggleFilter('owner', own.dataset.owner); return; }
       if (tr.dataset.arch) return; // frozen snapshot — no live detail behind it
       openDetail(tr.dataset.id);
     };

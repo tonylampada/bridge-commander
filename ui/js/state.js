@@ -12,7 +12,11 @@ export const S = {
   openCardId: null,        // detail panel
   view: 'chat',            // mobile tab: 'chat' | 'board'
   boardMode: 'board',      // the board region's view: 'board' (kanban) | 'table'
-  filters: { text: '', age: '', sel: [] },  // sel: [{kind:'label'|'owner', value}]
+  // The ONE filter state, shared by board and table. `text` lives in the topbar
+  // input; everything else is configured in the filter popup (filterpop.js).
+  // sel: [{kind:'label'|'owner', value}] — multi; type/column: single; archived
+  // additionally pulls the frozen cards into both views.
+  filters: { text: '', age: '', sel: [], type: '', column: '', archived: false },
   notifOpen: false,
   notifShowAll: false,
   notifExpanded: new Set(), // seq of level-1 item whose preceding gap is expanded
@@ -188,11 +192,18 @@ export function toggleFilter(kind, value) {
   render();
 }
 export function clearFilters() {
-  S.filters = { text: '', age: '', sel: [] };
+  S.filters = { text: '', age: '', sel: [], type: '', column: '', archived: false };
   render();
 }
 export function filtersActive() {
-  return !!(S.filters.text || S.filters.age || S.filters.sel.length);
+  return !!(S.filters.text || S.filters.age || S.filters.sel.length
+    || S.filters.type || S.filters.column || S.filters.archived);
+}
+// what the filter button's badge counts: every active filter EXCEPT text
+// (the text is already visible in the input itself)
+export function activeFilterCount() {
+  const f = S.filters;
+  return f.sel.length + (f.age ? 1 : 0) + (f.type ? 1 : 0) + (f.column ? 1 : 0) + (f.archived ? 1 : 0);
 }
 function ageCutoff() {
   const v = S.filters.age;
@@ -214,6 +225,8 @@ export function cardVisible(c) {
   if (q && !haystack(c).includes(q)) return false;
   const cutoff = ageCutoff();
   if (cutoff) { const t = cardRecency(c); if (!t || new Date(t).getTime() < cutoff) return false; }
+  if (S.filters.type && c.type !== S.filters.type) return false;
+  if (S.filters.column && c.column !== S.filters.column) return false;
   for (const f of S.filters.sel) {
     if (f.kind === 'owner') { if ((c.owner || '') !== f.value) return false; }
     else if (!(c.labels || []).includes(f.value)) return false;

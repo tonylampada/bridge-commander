@@ -9,6 +9,7 @@ import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
 import { openCardPane } from './pane.js';
 import { avatarGridHtml, wireAvatarGrid } from './avatars.js';
+import { ensureArchive, archivedRows, unarchive } from './archive.js';
 
 const boardEl = document.getElementById('board');
 
@@ -85,8 +86,36 @@ function tileHtml(c) {
     '</div></div>';
 }
 
+// A frozen tile in the 🧊 archived column: dimmed, not draggable, no detail —
+// just the snapshot's face plus the reason and the unarchive affordance.
+function archTileHtml(row) {
+  const c = row.c;
+  const r = row.arch.reason === 'merged' ? 'merged' : 'killed';
+  const rsn = '<span class="tv-rsn tv-rsn-' + r + '"' + (row.arch.note ? ' title="' + esc(row.arch.note) + '"' : '') + '>' +
+    (r === 'merged' ? '🏁 merged' : '🪦 killed') + '</span>';
+  const labels = (c.labels || []).map((n) => labelChipHtml(n, false)).join('');
+  return '<div class="tile arch">' +
+    '<span class="t-stripe" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' +
+    '<div class="t-row1"><span class="t-emoji">' + esc(cardEmoji(c)) + '</span>' +
+    '<span class="t-title">' + esc(c.title || c.id) + '</span></div>' +
+    '<div class="t-chips">' + rsn + labels + '</div>' +
+    '<div class="t-foot">' +
+    '<span class="t-owner"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
+    '<span class="grow"></span>' +
+    '<button class="tv-unarch" data-unarch="' + esc(c.id) + '" title="restore this card to the board">🧟 unarchive</button>' +
+    agoSpanHtml(row.arch.ts, 't-ago') +
+    '</div></div>';
+}
+function archColumnHtml() {
+  const list = archivedRows();
+  return '<div class="column arch-col" data-id="__archived"><h2><span>🧊 archived</span>' +
+    '<span class="count">' + list.length + '</span></h2>' +
+    '<div class="cards">' + list.map(archTileHtml).join('') + '</div></div>';
+}
+
 export function renderBoard() {
   const cols = columns();
+  if (S.filters.archived) ensureArchive();
   const html = !cols.length
     ? '<div class="empty">waiting for board…</div>'
     : cols.map((col) => {
@@ -95,7 +124,7 @@ export function renderBoard() {
         '<span class="count">' + list.length + '</span>' +
         '<button class="add-card" title="new card here">+</button></h2>' +
         '<div class="cards">' + list.map(tileHtml).join('') + '</div></div>';
-    }).join('');
+    }).join('') + (S.filters.archived ? archColumnHtml() : '');
   // unchanged markup = leave the DOM (and scroll/selection/handlers) alone;
   // only a real change pays the rebuild + scroll save/restore
   if (boardEl.__bcHtml === html) return;
@@ -118,7 +147,11 @@ export function renderBoard() {
 let pressTimer = null, pressFired = false;
 
 function wire() {
-  boardEl.querySelectorAll('.tile').forEach((el) => {
+  // frozen tiles: only the unarchive button is live
+  boardEl.querySelectorAll('.tile.arch [data-unarch]').forEach((b) => {
+    b.onclick = (e) => { e.stopPropagation(); unarchive(b.dataset.unarch, b); };
+  });
+  boardEl.querySelectorAll('.tile:not(.arch)').forEach((el) => {
     el.onclick = (e) => {
       if (pressFired) { pressFired = false; return; } // long-press already handled
       const t = e.target;
@@ -154,6 +187,7 @@ function wire() {
     el.oncontextmenu = (e) => { e.preventDefault(); openMoveMenu(el.dataset.id, e.clientX, e.clientY); };
   });
   boardEl.querySelectorAll('.column').forEach((col) => {
+    if (col.classList.contains('arch-col')) return; // no drops, no + on the frozen column
     const id = col.dataset.id;
     col.ondragover = (e) => {
       if (e.dataTransfer.types.includes('text/bc-card')) { e.preventDefault(); col.classList.add('drag-over'); }

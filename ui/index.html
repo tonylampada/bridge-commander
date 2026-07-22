@@ -13,16 +13,9 @@
   <h1 id="b-title">bridge command</h1>
   <div id="b-subtitle"></div>
   <span id="filter-wrap">
-    <span id="filter-chips"></span>
     <input id="filter" placeholder="filter ( / )" autocomplete="off">
-    <select id="filter-age" title="only cards updated recently">
-      <option value="">any time</option>
-      <option value="3600">last hour</option>
-      <option value="today">today</option>
-      <option value="259200">last 3 days</option>
-      <option value="604800">last week</option>
-    </select>
-    <button id="filter-clear" title="clear filter">✕</button>
+    <!-- the richer filters live in a popup; the badge counts what's active in there -->
+    <button id="filter-btn" title="filters">🎛️<span id="filter-btn-n" class="badge-n" hidden></span></button>
   </span>
   <!-- board ⇄ table: two views over the same cards -->
   <span id="view-seg" role="group" aria-label="board view">
@@ -33,6 +26,9 @@
   <button id="bell" title="notifications">🔔<span id="bell-n" class="badge-n" hidden></span></button>
   <button id="gear" title="settings">⚙️</button>
 </header>
+
+<!-- filter popup (filterpop.js renders its content) -->
+<div id="filter-panel" hidden></div>
 
 <!-- notifications dropdown -->
 <div id="notif-panel" hidden>

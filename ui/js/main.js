@@ -7,6 +7,7 @@ import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderTable } from './table.js';
+import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
@@ -21,39 +22,12 @@ notifOnOpenCard(openDetail);
 toastOnOpenCard(openDetail);
 
 // ---------- header: filter ----------
+// Just the text input here — every richer filter lives in the popup
+// (filterpop.js), behind the one button with the active-count badge.
 const filterInput = document.getElementById('filter');
-const filterAge = document.getElementById('filter-age');
-const filterClear = document.getElementById('filter-clear');
-const chipsEl = document.getElementById('filter-chips');
 filterInput.oninput = () => { S.filters.text = filterInput.value; render(); };
-filterAge.onchange = () => { S.filters.age = filterAge.value; render(); };
-filterClear.onclick = () => { clearFilters(); syncFilterInputs(); };
 function syncFilterInputs() {
   if (filterInput.value !== S.filters.text) filterInput.value = S.filters.text;
-  if (filterAge.value !== S.filters.age) filterAge.value = S.filters.age;
-  filterClear.style.display = filtersActive() ? 'inline' : 'none';
-  // rebuild the chips only when the selection actually changed (the chip
-  // handlers close over the f objects, so identity is per-selection anyway)
-  const sig = S.filters.sel.map((f) => f.kind + ':' + f.value).join('|');
-  if (chipsEl.__bcSig === sig) return;
-  chipsEl.__bcSig = sig;
-  chipsEl.textContent = '';
-  for (const f of S.filters.sel) {
-    const chip = document.createElement('span');
-    chip.className = 'fchip';
-    chip.title = 'remove this filter';
-    const t = document.createElement('span');
-    t.textContent = (f.kind === 'owner' ? '@' : '') + f.value;
-    const x = document.createElement('span');
-    x.className = 'x';
-    x.textContent = '✕';
-    chip.append(t, x);
-    chip.onclick = () => {
-      S.filters.sel = S.filters.sel.filter((g) => g !== f);
-      render();
-    };
-    chipsEl.appendChild(chip);
-  }
 }
 
 // ---------- header: status dot ----------
@@ -138,6 +112,7 @@ document.addEventListener('keydown', (e) => {
     else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();
     else if (appearancePopoverOpen()) closeAppearancePopover();
+    else if (filterPanelOpen()) closeFilterPanel();
     else if (ltSwitcherOpen()) closeLtSwitcher();
     else if (ownerMenuOpen()) closeOwnerMenu(); // just the menu — keep the detail open
     else if (S.notifOpen) { S.notifOpen = false; render(); }
@@ -161,6 +136,7 @@ onRender(() => {
   document.getElementById('b-title').textContent = S.doc.title || 'bridge command';
   document.getElementById('b-subtitle').textContent = S.doc.subtitle || '';
   syncFilterInputs();
+  renderFilterUI();
   renderStatusDot();
   if (S.boardMode === 'table') renderTable(); else renderBoard();
   renderChat();
