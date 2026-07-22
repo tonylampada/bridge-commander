@@ -696,12 +696,28 @@ module.exports = { createDevServer };
 // ---------- main ----------
 if (require.main === module) {
   let port = 4790;
+  let host = '';
   const argv = process.argv.slice(2);
-  for (let i = 0; i < argv.length; i++) if (argv[i] === '--port') port = parseInt(argv[++i], 10);
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === '--port') port = parseInt(argv[++i], 10);
+    else if (argv[i] === '--host') host = String(argv[++i] || '').trim();
+  }
   if (!Number.isInteger(port) || port <= 0) { console.error('bad --port'); process.exit(1); }
+  if (host && !/^[\w.:-]+$/.test(host)) { console.error('bad --host'); process.exit(1); }
+  // NEVER all-interfaces: a specific address (e.g. the tailscale IP) or loopback.
+  if (host === '0.0.0.0' || host === '::') { console.error('refusing to bind all interfaces — give a specific address'); process.exit(1); }
+  const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
+  const BIND_HOST = host || '127.0.0.1';
   const { server } = createDevServer();
-  // loopback ONLY — this is a fixtures toy, it must never be reachable off-box
-  server.listen(port, '127.0.0.1', () => {
-    console.log('[dev-playground] http://127.0.0.1:' + port + '  (fixture board, nothing persists)');
+  server.on('error', (e) => { console.error('server error: ' + e.message); process.exit(1); });
+  server.listen(port, BIND_HOST, () => {
+    console.log('[dev-playground] http://' + BIND_HOST + ':' + port + '  (fixture board, nothing persists)');
   });
+  // Non-loopback bind: also listen on loopback, the same way server.js does it,
+  // so the local browser/curl keep working alongside the tailscale address.
+  if (!LOOPBACKS.includes(BIND_HOST)) {
+    const local = http.createServer(server.listeners('request')[0]);
+    local.on('error', (e) => { console.error('loopback listener error: ' + e.message); });
+    local.listen(port, '127.0.0.1');
+  }
 }
