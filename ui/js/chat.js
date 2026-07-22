@@ -416,23 +416,38 @@ export function renderChat() {
   maybeMarkRead(isCard ? c : null, target);
 }
 
-// mark the visible thread read (server-persisted) — debounced, loop-safe.
-// Card unread also derives from level-1 EVENTS, not just thread messages, so a
-// card target uses the server-derived card.status.unread (and the shared
-// cardActivityTs dedupe key); message-based gating alone would leave an
-// event-only unread dotted forever. Lieutenant main chats keep the message rule.
-let lastMarked = { target: '', ts: '' };
+// mark the visible conversation read (server-persisted) — debounced, loop-safe.
+// One POST per target per newest-activity ts: the `marked` map remembers what
+// was already sent, and a failed POST forgets it so the next render retries.
+const marked = new Map(); // target -> newest ts already POSTed
+function markRead(target, ts) {
+  if (marked.get(target) === ts) return;
+  marked.set(target, ts);
+  api.markThreadRead(target).catch(() => marked.delete(target));
+}
+// A card target uses the server-derived card.status.unread (unread also derives
+// from level-1 EVENTS, not just thread messages — message gating alone would
+// leave an event-only unread dotted forever) and the shared cardActivityTs
+// dedupe key. The unified stream marks the lieutenant's main chat AND every
+// merged card thread read — the captain just read those messages here, so
+// their dots/bell items must not linger. Cards are gated on MESSAGE unread
+// only: an event-only unread (a question/handoff dot) never rendered in the
+// stream, so it survives until the card itself is opened.
 function maybeMarkRead(c, target) {
   if (document.hidden) return;
   if (window.innerWidth <= 760 && S.view !== 'chat') return; // thread not visible
-  const isCard = !!c;
-  const msgs = isCard ? (c.thread || []) : mainFeedMsgs();
-  const unread = isCard ? !!cardStatus(c).unread : threadUnread(target, msgs);
-  if (!unread) return;
-  const lastTs = isCard ? cardActivityTs(c) : (msgs.length ? msgs[msgs.length - 1].ts : '');
-  if (lastMarked.target === target && lastMarked.ts === lastTs) return; // already sent
-  lastMarked = { target, ts: lastTs };
-  api.markThreadRead(target).catch(() => { lastMarked = { target: '', ts: '' }; });
+  if (c) {
+    if (cardStatus(c).unread) markRead(target, cardActivityTs(c));
+    return;
+  }
+  const l = lieutenant(target.replace(/^lieutenant:/, ''));
+  if (!l) return;
+  const chat = l.chat || [];
+  if (threadUnread(target, chat)) markRead(target, chat[chat.length - 1].ts);
+  for (const cc of cards()) {
+    if (cc.owner !== l.id) continue;
+    if (threadUnread('card:' + cc.id, cc.thread)) markRead('card:' + cc.id, cardActivityTs(cc));
+  }
 }
 
 // ---------- attachment interaction (delegated on the feed) ----------
