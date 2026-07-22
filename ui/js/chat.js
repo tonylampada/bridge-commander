@@ -81,6 +81,17 @@ export function syncChatToMain() {
 export function backToMain() { syncChatToMain(); }
 backBtn.onclick = backToMain;
 
+// Land the user IN a card's conversation: the chat filters to the card's
+// thread and becomes/stays the visible surface (on mobile it flips to the chat
+// tab), while the board tile is only pointed at — the detail panel never opens
+// over the chat. The one action behind the message card chips AND notification
+// row clicks, so both navigate identically.
+export function openCardConversation(id) {
+  if (!card(id)) return;
+  openCardThread(id);
+  flashBoardTile(id);
+}
+
 // Point at a card on the board without opening its detail: scroll its tile
 // into view and pulse it. A no-op when the board isn't showing the tile
 // (mobile chat tab, filtered-out card, table/archive mode) — the chat filter
@@ -463,11 +474,7 @@ feedEl.addEventListener('click', (e) => {
   const chip = e.target.closest('[data-chip-card]');
   if (chip) {
     e.stopPropagation();
-    const id = chip.dataset.chipCard;
-    if (card(id)) {
-      openCardThread(id);
-      flashBoardTile(id);
-    }
+    openCardConversation(chip.dataset.chipCard);
     return;
   }
   const pin = e.target.closest('.att-pin');
