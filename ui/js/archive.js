@@ -5,7 +5,7 @@
 // that make sense on frozen snapshots (text/owner/label/type) apply
 // client-side to the pages loaded so far.
 import { api } from './api.js';
-import { S, cards, lieutenantName, render } from './state.js';
+import { S, cards, lieutenantName, selMatches, render } from './state.js';
 
 export const PAGE = 20;
 let recs = [];        // pages loaded so far, newest first
