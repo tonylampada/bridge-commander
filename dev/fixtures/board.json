@@ -87,8 +87,12 @@
       "created": "T-864000", "lastTurnEnd": "T-120", "turns": 342,
       "ref": { "harness": "claude", "session": "bc-lt-monica", "cwd": "/fake/ws" },
       "chat": [
+        { "author": "user", "text": "monica, auth week: you own the oauth refresh and the hooks polish. Small PRs, as always.", "ts": "T-140500" },
+        { "author": "monica", "text": "Copy. Sequencing: hooks polish first (it unblocks the CI hook rex needs), oauth right behind it.", "ts": "T-140400" },
         { "author": "user", "text": "morning — status on the oauth card?", "ts": "T-7200" },
         { "author": "monica", "text": "Worker is mid-flight:\n\n- single-flight refresh **done**\n- retry-once path in progress\n- ETA for review: today\n\nI'll hand off with a PR link.", "ts": "T-7100" },
+        { "author": "user", "text": "nice. and don't let the hooks card rot in review", "ts": "T-6900" },
+        { "author": "monica", "text": "It won't — PR #54 is genuinely small. Ping me after your pass and I'll fold nits the same day.", "ts": "T-6850" },
         { "author": "monica", "text": "heads up — CI is green again ✅ (the coverage gate was counting fixtures, rex fixed the globs)", "ts": "T-300" }
       ]
     },
@@ -163,7 +167,11 @@
       "events": [
         { "seq": 10, "ts": "T-172800", "level": 2, "kind": "created", "text": "card created", "actor": "user" }
       ],
-      "thread": []
+      "thread": [
+        { "author": "user", "text": "when this one starts: keep the wake TTL semantics exactly — the backoff change must be invisible to the queue tests", "ts": "T-96000" },
+        { "author": "monica", "text": "Noted. It stays parked until oauth lands; I'll fold the jitter-cap discussion into the worker brief.", "ts": "T-95500" }
+      ],
+      "threadStart": "T-96000"
     },
     {
       "id": "voice-input-spike", "title": "Spike: voice input for the composer", "type": "investigation",
@@ -236,10 +244,12 @@
         { "seq": 46, "ts": "T-9000", "level": 2, "kind": "hook-ran", "text": "hook fmt-check ran clean", "actor": "bridge" }
       ],
       "thread": [
+        { "author": "user", "text": "brief looks good — remember: no refresh storms. Single-flight or nothing.", "ts": "T-84500" },
+        { "author": "monica", "text": "Single-flight IS the core of it. Worker spawning now on bc/oauth-refresh.", "ts": "T-84000" },
         { "author": "monica", "text": "Worker is mid-flight. Landed so far:\n\n- [x] refresh 5 min before expiry\n- [x] single-flight dedupe\n- [ ] retry-once after refresh\n\nPR #53 is up as a draft.", "ts": "T-15000" },
         { "author": "user", "text": "how's the retry-once path?", "ts": "T-60" }
       ],
-      "threadStart": "T-15000"
+      "threadStart": "T-84500"
     },
     {
       "id": "ci-sharding", "title": "Migrate CI to sharded tests", "type": "implementation",
@@ -311,9 +321,21 @@
         { "seq": 66, "ts": "T-5400", "level": 1, "kind": "handoff", "text": "ready for your review — PR #54", "actor": "monica" }
       ],
       "thread": [
+        { "author": "user", "text": "scope check: extraction only, or is the per-hook timeout in?", "ts": "T-129000" },
+        { "author": "monica", "text": "Both — the timeout is *why* we're extracting. Plan:\n\n1. pull the runner into its own module\n2. per-hook timeout (default 30s)\n3. stderr into the event text", "ts": "T-128500" },
+        { "author": "user", "text": "30s default is generous. make it 10", "ts": "T-127000" },
+        { "author": "monica", "text": "10s it is. Every workspace hook we ship finishes under 2s, so no migration pain.", "ts": "T-126800" },
+        { "author": "monica", "text": "Runner extracted, 14 call sites updated. Suite still green.", "ts": "T-88000" },
+        { "author": "user", "text": "did the worker-died hook keep its fire-and-forget semantics?", "ts": "T-87000" },
+        { "author": "monica", "text": "Yes — kill-path hooks stay detached; only card-lifecycle hooks get the timeout + stderr capture.", "ts": "T-86500" },
+        { "author": "monica", "text": "Timeout wired. A hook that blows the budget now lands a 🧨 hook-failed event carrying the tail of its stderr.", "ts": "T-45000" },
+        { "author": "user", "text": "show me the event text format", "ts": "T-44000" },
+        { "author": "monica", "text": "`hook deploy-notify timed out after 10s — stderr: connect ETIMEDOUT 10.0.0.7:443`\n\nTruncated at 200 chars, mono in the feed.", "ts": "T-43500" },
+        { "author": "user", "text": "good. squash the WIP commits before the PR", "ts": "T-20000" },
+        { "author": "monica", "text": "Squashed to 3 logical commits. Running the full suite once more, then PR.", "ts": "T-19000" },
         { "author": "monica", "text": "PR up: extracted the hook runner, 6 new tests. Screenshot of the new event chips attached. Diff is small, promise 🤞", "ts": "T-5400", "attachments": [{ "id": "att-shot1", "name": "board-screenshot.svg", "mime": "image/svg+xml", "size": 1650 }] }
       ],
-      "threadStart": "T-5400"
+      "threadStart": "T-129000"
     },
     {
       "id": "archive-sweep-cron", "title": "Archive sweep cron", "type": "implementation",
@@ -363,6 +385,8 @@
         "lieutenant:monica": "T-200",
         "lieutenant:rex": "T-49000",
         "card:voice-input-spike": "T-6000",
+        "card:refactor-queue-backoff": "T-90000",
+        "card:lifecycle-hooks-polish": "T-6000",
         "card:mega-spec": "T-100000",
         "card:oauth-token-refresh": "T-10000",
         "card:fix-flaky-sysload": "T-1000",

@@ -9,7 +9,7 @@ import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieu
 import { renderTable } from './table.js';
 import { renderArchive } from './archtable.js';
 import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
-import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
+import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
@@ -19,7 +19,10 @@ import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from
 import './resize.js'; // draggable side-panel widths
 
 chatOnOpenCard(openDetail);
-notifOnOpenCard(openDetail);
+// a notification is about a conversation — clicking it lands IN the chat,
+// filtered to the card (same action as the message card chips); the detail
+// stays behind the filtered header's explicit "open card" button
+notifOnOpenCard(openCardConversation);
 toastOnOpenCard(openDetail);
 
 // ---------- header: filter ----------

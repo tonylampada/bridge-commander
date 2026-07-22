@@ -2,7 +2,7 @@
 // the lieutenant's main chat or one of its card threads (a card thread's
 // interlocutor is always the owning lieutenant). Whole-window mode switch,
 // premium composer.
-import { S, card, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
+import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
 import { md, mdEnhance } from './md.js';
@@ -80,6 +80,30 @@ export function syncChatToMain() {
 }
 export function backToMain() { syncChatToMain(); }
 backBtn.onclick = backToMain;
+
+// Land the user IN a card's conversation: the chat filters to the card's
+// thread and becomes/stays the visible surface (on mobile it flips to the chat
+// tab), while the board tile is only pointed at — the detail panel never opens
+// over the chat. The one action behind the message card chips AND notification
+// row clicks, so both navigate identically.
+export function openCardConversation(id) {
+  if (!card(id)) return;
+  openCardThread(id);
+  flashBoardTile(id);
+}
+
+// Point at a card on the board without opening its detail: scroll its tile
+// into view and pulse it. A no-op when the board isn't showing the tile
+// (mobile chat tab, filtered-out card, table/archive mode) — the chat filter
+// itself already communicates which card the conversation narrowed to.
+function flashBoardTile(id) {
+  const sel = '.tile[data-id="' + (window.CSS && CSS.escape ? CSS.escape(id) : id) + '"]';
+  const el = document.querySelector('#board ' + sel);
+  if (!el) return;
+  el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
+  el.classList.add('flash');
+  setTimeout(() => el.classList.remove('flash'), 1600);
+}
 openBtn.onclick = () => { if (S.chatMode && S.chatMode.mode === 'card' && detailOpener) detailOpener(S.chatMode.id); };
 
 // ---------- feed rendering ----------
@@ -107,6 +131,18 @@ function attachmentsHtml(atts, promote) {
       '</span>' + pin + '</div>';
   }).join('') + '</div>';
 }
+// The card chip: a message that came from a card thread carries a small
+// clickable pill (card emoji + title) on its bubble. Clicking it filters the
+// conversation down to that card's thread — the CHAT stays the active surface;
+// the board tile is only highlighted, never covered by the detail panel (that
+// is the filtered header's explicit "open card" action). Delegated on the feed
+// — see the chip branch of the click listener below. Main-chat messages carry none.
+function chipHtml(m) {
+  if (!m._card) return '';
+  return '<button type="button" class="msg-chip" data-chip-card="' + esc(m._card) + '"' +
+    ' title="show only this card’s conversation">' +
+    esc((m._cardEmoji ? m._cardEmoji + ' ' : '') + m._cardTitle) + '</button>';
+}
 // A slash command's request+reply are the SYSTEM, not the lieutenant: they get a
 // full-width console block (monospace, subtle border, dim palette, a small "⌘"
 // affordance) — no avatar, no speak button — so they never read as an agent bubble.
@@ -114,7 +150,7 @@ function cmdMsgHtml(m) {
   const ts = '<span class="ts">' + hhmm(m.ts) + '</span>';
   if (!m.cmd.reply) {
     // the request: a console prompt line echoing exactly what was typed
-    return '<div class="msg cmd cmd-req"><span class="cmd-glyph">⌘</span>' +
+    return '<div class="msg cmd cmd-req">' + chipHtml(m) + '<span class="cmd-glyph">⌘</span>' +
       '<span class="cmd-line">' + esc(m.text) + '</span>' + ts + '</div>';
   }
   // the reply: /status renders a rich model+context block; everything else is
@@ -123,7 +159,7 @@ function cmdMsgHtml(m) {
     ? statusBlockHtml(m.status)
     : '<div class="cmd-out md">' + md(m.text) + '</div>';
   const badge = '<span class="cmd-badge">⌘ ' + esc(m.cmd.name || '') + '</span>';
-  return '<div class="msg cmd cmd-reply">' + badge + body + ts + '</div>';
+  return '<div class="msg cmd cmd-reply">' + chipHtml(m) + badge + body + ts + '</div>';
 }
 function msgHtml(m, promote, avatarIdx) {
   if (m.cmd && typeof m.cmd === 'object') return cmdMsgHtml(m);
@@ -142,7 +178,7 @@ function msgHtml(m, promote, avatarIdx) {
   // so even a worker's stamped-as-owner say gets its face)
   const hasAvatar = !mine && avatarIdx != null;
   const face = hasAvatar ? avatarHtml(avatarIdx, 'msg-face') : '';
-  return '<div class="msg ' + (mine ? 'user' : 'agent') + (hasAvatar ? ' has-avatar' : '') + '">' + face + body + atts +
+  return '<div class="msg ' + (mine ? 'user' : 'agent') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
     '<span class="ts">' + who + hhmm(m.ts) + '</span>' + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
@@ -155,7 +191,7 @@ function emptyFeedHtml(lt) {
     : '<span class="chat-empty-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span>';
   return '<div class="empty">' + face + 'no messages yet</div>';
 }
-function typingHtml(state, name) {
+function typingHtml(state, name, chip) {
   // the "owes you a reply" balloon (card.status.owedState / the main-chat rule),
   // one visual per state so queued-unseen never masquerades as being worked on:
   // 'stale'  = owed past the threshold: a DISTINCT "may be stuck" state, static
@@ -163,24 +199,39 @@ function typingHtml(state, name) {
   // 'queued' = delivered to the durable inbox but NOT drained yet — static
   //            hourglass, "waiting to be picked up", no typing animation
   // 'seen'   = drained; the lieutenant owes the reply for real — animated dots
+  const src = chip || ''; // unified stream: which card thread this owed reply lives in
   if (state === 'stale') {
     return '<div class="msg agent typing stale" title="no response for a while — the message may not have reached ' + esc(name) + '">' +
       '<span class="twarn">⚠</span>' +
-      '<span class="lbl">no response yet — ' + esc(name) + ' may be stuck</span></div>';
+      '<span class="lbl">no response yet — ' + esc(name) + ' may be stuck</span>' + src + '</div>';
   }
   if (state === 'queued') {
     return '<div class="msg agent typing queued" title="delivered — ' + esc(name) + ' hasn\'t picked it up yet">' +
       '<span class="tcheck">⏳</span>' +
-      '<span class="lbl">delivered — waiting for ' + esc(name) + ' to pick it up</span></div>';
+      '<span class="lbl">delivered — waiting for ' + esc(name) + ' to pick it up</span>' + src + '</div>';
   }
   return '<div class="msg agent typing" title="' + esc(name) + ' owes you a reply here">' +
     '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
-    '<span class="lbl">' + esc(name) + ' owes you a reply…</span></div>';
+    '<span class="lbl">' + esc(name) + ' owes you a reply…</span>' + src + '</div>';
 }
 function mainFeedMsgs() {
-  // the current lieutenant's main-chat messages; card threads live in their own card view
+  // the UNIFIED stream: the lieutenant's main-chat messages PLUS every thread
+  // message of the cards it owns, merged chronologically. A conversation with a
+  // lieutenant is really ONE conversation — the card threads are just slices of
+  // it, so the main chat shows it whole. Thread messages are annotated with
+  // their source card (_card/_cardTitle/_cardEmoji) so the bubble renders the
+  // clickable chip; main-chat messages carry none.
   const l = S.chatMode && S.chatMode.mode === 'lieutenant' ? lieutenant(S.chatMode.id) : null;
   const msgs = ((l && l.chat) || []).slice();
+  if (l) {
+    for (const c of cards()) {
+      if (c.owner !== l.id) continue;
+      const emoji = cardEmoji(c);
+      for (const m of c.thread || []) {
+        msgs.push(Object.assign({}, m, { _card: c.id, _cardTitle: c.title || c.id, _cardEmoji: emoji }));
+      }
+    }
+  }
   msgs.sort((a, b) => (a.ts < b.ts ? -1 : a.ts > b.ts ? 1 : 0));
   return msgs;
 }
@@ -321,8 +372,21 @@ export function renderChat() {
     if (hidden) blocks.push({ html: '<button class="feed-expand" type="button">show earlier messages (' + hidden + ')</button>' });
     for (const m of msgs.slice(hidden)) push(m);
   }
+  // owed tails: the filtered view shows its own target's; the unified stream
+  // also surfaces every owed CARD thread of this lieutenant (chip-labeled), so
+  // an owed reply is never invisible just because it lives in a card slice
+  let tail = '';
+  if (!isCard && lt) {
+    for (const cc of cards()) {
+      if (cc.owner !== lt.id) continue;
+      const st = targetOwedState('card:' + cc.id);
+      if (!st) continue;
+      const chip = chipHtml({ _card: cc.id, _cardTitle: cc.title || cc.id, _cardEmoji: cardEmoji(cc) });
+      tail += typingHtml(targetOwedStale('card:' + cc.id) ? 'stale' : st, ltName, chip);
+    }
+  }
   const owedState = targetOwedState(target);
-  const tail = owedState ? typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName) : '';
+  if (owedState) tail += typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName);
 
   const prev = feed;
   feed = { key: target, blocks, tail };
@@ -363,23 +427,38 @@ export function renderChat() {
   maybeMarkRead(isCard ? c : null, target);
 }
 
-// mark the visible thread read (server-persisted) — debounced, loop-safe.
-// Card unread also derives from level-1 EVENTS, not just thread messages, so a
-// card target uses the server-derived card.status.unread (and the shared
-// cardActivityTs dedupe key); message-based gating alone would leave an
-// event-only unread dotted forever. Lieutenant main chats keep the message rule.
-let lastMarked = { target: '', ts: '' };
+// mark the visible conversation read (server-persisted) — debounced, loop-safe.
+// One POST per target per newest-activity ts: the `marked` map remembers what
+// was already sent, and a failed POST forgets it so the next render retries.
+const marked = new Map(); // target -> newest ts already POSTed
+function markRead(target, ts) {
+  if (marked.get(target) === ts) return;
+  marked.set(target, ts);
+  api.markThreadRead(target).catch(() => marked.delete(target));
+}
+// A card target uses the server-derived card.status.unread (unread also derives
+// from level-1 EVENTS, not just thread messages — message gating alone would
+// leave an event-only unread dotted forever) and the shared cardActivityTs
+// dedupe key. The unified stream marks the lieutenant's main chat AND every
+// merged card thread read — the captain just read those messages here, so
+// their dots/bell items must not linger. Cards are gated on MESSAGE unread
+// only: an event-only unread (a question/handoff dot) never rendered in the
+// stream, so it survives until the card itself is opened.
 function maybeMarkRead(c, target) {
   if (document.hidden) return;
   if (window.innerWidth <= 760 && S.view !== 'chat') return; // thread not visible
-  const isCard = !!c;
-  const msgs = isCard ? (c.thread || []) : mainFeedMsgs();
-  const unread = isCard ? !!cardStatus(c).unread : threadUnread(target, msgs);
-  if (!unread) return;
-  const lastTs = isCard ? cardActivityTs(c) : (msgs.length ? msgs[msgs.length - 1].ts : '');
-  if (lastMarked.target === target && lastMarked.ts === lastTs) return; // already sent
-  lastMarked = { target, ts: lastTs };
-  api.markThreadRead(target).catch(() => { lastMarked = { target: '', ts: '' }; });
+  if (c) {
+    if (cardStatus(c).unread) markRead(target, cardActivityTs(c));
+    return;
+  }
+  const l = lieutenant(target.replace(/^lieutenant:/, ''));
+  if (!l) return;
+  const chat = l.chat || [];
+  if (threadUnread(target, chat)) markRead(target, chat[chat.length - 1].ts);
+  for (const cc of cards()) {
+    if (cc.owner !== l.id) continue;
+    if (threadUnread('card:' + cc.id, cc.thread)) markRead('card:' + cc.id, cardActivityTs(cc));
+  }
 }
 
 // ---------- attachment interaction (delegated on the feed) ----------
@@ -387,6 +466,17 @@ function maybeMarkRead(c, target) {
 // the open card's artifacts. Delegation survives the append/rebuild fast-path
 // without any per-message re-wiring.
 feedEl.addEventListener('click', (e) => {
+  // card chip on a unified-stream bubble: filter the conversation down to that
+  // card's thread, keeping the CHAT front and visible (critical on narrow
+  // layouts, where the detail panel would take the whole screen). The card is
+  // pointed at on the board with a scroll + flash — the detail itself only
+  // opens via the filtered header's explicit "open card" button.
+  const chip = e.target.closest('[data-chip-card]');
+  if (chip) {
+    e.stopPropagation();
+    openCardConversation(chip.dataset.chipCard);
+    return;
+  }
   const pin = e.target.closest('.att-pin');
   if (pin) {
     e.stopPropagation();
