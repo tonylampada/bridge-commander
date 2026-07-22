@@ -7,6 +7,7 @@ import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderTable } from './table.js';
+import { renderArchive } from './archtable.js';
 import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
 import { renderChat, onOpenCard as chatOnOpenCard } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
@@ -62,21 +63,26 @@ document.getElementById('mon-open').onclick = () => {
   openMonitor();
 };
 
-// ---------- board ⇄ table toggle ----------
-// One region, two views over the same cards. The choice sticks per browser.
-const vsBoard = document.getElementById('vs-board');
-const vsTable = document.getElementById('vs-table');
+// ---------- board region mode: kanban ⇄ table ⇄ archived ----------
+// Board and table are two views over the LIVE cards; 🧊 is the archived
+// snapshots' own read-only mode. The choice sticks per browser.
+const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch' };
 function setBoardMode(mode) {
+  if (!MODE_BTN[mode]) mode = 'board';
   S.boardMode = mode;
   try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
-  document.getElementById('board-wrap').classList.toggle('table-mode', mode === 'table');
-  vsBoard.classList.toggle('on', mode === 'board');
-  vsTable.classList.toggle('on', mode === 'table');
+  const wrap = document.getElementById('board-wrap');
+  wrap.classList.toggle('table-mode', mode === 'table');
+  wrap.classList.toggle('archive-mode', mode === 'archive');
+  for (const [m, id] of Object.entries(MODE_BTN)) {
+    document.getElementById(id).classList.toggle('on', m === mode);
+  }
   render();
 }
-vsBoard.onclick = () => setBoardMode('board');
-vsTable.onclick = () => setBoardMode('table');
-try { if (localStorage.getItem('bc-board-mode') === 'table') setBoardMode('table'); } catch (e) {}
+for (const [m, id] of Object.entries(MODE_BTN)) {
+  document.getElementById(id).onclick = () => setBoardMode(m);
+}
+try { setBoardMode(localStorage.getItem('bc-board-mode') || 'board'); } catch (e) {}
 
 // ---------- mobile tabs ----------
 const tabChat = document.getElementById('tab-chat');
@@ -138,7 +144,9 @@ onRender(() => {
   syncFilterInputs();
   renderFilterUI();
   renderStatusDot();
-  if (S.boardMode === 'table') renderTable(); else renderBoard();
+  if (S.boardMode === 'archive') renderArchive();
+  else if (S.boardMode === 'table') renderTable();
+  else renderBoard();
   renderChat();
   renderLtSwitcher();
   renderDetail();

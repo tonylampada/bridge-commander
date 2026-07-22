@@ -50,8 +50,9 @@ export const api = {
   labels: (body) => j('POST', '/api/labels', body),
   artifact: (uri) => j('GET', '/api/artifact?uri=' + encodeURIComponent(uri)),
   board: () => j('GET', '/api/board'),
-  // archived (frozen) card snapshots, newest first; restore resurrects one
-  archive: () => j('GET', '/api/archive?limit=200'),
+  // archived (frozen) card snapshots, newest first, paged over the append-only
+  // log: {archive: [...], total}; restore resurrects one
+  archive: (limit, offset) => j('GET', '/api/archive?limit=' + (limit || 20) + '&offset=' + (offset || 0)),
   restoreCard: (id) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/restore', { actor: 'user' }),
   config: () => j('GET', '/api/config'),
   // slash commands the current chat target's harness answers (composer autocomplete)

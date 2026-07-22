@@ -11,12 +11,11 @@ export const S = {
   chatMode: null,          // {mode:'lieutenant', id} | {mode:'card', id} | null
   openCardId: null,        // detail panel
   view: 'chat',            // mobile tab: 'chat' | 'board'
-  boardMode: 'board',      // the board region's view: 'board' (kanban) | 'table'
-  // The ONE filter state, shared by board and table. `text` lives in the topbar
-  // input; everything else is configured in the filter popup (filterpop.js).
-  // sel: [{kind:'label'|'owner', value}] — multi; type/column: single; archived
-  // additionally pulls the frozen cards into both views.
-  filters: { text: '', age: '', sel: [], type: '', column: '', archived: false },
+  boardMode: 'board',      // the board region's view: 'board' (kanban) | 'table' | 'archive'
+  // The ONE filter state, shared by every board-region mode. `text` lives in
+  // the topbar input; the rest is configured in the filter popup (filterpop.js).
+  // sel: [{kind:'label'|'owner', value}] — multi; type/column: single.
+  filters: { text: '', age: '', sel: [], type: '', column: '' },
   notifOpen: false,
   notifShowAll: false,
   notifExpanded: new Set(), // seq of level-1 item whose preceding gap is expanded
@@ -192,18 +191,18 @@ export function toggleFilter(kind, value) {
   render();
 }
 export function clearFilters() {
-  S.filters = { text: '', age: '', sel: [], type: '', column: '', archived: false };
+  S.filters = { text: '', age: '', sel: [], type: '', column: '' };
   render();
 }
 export function filtersActive() {
   return !!(S.filters.text || S.filters.age || S.filters.sel.length
-    || S.filters.type || S.filters.column || S.filters.archived);
+    || S.filters.type || S.filters.column);
 }
 // what the filter button's badge counts: every active filter EXCEPT text
 // (the text is already visible in the input itself)
 export function activeFilterCount() {
   const f = S.filters;
-  return f.sel.length + (f.age ? 1 : 0) + (f.type ? 1 : 0) + (f.column ? 1 : 0) + (f.archived ? 1 : 0);
+  return f.sel.length + (f.age ? 1 : 0) + (f.type ? 1 : 0) + (f.column ? 1 : 0);
 }
 function ageCutoff() {
   const v = S.filters.age;

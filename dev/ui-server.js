@@ -82,6 +82,41 @@ function createDevServer() {
   // here too: restore does NOT remove the record (the board is truth for liveness).
   const archive = raw.archive || [];
   delete raw.archive;
+  // archiveFill {count}: synthesize a few dozen extra frozen cards so the
+  // archived mode's pagination is visible (the real archive.jsonl is unbounded).
+  const fill = raw.archiveFill;
+  delete raw.archiveFill;
+  if (fill && fill.count) {
+    const owners = (raw.lieutenants || []).map((l) => l.id);
+    const verbs = ['Fix', 'Refactor', 'Spike:', 'Document', 'Automate', 'Profile', 'Migrate', 'Polish'];
+    const things = ['queue drain', 'pane hub', 'avatar grid', 'wake TTL', 'archive sweep', 'label picker',
+      'sysload sampler', 'worktree GC', 'notif dedupe', 'SSE reconnect', 'md renderer', 'composer autosize'];
+    const types = ['implementation', 'implementation', 'investigation', 'plan'];
+    const labels = ['infra', 'ux', 'ci', 'tests', 'docs'];
+    for (let i = 0; i < fill.count; i++) {
+      const merged = i % 3 !== 0;
+      const archedAt = new Date(base - (5 + i * 1.7) * 86400000).toISOString(); // older as i grows
+      const createdAt = new Date(base - (9 + i * 1.9) * 86400000).toISOString();
+      const rec = {
+        ts: archedAt, actor: 'user', reason: merged ? 'merged' : 'killed',
+        card: {
+          id: 'filler-' + (i + 1),
+          title: verbs[i % verbs.length] + ' ' + things[i % things.length] + ' (#' + (i + 1) + ')',
+          type: types[i % types.length], owner: owners[i % owners.length] || 'monica', column: 'review',
+          labels: [labels[i % labels.length]],
+          attributes: Object.assign({ repo: 'bridge-commander' },
+            merged ? { prs: [{ url: 'https://github.com/tonylampada/bridge-commander/pull/' + (100 + i), state: 'merged' }] } : {}),
+          body: 'Synthetic archived fixture card #' + (i + 1) + ' — exists so the archive paginates.',
+          created: createdAt, updated: archedAt,
+          events: [{ seq: 0, ts: createdAt, level: 2, kind: 'created', text: 'card created', actor: 'user' }],
+          thread: [],
+        },
+      };
+      if (!merged && i % 6 === 0) rec.note = 'swept by the nightly archive cron';
+      archive.push(rec);
+    }
+    archive.sort((a, b) => (a.ts < b.ts ? -1 : 1)); // append order: oldest first, like the jsonl
+  }
   const board = Object.assign({ columns: COLUMNS }, raw);
   board.columns = COLUMNS;
   for (const c of board.cards) {
@@ -370,8 +405,13 @@ function createDevServer() {
       }
       if (route === 'GET /api/notifications') return sendJson(res, 200, { items: [], unread: 0 });
       if (route === 'GET /api/archive') {
+        // paginated read over the append-only log, newest first: limit+offset
+        // window plus the total, so the UI can "load more" instead of slurping
+        // an unbounded jsonl in one go
         const n = parseInt(url.searchParams.get('limit') || '50', 10) || 50;
-        return sendJson(res, 200, { archive: archive.slice(-n).reverse() });
+        const off = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
+        const all = archive.slice().reverse();
+        return sendJson(res, 200, { archive: all.slice(off, off + n), total: all.length });
       }
       if (route === 'GET /api/artifact') {
         const uri = url.searchParams.get('uri') || '';

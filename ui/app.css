@@ -1063,9 +1063,9 @@ a.a-uri { color: var(--accent); }
 #view-seg button:hover { color: var(--accent); }
 #view-seg button.on { color: var(--accent); background: var(--accent-soft); }
 
-#table { display: none; }
-#board-wrap.table-mode #board { display: none; }
-#board-wrap.table-mode #table { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+#table, #archive { display: none; }
+#board-wrap.table-mode #board, #board-wrap.archive-mode #board { display: none; }
+#board-wrap.table-mode #table, #board-wrap.archive-mode #archive { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 
 .tv-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
 table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 820px; }
@@ -1145,8 +1145,6 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
   color: var(--dim); font-size: 12px; padding: 5px 8px;
 }
 .fp-row select:hover, .fp-row select:focus { border-color: var(--accent2); }
-.fp-arch { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--dim); cursor: pointer; margin-top: 2px; }
-.fp-arch input { accent-color: var(--accent2); }
 .fp-foot { display: flex; justify-content: flex-end; margin-top: 2px; }
 #fp-clear {
   font-size: 12px; color: var(--dim); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px;
@@ -1154,14 +1152,19 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 #fp-clear:hover:not(:disabled) { color: var(--accent); border-color: var(--accent2); }
 #fp-clear:disabled { opacity: .4; }
 
-/* ---------- the 🧊 archived kanban column ---------- */
-.column.arch-col { border-style: dashed; }
-.column.arch-col h2 span:first-child { color: var(--faint); }
-.tile.arch { opacity: .55; cursor: default; }
-.tile.arch:hover { opacity: .85; transform: none; box-shadow: none; }
-.tile.arch .t-foot { align-items: center; }
-.tile .tv-unarch { padding: 2px 8px; font-size: 11px; }
 /* owner cells in the table are clickable filters, like tile owners */
 .tv .c-owner { cursor: pointer; }
 .tv .c-owner:hover { color: var(--accent); }
 .tv .c-owner.active { color: var(--accent); }
+
+/* ---------- 🧊 archived mode ---------- */
+#archive tr.arch td { color: var(--dim); }
+#archive tbody tr { cursor: default; }
+.fp-note { font-size: 11.5px; color: var(--faint); max-width: 240px; line-height: 1.4; }
+.av-foot { display: flex; align-items: center; gap: 12px; padding: 12px 2px 2px; }
+.tv-n { font-size: 12px; color: var(--faint); }
+#av-more {
+  font-size: 12px; color: var(--accent); border: 1px solid var(--accent2); border-radius: 8px; padding: 4px 12px;
+}
+#av-more:hover:not(:disabled) { background: var(--accent-soft); }
+#av-more:disabled { opacity: .5; cursor: wait; }

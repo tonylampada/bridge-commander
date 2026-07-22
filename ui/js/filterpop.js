@@ -1,9 +1,10 @@
 // filterpop.js — the ONE filter button next to the topbar text input, and its
 // popup where the richer filters live: status/type selects, owner/label
-// pickers (multi, shown as removable chips), the updated-recently window and
-// the 🧊 archived toggle. The badge counts active popup filters; zero = no
-// badge. Board and table share this state (S.filters) — clicking a label or
-// owner anywhere adds a chip here.
+// pickers (multi, shown as removable chips) and the updated-recently window.
+// The badge counts active popup filters; zero = no badge. Every board-region
+// mode shares this state (S.filters) — clicking a label or owner anywhere adds
+// a chip here. In 🧊 archived mode the popup slims down to what makes sense on
+// frozen snapshots (owner/label/type); status and updated hide.
 import { S, lieutenants, columns, render, clearFilters, activeFilterCount, toggleFilter } from './state.js';
 import { registryLabels } from './labels.js';
 import { esc, setHtmlIfChanged } from './util.js';
@@ -51,21 +52,22 @@ const AGES = [
 ];
 function renderFilterPanel() {
   const f = S.filters;
+  const archMode = S.boardMode === 'archive';
   const chips = f.sel.map((s, i) =>
     '<span class="fchip" data-i="' + i + '" title="remove this filter"><span>' +
     (s.kind === 'owner' ? '@' : '') + esc(s.value) + '</span><span class="x">✕</span></span>').join('');
   const html =
     (chips ? '<div class="fp-chips">' + chips + '</div>' : '') +
-    '<div class="fp-row"><span class="fp-lbl">status</span><select data-fp="column">' +
-    opts([{ v: '', t: 'any status' }].concat(columns().map((k) => ({ v: k.id, t: k.title }))), f.column) + '</select></div>' +
+    (archMode ? '<div class="fp-note">🧊 archived mode — status/updated don\'t apply to frozen snapshots</div>'
+      : '<div class="fp-row"><span class="fp-lbl">status</span><select data-fp="column">' +
+        opts([{ v: '', t: 'any status' }].concat(columns().map((k) => ({ v: k.id, t: k.title }))), f.column) + '</select></div>') +
     '<div class="fp-row"><span class="fp-lbl">type</span><select data-fp="type">' +
     opts([{ v: '', t: 'any type' }, { v: 'plan', t: '🧠 plan' }, { v: 'implementation', t: '🔥 implementation' }, { v: 'investigation', t: '🕵️ investigation' }], f.type) + '</select></div>' +
     '<div class="fp-row"><span class="fp-lbl">owner</span><select data-fp-add="owner">' +
     opts([{ v: '', t: 'add owner…' }].concat(lieutenants().map((l) => ({ v: l.id, t: l.name || l.id }))), '') + '</select></div>' +
     '<div class="fp-row"><span class="fp-lbl">label</span><select data-fp-add="label">' +
     opts([{ v: '', t: 'add label…' }].concat(registryLabels().map((l) => ({ v: l.name, t: l.name }))), '') + '</select></div>' +
-    '<div class="fp-row"><span class="fp-lbl">updated</span><select data-fp="age">' + opts(AGES, f.age) + '</select></div>' +
-    '<label class="fp-arch"><input type="checkbox" id="fp-archived"' + (f.archived ? ' checked' : '') + '> 🧊 include archived</label>' +
+    (archMode ? '' : '<div class="fp-row"><span class="fp-lbl">updated</span><select data-fp="age">' + opts(AGES, f.age) + '</select></div>') +
     '<div class="fp-foot"><button id="fp-clear"' + (activeFilterCount() || f.text ? '' : ' disabled') + '>clear all</button></div>';
   if (!setHtmlIfChanged(panel, html)) return;
   wire();
@@ -88,7 +90,5 @@ function wire() {
       render();
     };
   }
-  const arch = panel.querySelector('#fp-archived');
-  arch.onchange = () => { S.filters.archived = arch.checked; render(); };
   panel.querySelector('#fp-clear').onclick = () => clearFilters();
 }

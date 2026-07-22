@@ -27,6 +27,7 @@
     "card:fix-flaky-sysload": "seen",
     "lieutenant:quill": "queued"
   },
+  "archiveFill": { "count": 42 },
   "archive": [
     {
       "ts": "T-400000", "actor": "user", "reason": "merged",

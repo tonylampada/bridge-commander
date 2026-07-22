@@ -110,6 +110,15 @@ test('archive list + restore round-trip (the table view backing)', async () => {
   const a = await getJson('/api/archive');
   assert.ok(a.archive.length >= 3, 'fixture archived cards present');
   assert.ok(a.archive.every((r) => r.card && r.card.id && (r.reason === 'merged' || r.reason === 'killed')));
+  // pagination over the append-only log: windows + total, newest first
+  assert.ok(a.total >= 40, 'archiveFill made the log paginate (' + a.total + ')');
+  const p1 = await getJson('/api/archive?limit=20&offset=0');
+  const p2 = await getJson('/api/archive?limit=20&offset=20');
+  assert.strictEqual(p1.archive.length, 20);
+  assert.strictEqual(p2.archive.length, 20);
+  assert.notStrictEqual(p1.archive[0].card.id, p2.archive[0].card.id, 'pages differ');
+  assert.ok(p1.archive[0].ts >= p1.archive.at(-1).ts, 'newest first');
+  assert.ok(p1.archive.at(-1).ts >= p2.archive[0].ts, 'page 2 is older than page 1');
   const r = await postJson('/api/cards/websocket-transport-spike/restore', { actor: 'user' });
   assert.strictEqual(r.status, 200);
   const doc = await getJson('/api/board');
