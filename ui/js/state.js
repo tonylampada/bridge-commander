@@ -33,6 +33,13 @@ export function card(id) { return cards().find((c) => c.id === id); }
 export function columns() { return (S.doc && S.doc.columns) || []; }
 export function lieutenants() { return (S.doc && S.doc.lieutenants) || []; }
 export function lieutenant(id) { return lieutenants().find((l) => l.id === id); }
+// The lieutenant behind an event's `actor`, if any. The server stamps chat-say
+// events with the author NAME (not the id — server.js's msg.author), so match
+// both; 'user'/'server'/'worker' actors resolve to nothing.
+export function lieutenantByActor(actor) {
+  if (!actor) return undefined;
+  return lieutenants().find((l) => l.id === actor || l.name === actor);
+}
 export function lieutenantColor(id) {
   const l = lieutenant(id);
   return l && /^#[0-9a-fA-F]{6}$/.test(l.color || '') ? l.color : '#66788a';

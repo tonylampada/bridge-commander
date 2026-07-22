@@ -4,12 +4,12 @@ import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
-import { onOpenCard as toastOnOpenCard } from './toast.js';
+import { onOpenCard as toastOnOpenCard, onOpenLieutenant as toastOnOpenLieutenant } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderTable } from './table.js';
 import { renderArchive } from './archtable.js';
 import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
-import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation } from './chat.js';
+import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat } from './chat.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, appearancePopoverOpen, closeAppearancePopover } from './ltswitcher.js';
 import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
@@ -24,6 +24,7 @@ chatOnOpenCard(openDetail);
 // stays behind the filtered header's explicit "open card" button
 notifOnOpenCard(openCardConversation);
 toastOnOpenCard(openDetail);
+toastOnOpenLieutenant(openLieutenantChat); // card-less chat toast → the lieutenant's main chat
 
 // ---------- header: filter ----------
 // Just the text input here — every richer filter lives in the popup
