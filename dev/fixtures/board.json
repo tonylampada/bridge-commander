@@ -1,6 +1,6 @@
 {
-  "title": "bridge-commander (dev playground)",
-  "subtitle": "frontend-only fixtures — nothing here is real",
+  "title": "Fake Environment",
+  "subtitle": "",
   "seq": 0,
   "kinds": {
     "pr-merged": { "emoji": "🟪", "level": 2 },
