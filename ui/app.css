@@ -129,6 +129,18 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg.user { align-self: flex-end; background: var(--user-bubble); border: 1px solid var(--user-line); border-bottom-right-radius: 4px; }
 .msg .ts { display: block; color: var(--faint); font-size: 11px; margin-top: 4px; font-family: var(--mono); }
 .msg .pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+/* the card chip on a unified-stream bubble: which card thread this message
+   came from; clicking filters the chat to that thread + opens the card */
+.msg-chip {
+  display: block; width: fit-content; max-width: 100%; margin: 0 0 6px;
+  padding: 2px 9px; border-radius: 999px; border: 1px solid var(--line2);
+  background: var(--bg); color: var(--dim); font-size: 11px; line-height: 1.6;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.msg-chip:hover { color: var(--text); border-color: var(--accent2); }
+.msg.cmd .msg-chip { flex: none; margin: 0; align-self: center; }
+.msg.typing .msg-chip { margin: 0 0 0 6px; }
+
 .msg.typing { display: flex; align-items: center; gap: 4px; }
 .msg.typing .tdot { width: 6px; height: 6px; border-radius: 50%; background: var(--dim); animation: typing-blink 1.2s infinite; }
 .msg.typing .tdot:nth-child(2) { animation-delay: .2s; }
@@ -391,6 +403,12 @@ body.resizing { user-select: none; cursor: col-resize; }
 .tile.worker-idle::after { background: var(--faint); } /* dim slate, solid */
 @keyframes worker-pulse { 0%, 100% { opacity: .4; } 50% { opacity: 1; } }
 .tile.open { border-color: var(--accent); }
+/* transient "this one" pulse when a chat card chip points at the tile */
+.tile.flash { animation: tile-flash 1.6s ease-out; }
+@keyframes tile-flash {
+  0%, 55% { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(88, 182, 255, .35); }
+  100% { box-shadow: 0 0 0 3px rgba(88, 182, 255, 0); }
+}
 .tile.dragging { opacity: .45; }
 .tile .t-row1 { display: flex; gap: 6px; align-items: flex-start; }
 .tile .t-emoji { flex: none; font-size: 15px; line-height: 1.35; }
