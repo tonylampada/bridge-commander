@@ -35,15 +35,14 @@ function haystack(c) {
   return [c.title, c.id, c.body, c.type, c.owner, lieutenantName(c.owner), (c.labels || []).join(' ')]
     .filter(Boolean).join(' ').toLowerCase();
 }
+// the frozen-applicable subset of cardVisible: text, types (OR within), and the
+// owner/label chips via the shared selMatches (OR within a dimension, AND
+// across). status/updated never apply to snapshots — the popup hides them here.
 function archVisible(c) {
   const q = S.filters.text.trim().toLowerCase();
   if (q && !haystack(c).includes(q)) return false;
-  if (S.filters.type && c.type !== S.filters.type) return false;
-  for (const f of S.filters.sel) {
-    if (f.kind === 'owner') { if ((c.owner || '') !== f.value) return false; }
-    else if (!(c.labels || []).includes(f.value)) return false;
-  }
-  return true;
+  if (S.filters.types.length && !S.filters.types.includes(c.type)) return false;
+  return selMatches(c);
 }
 
 // visible frozen rows over the loaded pages: latest record per id, minus cards
