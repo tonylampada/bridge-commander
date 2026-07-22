@@ -37,6 +37,31 @@ npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander ru
 - Open the printed board URL (default `http://localhost:4780/`)
 - Talk to your lieutenant from there — he'll guide you through the rest of the setup
 
+## Board views
+
+The board region has three modes, toggled next to the filter (▦ / ☰ / 🧊):
+
+- **▦ board** — the kanban, as always.
+- **☰ table** — every live card as a sortable row (status, owner, labels, PRs,
+  activity…); same cards, same filters, denser reading.
+- **🧊 archived** — a read-only browser over the archive (the append-only log of
+  frozen card snapshots), newest first, paged in on demand. Clicking a row opens
+  the regular card detail — body, timeline, frozen thread — where **unarchive**
+  restores the card to the live board.
+
+Filtering is one shared control across all three: the topbar text input plus the
+funnel popup (status / type / owner / label / updated — every dimension
+multi-select, OR within a dimension, AND across). Clicking a label or owner
+anywhere toggles it as a filter chip; the funnel badge counts what's active.
+
+### UI dev playground
+
+`node dev/ui-server.js` (default `127.0.0.1:4790`, `--port`/`--host` flags)
+serves the real `ui/` against an in-memory fixture board from `dev/fixtures/` —
+every endpoint faked, writes mutate and re-broadcast, nothing persists. Iterate
+on the UI with realistic gnarly states (dead lieutenants, giant cards, a
+paginated archive) without touching a live workspace.
+
 ## Dependencies
 
 - Node ≥ 18, `tmux`, `git`

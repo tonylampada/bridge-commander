@@ -94,6 +94,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `card.artifact.remove` | `card, uri → ()` | ⚓ · 🤠 | unlist an artifact (the file itself is untouched) |
 | `card.archive` | `card, reason` | ⚙️ on merge · ⚓/🤠 otherwise | work landed, died, or was dismissed |
 | `card.restore` | `card` | ⚓ · ⚙️ (live evidence for an archived card) | a kill was a mistake; full frozen state + loud level-1 event; Working snapshots land in Backlog |
+| `card.list_archived` | `limit?, offset? → [record], total` | 🤠 (the 🧊 archived mode) · ⚓ (CLI `archive`) | browse the frozen snapshots newest-first — a paginated window over the append-only archive log, never mixed into the live board |
 
 ### conversation & delivery
 

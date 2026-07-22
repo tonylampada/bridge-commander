@@ -2122,9 +2122,15 @@ const server = http.createServer(async (req, res) => {
       });
     }
     if (route === 'GET /api/archive') {
-      const recs = readArchive();
+      // Paginated read over the append-only log, newest first: a limit+offset
+      // window plus the total, so the UI's 🧊 archived mode can page-in ("load
+      // more") instead of slurping an unbounded jsonl in one go. Offset-less
+      // calls keep their old meaning (the newest `limit` records) and the
+      // response stays a superset of the old shape (CLI reads `archive` only).
       const n = parseInt(url.searchParams.get('limit') || '50', 10) || 50;
-      return sendJson(res, 200, { archive: recs.slice(-n).reverse() });
+      const off = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
+      const all = readArchive().reverse();
+      return sendJson(res, 200, { archive: all.slice(off, off + n), total: all.length });
     }
     if (route === 'GET /api/notifications') {
       const items = notificationItems(url.searchParams.get('user'));
