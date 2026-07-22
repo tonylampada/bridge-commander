@@ -63,6 +63,14 @@ export function archivedRows() {
 export function archiveStats() {
   return { loaded: recs.length, total, more: loaded && recs.length < total, loading };
 }
+// the loaded frozen snapshot behind an id (latest record wins), or null when
+// unknown / live again — the detail panel resolves archived cards through this
+export function archivedCard(id) {
+  if (cards().some((c) => c.id === id)) return null;
+  let rec = null;
+  for (const r of recs) if (r && r.card && r.card.id === id) { rec = r; break; } // recs are newest first
+  return rec ? { c: rec.card, arch: rec } : null;
+}
 
 export function unarchive(id, btn) {
   if (btn) btn.disabled = true;

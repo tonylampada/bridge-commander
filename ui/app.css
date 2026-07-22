@@ -1168,3 +1168,12 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 }
 #av-more:hover:not(:disabled) { background: var(--accent-soft); }
 #av-more:disabled { opacity: .5; cursor: wait; }
+
+/* frozen-card detail: the inline thread snapshot + the unarchive header action */
+#dt-unarch { flex: none; }
+#dt-thread { display: flex; flex-direction: column; gap: 8px; margin-bottom: 16px; }
+.ftm { position: relative; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px 9px; }
+.ftm.mine { background: var(--accent-soft); border-color: var(--accent2); }
+.ftm .fta { font-size: 11px; font-weight: 650; color: var(--dim); }
+.ftm .fts { position: absolute; top: 8px; right: 10px; font-size: 10.5px; color: var(--faint); }
+.ftm .ftb { margin-top: 4px; font-size: 13px; }

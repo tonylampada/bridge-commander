@@ -6,6 +6,7 @@ import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
 import { openCardThread, syncChatToMain } from './chat.js';
 import { openMoveMenu } from './board.js';
+import { archivedCard, unarchive } from './archive.js';
 
 const isDesktop = () => window.innerWidth > 760; // matches the chat.js layout breakpoint
 
@@ -21,6 +22,12 @@ export function openDetail(id) {
   // one thread-switch owner; silent = no mobile tab-flip / focus steal. Mobile
   // keeps the tab layout untouched (chat switches only via the talk button).
   if (isDesktop()) { openCardThread(id, { silent: true }); return; } // openCardThread renders
+  render();
+}
+// Archived snapshots open in the SAME panel, read-only: no chat sync (there is
+// no live thread target behind a frozen card — its thread shows inline instead).
+export function openArchivedDetail(id) {
+  S.openCardId = id;
   render();
 }
 export function closeDetail() {
@@ -64,6 +71,8 @@ document.addEventListener('click', (e) => {
   if (t.closest && (
     t.closest('#chat') ||                     // left chat = the selected card's thread; part of its context
     t.closest('.tile') ||                     // another card — switch, handled by its onclick
+    t.closest('#table tbody tr') ||           // table/archive rows switch cards the same way
+    t.closest('#archive tbody tr') ||
     t.closest('#lt-overlay') ||               // new-lieutenant modal
     t.closest('#move-menu') ||                // transient popovers dismiss on their own
     t.closest('#owner-menu') ||
@@ -409,9 +418,24 @@ function attrHtml(k, v) {
 
 export function renderDetail() {
   if (!S.openCardId) { el.hidden = true; return; }
-  const c = card(S.openCardId);
-  if (!c) { closeDetail(); return; }
+  let c = card(S.openCardId);
+  let arch = null; // the archive record when this is a frozen snapshot
+  if (!c) {
+    const frozen = archivedCard(S.openCardId);
+    if (!frozen) { closeDetail(); return; }
+    c = frozen.c;
+    arch = frozen.arch;
+  }
   el.hidden = false;
+  el.classList.toggle('frozen', !!arch);
+  // header actions per mode: live cards talk and move; a frozen snapshot's one
+  // action is unarchive (restoring keeps the panel open — it becomes the live card)
+  document.getElementById('dt-talk').hidden = !!arch;
+  document.getElementById('dt-menu-btn').hidden = !!arch;
+  const unBtn = document.getElementById('dt-unarch');
+  unBtn.hidden = !arch;
+  if (arch) unBtn.onclick = () => unarchive(c.id, unBtn);
+  titleEl.title = arch ? '' : 'click to rename'; // rename is live-only (the editor no-ops on frozen ids)
 
   const emojiEl = document.getElementById('dt-emoji');
   const emoji = cardEmoji(c);
@@ -420,12 +444,18 @@ export function renderDetail() {
   // sub line: id + timestamps, plus a worker-id chip when a worker is attached.
   // Same whitelist as the tile stripe (board.js) — only known states render, so
   // no server value ever reaches the class name; the id itself is esc()'d.
+  // Frozen snapshots swap the worker chip for when/why they were archived.
   const WORKER_STATES = { working: 1, 'needs-you': 1, idle: 1 };
   const w = cardStatus(c).worker;
-  const worker = w && w.id && WORKER_STATES[w.state] ? w : null;
+  const worker = !arch && w && w.id && WORKER_STATES[w.state] ? w : null;
+  const rsn = arch && (arch.reason === 'merged' ? 'merged' : 'killed');
   setHtmlIfChanged(document.getElementById('dt-sub'),
-    esc(c.id + ' · ' + c.type + ' · created ') + agoSpanHtml(c.created) +
-    esc(' ago · updated ') + agoSpanHtml(cardRecency(c)) + esc(' ago') +
+    esc(c.id + ' · ' + c.type + ' · created ') + agoSpanHtml(c.created) + esc(' ago') +
+    (arch
+      ? esc(' · archived ') + agoSpanHtml(arch.ts) + esc(' ago') +
+        '<span class="tv-rsn tv-rsn-' + rsn + '"' + (arch.note ? ' title="' + esc(arch.note) + '"' : '') + '>' +
+        (rsn === 'merged' ? '🏁 merged' : '🪦 killed') + '</span>'
+      : esc(' · updated ') + agoSpanHtml(cardRecency(c)) + esc(' ago')) +
     (worker ? '<span class="dt-worker dt-worker-' + worker.state + '" title="worker: ' + esc(worker.state) + '">' + esc(worker.id) + '</span>' : ''));
 
   // attributes header. The owner (the owning lieutenant) leads, in the
@@ -442,7 +472,8 @@ export function renderDetail() {
     // ✎ only while no worker is bound — mirrors the server guard on owner PATCH.
     // Rendered in the markup (not appended after) so a worker binding/unbinding
     // changes the innerHTML signature and setHtmlIfChanged rebuilds the row.
-    (worker ? '' : '<button type="button" class="owner-edit" title="change owner (only while no worker is bound)">✎</button>') +
+    // Frozen snapshots never offer it: nothing about them is editable.
+    (worker || arch ? '' : '<button type="button" class="owner-edit" title="change owner (only while no worker is bound)">✎</button>') +
     '</span>' +
     (c.pendingOrder ? '<span class="attr"><span class="k">pending</span><span class="v">⏳ ' + esc(c.pendingOrder.kind) + '</span></span>' : '') +
     Object.entries(at)
@@ -465,7 +496,7 @@ export function renderDetail() {
   // chip's rendered markup, covering name/color/filter state) instead of an
   // innerHTML cache; the handlers close over c, hence c.id in the signature
   const labWrap = document.getElementById('dt-labels');
-  const labSig = c.id + '|' + (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('');
+  const labSig = c.id + '|' + (arch ? 'frozen|' : '') + (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('');
   if (labWrap.__bcSig !== labSig) {
     labWrap.__bcSig = labSig;
     labWrap.textContent = '';
@@ -474,19 +505,23 @@ export function renderDetail() {
       chip.className = 'dlabel';
       chip.innerHTML = labelChipHtml(name, filterSelected('label', name));
       chip.querySelector('.label').onclick = () => toggleFilter('label', name);
-      const x = document.createElement('button');
-      x.type = 'button'; x.textContent = '✕'; x.title = 'remove label';
-      x.onclick = () => saveCardLabels(c.id, (c.labels || []).filter((v) => v !== name));
-      chip.appendChild(x);
+      if (!arch) { // frozen labels filter but never change
+        const x = document.createElement('button');
+        x.type = 'button'; x.textContent = '✕'; x.title = 'remove label';
+        x.onclick = () => saveCardLabels(c.id, (c.labels || []).filter((v) => v !== name));
+        chip.appendChild(x);
+      }
       labWrap.appendChild(chip);
     }
-    const add = document.createElement('button');
-    add.type = 'button';
-    add.id = 'dt-label-add';
-    add.setAttribute('data-label-add', '');
-    add.textContent = '+ label';
-    add.onclick = () => openLabelPicker(c.id, add);
-    labWrap.appendChild(add);
+    if (!arch) {
+      const add = document.createElement('button');
+      add.type = 'button';
+      add.id = 'dt-label-add';
+      add.setAttribute('data-label-add', '');
+      add.textContent = '+ label';
+      add.onclick = () => openLabelPicker(c.id, add);
+      labWrap.appendChild(add);
+    }
   }
 
   // body (don't clobber an in-progress description edit). mdEnhance runs
@@ -496,6 +531,7 @@ export function renderDetail() {
   if (!editingBody) {
     setHtmlIfChanged(bodyEl, md(c.body || ''));
     mdEnhance(bodyEl);
+    bodyEditBtn.hidden = !!arch; // description edit is live-only
   }
 
   // artifacts: attributes.artifacts [{uri, label}] — shown by FILENAME, not the
@@ -516,6 +552,20 @@ export function renderDetail() {
     n.onclick = () => openArtifact(n.dataset.view);
   });
 
+  // frozen thread snapshot, inline: live cards converse in the chat panel, but
+  // an archived card's thread is part of the snapshot — show it read-only here
+  const thHead = document.getElementById('dt-thread-head');
+  const thEl = document.getElementById('dt-thread');
+  const showThread = !!arch && (c.thread || []).length > 0;
+  thHead.hidden = thEl.hidden = !showThread;
+  if (showThread) {
+    setHtmlIfChanged(thEl, (c.thread || []).map((m) =>
+      '<div class="ftm' + (m.author === 'user' ? ' mine' : '') + '">' +
+      '<span class="fta">' + esc(m.author) + '</span>' +
+      '<div class="ftb md">' + md(m.text || '') + '</div>' +
+      '<span class="fts">' + hhmm(m.ts) + '</span></div>').join(''));
+  }
+
   // event timeline (newest first)
   const evEl = document.getElementById('dt-events');
   const events = (c.events || []).slice().reverse();
@@ -526,5 +576,5 @@ export function renderDetail() {
     '<div class="sub">' + esc(e.actor || '') + ' · ' + hhmm(e.ts) + ' · ' + agoSpanHtml(e.ts) + ' ago</div>' +
     '</div></div>').join('') || '<div class="ev"><div class="bd"><div class="sub">no events yet</div></div></div>');
 
-  maybeMarkCardRead(c);
+  if (!arch) maybeMarkCardRead(c); // frozen snapshots have no read state to advance
 }

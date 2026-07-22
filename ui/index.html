@@ -137,6 +137,8 @@
     </div>
     <button id="dt-talk" title="talk in this card's thread">💬 talk</button>
     <button id="dt-menu-btn" title="move / archive">⋯</button>
+    <!-- archived snapshots only: the one action a frozen card offers -->
+    <button id="dt-unarch" class="tv-unarch" hidden>🧟 unarchive</button>
     <button id="dt-close" title="close">✕</button>
   </div>
   <div class="dt-attrs" id="dt-attrs"></div>
@@ -152,6 +154,9 @@
       </div>
     </div>
     <div class="dt-artifacts" id="dt-artifacts"></div>
+    <!-- archived snapshots: the frozen thread, inline (live cards chat on the left) -->
+    <div class="dt-events-head" id="dt-thread-head" hidden>thread (frozen)</div>
+    <div id="dt-thread" hidden></div>
     <div class="dt-events-head">timeline</div>
     <div class="dt-events" id="dt-events"></div>
   </div>
