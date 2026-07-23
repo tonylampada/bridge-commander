@@ -40,6 +40,25 @@ test('upload → stored + served with the right Content-Type and correct size', 
   }
 });
 
+test('video attachment serve honors Range (206 slice) for <video> playback', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    const up = await s.api('POST', '/api/attachments', { name: 'clip.mp4', mime: 'video/mp4', dataBase64: b64('FAKE-MP4-BYTES') });
+    assert.strictEqual(up.status, 200);
+    const url = s.base + '/api/attachments/' + up.body.id;
+    const full = await fetch(url);
+    assert.strictEqual(full.status, 200);
+    assert.strictEqual(full.headers.get('accept-ranges'), 'bytes');
+    const r = await fetch(url, { headers: { Range: 'bytes=5-7' } });
+    assert.strictEqual(r.status, 206);
+    assert.strictEqual(r.headers.get('content-range'), 'bytes 5-7/14');
+    assert.strictEqual(r.headers.get('content-type'), 'video/mp4');
+    assert.strictEqual(await r.text(), 'MP4');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('over-cap upload → 413', async () => {
   const s = await startServerWithLieutenant({ env: { BC_UPLOAD_MAX_BYTES: '64' } });
   try {

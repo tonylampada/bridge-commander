@@ -125,6 +125,7 @@ const ARTIFACT_MIME = {
   '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
   '.webp': 'image/webp', '.svg': 'image/svg+xml', '.bmp': 'image/bmp', '.avif': 'image/avif',
   '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
 };
 
 const DEFAULT_PORT = 4780;
@@ -848,6 +849,27 @@ setInterval(() => {
 }, 25000).unref();
 
 // ---------- helpers ----------
+// Byte serve shared by the raw artifact and attachment routes. Honors a single
+// `Range: bytes=` header (206 + Content-Range) because iOS Safari refuses to
+// play <video> from a server that answers Range requests with a plain 200;
+// anything unparseable falls back to the full 200, unsatisfiable → 416.
+function sendBytes(req, res, data, headers) {
+  const m = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range || '');
+  const base = { ...headers, 'Accept-Ranges': 'bytes' };
+  if (m && (m[1] || m[2])) {
+    const start = m[1] ? parseInt(m[1], 10) : data.length - parseInt(m[2], 10);
+    const end = m[1] && m[2] ? Math.min(parseInt(m[2], 10), data.length - 1) : data.length - 1;
+    if (start < 0 || start > end || start >= data.length) {
+      res.writeHead(416, { 'Content-Range': 'bytes */' + data.length });
+      return res.end();
+    }
+    const chunk = data.subarray(start, end + 1);
+    res.writeHead(206, { ...base, 'Content-Length': chunk.length, 'Content-Range': 'bytes ' + start + '-' + end + '/' + data.length });
+    return res.end(chunk);
+  }
+  res.writeHead(200, { ...base, 'Content-Length': data.length });
+  res.end(data);
+}
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
   res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
@@ -2184,24 +2206,22 @@ const server = http.createServer(async (req, res) => {
         const ctype = isHtml ? 'text/html; charset=utf-8'
           : am ? (attMime || 'application/octet-stream')
           : (ARTIFACT_MIME[ext] || 'application/octet-stream');
-        // Images, pdf, and rendered html show inline in the browser; other
+        // Images, video, pdf, and rendered html show inline in the browser; other
         // binaries download. Same hardening as the attachments serve: nosniff pins
         // the Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
-        // is navigated to as a document (inline <img> subresources unaffected).
-        const inline = isHtml || /^image\//.test(ctype) || ctype === 'application/pdf';
+        // is navigated to as a document (inline <img>/<video> subresources unaffected).
+        const inline = isHtml || /^(image|video)\//.test(ctype) || ctype === 'application/pdf';
         const csp = isHtml ? 'sandbox allow-scripts' : 'sandbox';
         let data;
         try { data = fs.readFileSync(file); }
         catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
-        res.writeHead(200, {
+        return sendBytes(req, res, data, {
           'Content-Type': ctype,
-          'Content-Length': data.length,
           'Cache-Control': 'private, max-age=31536000, immutable',
           'X-Content-Type-Options': 'nosniff',
           'Content-Security-Policy': csp,
           'Content-Disposition': (inline ? 'inline' : 'attachment') + '; filename="' + name.replace(/["\\\r\n]/g, '_') + '"',
         });
-        return res.end(data);
       }
       let data;
       try { data = fs.readFileSync(file); }
@@ -2243,15 +2263,13 @@ const server = http.createServer(async (req, res) => {
       // Uploaded bytes are untrusted content served from the board's own origin.
       // nosniff pins the stored Content-Type (no MIME sniffing into executable
       // types); the sandbox CSP neutralizes scripts if an HTML/SVG upload is
-      // navigated to as a document — inline <img> subresources are unaffected.
-      res.writeHead(200, {
+      // navigated to as a document — inline <img>/<video> subresources are unaffected.
+      return sendBytes(req, res, data, {
         'Content-Type': meta.mime || 'application/octet-stream',
-        'Content-Length': data.length,
         'Cache-Control': 'private, max-age=31536000, immutable',
         'X-Content-Type-Options': 'nosniff',
         'Content-Security-Policy': 'sandbox',
       });
-      return res.end(data);
     }
 
     // ----- lieutenants -----

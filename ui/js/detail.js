@@ -188,6 +188,8 @@ const avName = document.getElementById('av-name');
 const avBody = document.getElementById('av-body');
 const avImgWrap = document.getElementById('av-img-wrap');
 const avImg = document.getElementById('av-img');
+const avVideoWrap = document.getElementById('av-video-wrap');
+const avVideo = document.getElementById('av-video');
 const avFrame = document.getElementById('av-frame');
 const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
@@ -200,6 +202,10 @@ function avReset(name, uri) {
   avName.title = uri || name;
   avImgWrap.hidden = true;
   avImg.removeAttribute('src');
+  avVideoWrap.hidden = true;
+  avVideo.pause();
+  avVideo.removeAttribute('src');
+  avVideo.load(); // actually drop the previous stream (removeAttribute alone doesn't)
   avFrame.hidden = true;
   avFrame.removeAttribute('src'); // drop the previous page so it can't linger
   avBody.hidden = false;
@@ -260,6 +266,12 @@ async function openArtifact(uri) {
     avBody.hidden = true; avImgWrap.hidden = false; avImg.src = rawUrl; avImg.alt = title;
     return;
   }
+  if (VIDEO_EXT.test(name)) {
+    // Inline player fed by the same raw serve the ⬇ button uses. No autoplay.
+    avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
+    avBody.hidden = true; avVideoWrap.hidden = false; avVideo.src = rawUrl;
+    return;
+  }
   if (HTML_EXT.test(name)) {
     // A rendered .html/.htm page (teach-me, report): show it live in a sandboxed
     // iframe (allow-scripts, no same-origin) fed by the raw serve, which sends a
@@ -291,9 +303,11 @@ async function openArtifact(uri) {
 // (never /api/artifact — an attachment need not be a promoted card artifact).
 const TEXTY_MIME = /^(text\/|application\/(json|xml|javascript|x-sh|x-yaml|yaml|csv|x-www-form-urlencoded)|image\/svg)/;
 const IMG_EXT = /\.(png|jpe?g|gif|webp|bmp|svg|avif)$/i;
+const VIDEO_EXT = /\.(mp4|mov|webm|m4v)$/i;
+const isVideoMime = (m) => /^video\//.test(String(m || ''));
 const TEXT_EXT = /\.(md|markdown|txt|log|json|ya?ml|csv|js|ts|py|sh|css|html?)$/i;
 // Known binaries — never worth a text preview; offer a download straight away.
-const BIN_EXT = /\.(pdf|zip|gz|tgz|tar|xlsx?|docx?|pptx?|bin|exe|dmg|iso|mp4|mov|webm|mp3|wav|ogg|flac|woff2?|ttf|otf|parquet|pkl|npz|so|dll|wasm|class|jar)$/i;
+const BIN_EXT = /\.(pdf|zip|gz|tgz|tar|xlsx?|docx?|pptx?|bin|exe|dmg|iso|mp3|wav|ogg|flac|woff2?|ttf|otf|parquet|pkl|npz|so|dll|wasm|class|jar)$/i;
 export async function openAttachment(att) {
   const url = '/api/attachments/' + encodeURIComponent(att.id);
   const name = att.name || '';
@@ -302,6 +316,7 @@ export async function openAttachment(att) {
   avDownload.setAttribute('download', name || 'file');
   avDownload.hidden = false;
   const showImage = () => { avBody.hidden = true; avImgWrap.hidden = false; avImg.src = url; avImg.alt = name; };
+  const showVideo = () => { avBody.hidden = true; avVideoWrap.hidden = false; avVideo.src = url; };
   const showText = (text) => {
     if (isMdArtifact(att, name)) showMarkdown(text);
     else { avBody.className = ''; avBody.textContent = text; }
@@ -311,6 +326,7 @@ export async function openAttachment(att) {
   // {uri, label}, so its mime may be unknown — then consult the served
   // Content-Type before falling back to a download.
   if (isImageMime(mime) || (!mime && IMG_EXT.test(name))) return showImage();
+  if (isVideoMime(mime) || (!mime && VIDEO_EXT.test(name))) return showVideo();
   if (TEXTY_MIME.test(mime) || (!mime && TEXT_EXT.test(name))) {
     avBody.textContent = 'loading…';
     try {
@@ -329,6 +345,7 @@ export async function openAttachment(att) {
     if (!r.ok) throw new Error('HTTP ' + r.status);
     const ct = (r.headers.get('content-type') || '').split(';')[0];
     if (isImageMime(ct)) return showImage();
+    if (isVideoMime(ct)) return showVideo();
     if (TEXTY_MIME.test(ct)) return showText(await r.text());
     avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.';
   } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
@@ -338,7 +355,7 @@ export async function openAttachment(att) {
 // state.js onRender: a setter avoids a circular import back into main.js.
 let onCloseFn = () => {};
 export function onArtifactClose(fn) { onCloseFn = fn; }
-export function closeArtifact() { avOverlay.hidden = true; onCloseFn(); }
+export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); onCloseFn(); }
 export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 // Maximize / restore the viewer (pure CSS class toggle — see #av-modal.expanded).

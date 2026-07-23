@@ -47,6 +47,40 @@ test('raw=1 for a listed image → 200, image Content-Type, hardening headers, e
   }
 });
 
+test('raw=1 for a listed .mp4 → video/mp4, inline, Accept-Ranges; Range → 206 slice', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    const vid = path.join(s.dir, 'demo.mp4');
+    fs.writeFileSync(vid, 'FAKE-MP4-BYTES-0123456789'); // headers/range only — no real codec needed
+    const { uri } = await cardWithArtifact(s, vid, 'worker demo video');
+    const raw = s.base + '/api/artifact?uri=' + encodeURIComponent(uri) + '&raw=1';
+
+    const res = await fetch(raw);
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-type'), 'video/mp4');
+    assert.match(res.headers.get('content-disposition') || '', /^inline/);
+    assert.strictEqual(res.headers.get('accept-ranges'), 'bytes');
+    assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+
+    // iOS Safari probes with a tiny Range and refuses to play on a plain 200
+    const r2 = await fetch(raw, { headers: { Range: 'bytes=0-1' } });
+    assert.strictEqual(r2.status, 206);
+    assert.strictEqual(r2.headers.get('content-range'), 'bytes 0-1/25');
+    assert.strictEqual(await r2.text(), 'FA');
+
+    const r3 = await fetch(raw, { headers: { Range: 'bytes=15-' } });
+    assert.strictEqual(r3.status, 206);
+    assert.strictEqual(r3.headers.get('content-range'), 'bytes 15-24/25');
+    assert.strictEqual(await r3.text(), '0123456789');
+
+    const r4 = await fetch(raw, { headers: { Range: 'bytes=999-' } });
+    assert.strictEqual(r4.status, 416);
+    assert.strictEqual(r4.headers.get('content-range'), 'bytes */25');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('raw=1 for a uri NOT listed on any card → 404 (auth guard holds for raw too)', async () => {
   const s = await startServerWithLieutenant();
   try {

@@ -999,8 +999,8 @@ a.a-uri { color: var(--accent); }
    so .md block styles (from the shared markdown section) apply as on a card body */
 #av-body.md { font-family: var(--sans); font-size: 15px; white-space: normal; }
 /* image attachment preview (shares the av-overlay) */
-#av-img-wrap { flex: 1; min-height: 60px; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 12px; }
-#av-img { max-width: 100%; max-height: 76vh; object-fit: contain; border-radius: 6px; }
+#av-img-wrap, #av-video-wrap { flex: 1; min-height: 60px; overflow: auto; display: flex; align-items: center; justify-content: center; padding: 12px; }
+#av-img, #av-video { max-width: 100%; max-height: 76vh; object-fit: contain; border-radius: 6px; }
 /* rendered html artifact (shares the av-overlay) — fills the body; white backdrop
    so a self-contained page renders on its own canvas, not the board's dark bg */
 #av-frame { flex: 1; min-height: 60px; width: 100%; border: 0; background: #fff; }
