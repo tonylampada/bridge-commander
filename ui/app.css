@@ -1030,11 +1030,34 @@ a.a-uri { color: var(--accent); }
 /* ---------- mobile ---------- */
 @media (max-width: 760px) {
   /* the notch: pad the header top by the safe-area inset so controls clear it */
-  #topbar { height: auto; min-height: 46px; padding: calc(env(safe-area-inset-top)) 10px 0; gap: 8px; }
+  #topbar { height: auto; min-height: 46px; padding: calc(env(safe-area-inset-top)) 10px 0; gap: 6px; }
   #b-subtitle { display: none; }
-  #filter-wrap { gap: 4px; }
-  #filter { width: 100%; min-width: 60px; padding: 5px 9px; }
+  /* the title yields to the controls and trims with an ellipsis — never overlapped.
+     The status dot's state moves into its underline (green/yellow/red), so the
+     dot itself is hidden here. */
+  #topbar h1 {
+    flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    text-decoration: underline 2px; text-underline-offset: 4px;
+    text-decoration-color: var(--danger); transition: text-decoration-color .3s;
+  }
+  #topbar h1[data-load="ok"] { text-decoration-color: var(--ok); }
+  #topbar h1[data-load="busy"] { text-decoration-color: var(--warn); }
+  #status-dot { display: none; }
+  /* the text filter collapses to the 🔍; the row is title + icon buttons only */
+  #filter-wrap { flex: none; gap: 4px; }
+  #filter { display: none; }
   #filter-age { display: none; }
+  /* search mode (🔍 tapped): the input takes the whole row — title, mode
+     switcher, dot, bell, gear step aside until ✕ */
+  #topbar.searching h1, #topbar.searching #view-seg, #topbar.searching #status-dot,
+  #topbar.searching #bell, #topbar.searching #gear, #topbar.searching #filter-open { display: none; }
+  #topbar.searching #filter-wrap { flex: 1 1 auto; }
+  #topbar.searching #filter { display: block; flex: 1 1 auto; width: auto; min-width: 0; padding: 5px 9px; }
+  #topbar.searching #filter-close { display: inline-flex; }
+  /* compact the icon cluster so everything sits in one calm row at 390px
+     (the #view-seg / #filter-open sizing lives in the mobile block at the end
+     of this file — their base rules are declared below this one) */
+  #bell, #gear { padding: 4px 8px; font-size: 13px; }
   /* iOS auto-zooms a text field on focus when its font-size is < 16px, which
      blows up the whole layout. Force every focusable text input to 16px on
      mobile so focus never triggers a zoom (the accessible fix; the viewport
@@ -1141,13 +1164,17 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .tv td.c-btn { text-align: right; }
 
 /* ---------- the unified filter control: one button, one popup ---------- */
-#filter-btn {
+#filter-btn, #filter-open, #filter-close {
   position: relative; display: inline-flex; align-items: center; justify-content: center;
   border: 1px solid var(--line); border-radius: 8px; color: var(--dim);
   padding: 5px 9px; flex: none; transition: border-color .15s, color .15s;
 }
-#filter-btn svg { display: block; }
-#filter-btn:hover, #filter-btn.on, #filter-btn.active { color: var(--accent); border-color: var(--accent2); }
+#filter-btn svg, #filter-open svg { display: block; }
+#filter-btn:hover, #filter-btn.on, #filter-btn.active,
+#filter-open:hover, #filter-open.on, #filter-close:hover { color: var(--accent); border-color: var(--accent2); }
+/* 🔍 / ✕ are the mobile collapsed-search controls — desktop shows the input itself */
+#filter-open, #filter-close { display: none; }
+#filter-close { font-size: 13px; line-height: 15px; }
 #filter-panel {
   position: fixed; z-index: 60; display: flex; flex-direction: column; gap: 8px;
   background: var(--bg2); border: 1px solid var(--line2); border-radius: 12px; padding: 12px 14px;
@@ -1202,3 +1229,25 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .ftm .fta { font-size: 11px; font-weight: 650; color: var(--dim); }
 .ftm .fts { position: absolute; top: 8px; right: 10px; font-size: 10.5px; color: var(--faint); }
 .ftm .ftb { margin-top: 4px; font-size: 13px; }
+
+/* ---------- mobile topbar: collapsed search + compact controls ----------
+   Lives at the end of the file so it wins the cascade over the #view-seg and
+   #filter-open/#filter-close base rules declared above. */
+@media (max-width: 760px) {
+  #filter-open { display: inline-flex; }
+  #topbar.searching #filter-open { display: none; }
+  /* the mode switcher collapses to ONE button — the current mode; tapping it
+     opens the #mode-menu dropdown (main.js) */
+  #view-seg button { display: none; }
+  #view-seg button.on { display: inline-flex; padding: 5px 9px; font-size: 13px; border-left: none; }
+}
+
+/* mobile board-mode dropdown — the move menu's look, anchored under the switcher */
+#mode-menu {
+  position: fixed; z-index: 80; min-width: 150px; display: flex; flex-direction: column;
+  background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; padding: 5px;
+  box-shadow: var(--shadow); animation: pop-in .12s ease-out;
+}
+#mode-menu button { text-align: left; font-size: 13px; padding: 8px 12px; border-radius: 7px; }
+#mode-menu button:hover { background: var(--panel2); }
+#mode-menu button.cur { color: var(--accent); }

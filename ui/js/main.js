@@ -31,8 +31,18 @@ toastOnOpenLieutenant(openLieutenantChat); // card-less chat toast → the lieut
 // (filterpop.js), behind the one button with the active-count badge.
 const filterInput = document.getElementById('filter');
 filterInput.oninput = () => { S.filters.text = filterInput.value; render(); };
+// Mobile collapses the input to a 🔍 button; tapping it puts the topbar in
+// "search mode" (the input over the whole row) until ✕. Desktop never shows
+// either button and the .searching class is inert there.
+const topbarEl = document.getElementById('topbar');
+const filterOpenBtn = document.getElementById('filter-open');
+document.getElementById('filter-close').onclick = () => topbarEl.classList.remove('searching');
+filterOpenBtn.onclick = () => { topbarEl.classList.add('searching'); filterInput.focus(); };
+function searchModeOn() { return topbarEl.classList.contains('searching'); }
 function syncFilterInputs() {
   if (filterInput.value !== S.filters.text) filterInput.value = S.filters.text;
+  // collapsed 🔍 lights up while a text filter is applied
+  filterOpenBtn.classList.toggle('on', !!S.filters.text);
 }
 
 // ---------- header: status dot ----------
@@ -43,6 +53,11 @@ function renderStatusDot() {
   el.title = !S.connected ? 'disconnected — reconnecting…'
     : owed ? 'a lieutenant owes a reply on ' + owed + ' conversation' + (owed > 1 ? 's' : '')
     : 'connected — all quiet';
+  // mobile hides the dot and wears the same state as a colored underline on
+  // the title (the dot had no tap action, so the underline is passive too)
+  const titleEl = document.getElementById('b-title');
+  titleEl.dataset.load = !S.connected ? 'down' : owed ? 'busy' : 'ok';
+  titleEl.title = el.title;
 }
 
 // ---------- settings panel ----------
@@ -83,8 +98,37 @@ function setBoardMode(mode) {
   }
   render();
 }
+// Mobile collapses the switcher to just the active mode's button; tapping it
+// opens a small dropdown of the three modes. Desktop shows all three buttons,
+// where clicking the active one was always a no-op — so the dropdown branch
+// can never fire there.
+const modeMenuEl = document.getElementById('mode-menu');
+const MODE_LABEL = { board: '▦ kanban', table: '☰ table', archive: '🧊 archived' };
+function modeMenuIsOpen() { return !modeMenuEl.hidden; }
+function closeModeMenu() { modeMenuEl.hidden = true; }
+function openModeMenu(anchor) {
+  modeMenuEl.textContent = '';
+  for (const m of Object.keys(MODE_BTN)) {
+    const b = document.createElement('button');
+    b.textContent = (m === S.boardMode ? '● ' : '') + MODE_LABEL[m];
+    if (m === S.boardMode) b.className = 'cur';
+    b.onclick = () => { closeModeMenu(); setBoardMode(m); };
+    modeMenuEl.appendChild(b);
+  }
+  modeMenuEl.hidden = false;
+  const ar = anchor.getBoundingClientRect(), r = modeMenuEl.getBoundingClientRect();
+  modeMenuEl.style.left = Math.max(8, Math.min(ar.right - r.width, window.innerWidth - r.width - 8)) + 'px';
+  modeMenuEl.style.top = Math.min(ar.bottom + 6, window.innerHeight - r.height - 8) + 'px';
+}
+document.addEventListener('click', (e) => { if (modeMenuIsOpen() && !modeMenuEl.contains(e.target)) closeModeMenu(); });
 for (const [m, id] of Object.entries(MODE_BTN)) {
-  document.getElementById(id).onclick = () => setBoardMode(m);
+  document.getElementById(id).onclick = (e) => {
+    if (m === S.boardMode && matchMedia('(max-width: 760px)').matches) {
+      e.stopPropagation(); // keep the document click-away handler out of this tap
+      if (modeMenuIsOpen()) closeModeMenu();
+      else openModeMenu(e.currentTarget);
+    } else setBoardMode(m);
+  };
 }
 try { setBoardMode(localStorage.getItem('bc-board-mode') || 'board'); } catch (e) {}
 
@@ -113,7 +157,12 @@ function renderTabs() {
 document.addEventListener('keydown', (e) => {
   const active = document.activeElement;
   const inField = /^(INPUT|TEXTAREA|SELECT)$/.test((active && active.tagName) || '');
-  if (e.key === '/' && !inField) { e.preventDefault(); filterInput.focus(); return; }
+  if (e.key === '/' && !inField) {
+    e.preventDefault();
+    if (matchMedia('(max-width: 760px)').matches) topbarEl.classList.add('searching');
+    filterInput.focus();
+    return;
+  }
   if (e.key === 'Escape') {
     if (artifactOpen()) closeArtifact();
     else if (paneOpen()) closePane();
@@ -122,12 +171,14 @@ document.addEventListener('keydown', (e) => {
     else if (newLieutenantOpen()) closeNewLieutenant();
     else if (pickerIsOpen()) closeLabelPicker();
     else if (appearancePopoverOpen()) closeAppearancePopover();
+    else if (modeMenuIsOpen()) closeModeMenu();
     else if (filterPanelOpen()) closeFilterPanel();
     else if (ltSwitcherOpen()) closeLtSwitcher();
     else if (ownerMenuOpen()) closeOwnerMenu(); // just the menu — keep the detail open
     else if (S.notifOpen) { S.notifOpen = false; render(); }
     else if (!spEl.hidden) { spEl.hidden = true; gearBtn.classList.remove('on'); }
     else if (detailOpen()) closeDetail();
+    else if (searchModeOn()) topbarEl.classList.remove('searching'); // collapse first, filters survive
     else if (filtersActive()) { clearFilters(); syncFilterInputs(); }
     closeMoveMenu();
   }
