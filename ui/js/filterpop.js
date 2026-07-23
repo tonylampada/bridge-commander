@@ -54,11 +54,14 @@ const AGES = [
   { v: '259200', t: 'last 3 days' }, { v: '604800', t: 'last week' },
 ];
 // a multi-toggle chip group for a small enum dimension (status / type):
-// every option shows, the selected ones light up — OR within the dimension
+// every option shows, the selected ones light up — OR within the dimension.
+// An option with a short form `s` (its emoji) renders that alone, keeping the
+// full text `t` as title/aria-label, so the group fits one line.
 function optChips(dim, list) {
   return '<span class="fp-opts">' + list.map((o) =>
-    '<button type="button" class="fp-opt' + (S.filters[dim].includes(o.v) ? ' on' : '') + '" data-dim="' + dim + '" data-v="' + esc(o.v) + '">' +
-    esc(o.t) + '</button>').join('') + '</span>';
+    '<button type="button" class="fp-opt' + (S.filters[dim].includes(o.v) ? ' on' : '') + '" data-dim="' + dim + '" data-v="' + esc(o.v) + '"' +
+    (o.s ? ' title="' + esc(o.t) + '" aria-label="' + esc(o.t) + '"' : '') + '>' +
+    esc(o.s || o.t) + '</button>').join('') + '</span>';
 }
 // which tri-state dropdown list is unfolded ('owner' | 'label' | null) — kept
 // across repaints so cycling a row doesn't snap the list shut
@@ -95,10 +98,10 @@ function renderFilterPanel() {
     (chips ? '<div class="fp-chips">' + chips + '</div>' : '') +
     (archMode ? '<div class="fp-note">🧊 archived mode — status/updated don\'t apply to frozen snapshots</div>'
       : '<div class="fp-row"><span class="fp-lbl">status</span>' +
-        optChips('columns', columns().map((k) => ({ v: k.id, t: k.title }))) + '</div>') +
+        optChips('columns', columns().map((k) => ({ v: k.id, t: k.title, s: k.title.split(/\s+/)[0] }))) + '</div>') +
     '<div class="fp-row"><span class="fp-lbl">type</span>' +
-    optChips('types', [{ v: 'plan', t: '🧠 plan' }, { v: 'implementation', t: '🔥 impl' }, { v: 'investigation', t: '🕵️ invest' }]) + '</div>' +
-    '<div class="fp-row"><span class="fp-lbl">owner</span>' +
+    optChips('types', [{ v: 'plan', t: '🧠 plan', s: '🧠' }, { v: 'implementation', t: '🔥 impl', s: '🔥' }, { v: 'investigation', t: '🕵️ invest', s: '🕵️' }]) + '</div>' +
+    '<div class="fp-row"><span class="fp-lbl">lieutenant</span>' +
     triDd('owner', lieutenants().map((l) => ({ v: l.id, t: l.name || l.id }))) + '</div>' +
     '<div class="fp-row"><span class="fp-lbl">label</span>' +
     triDd('label', registryLabels().map((l) => ({ v: l.name, t: l.name }))) + '</div>' +
