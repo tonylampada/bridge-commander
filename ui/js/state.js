@@ -192,11 +192,29 @@ export function notifItems() {
 export function notifUnreadCount() { return notifItems().filter((e) => !e.read).length; }
 
 // ---------- filters ----------
-export function filterSelected(kind, value) { return S.filters.sel.some((f) => f.kind === kind && f.value === value); }
+// Owner/label selections are tri-state: mode 'in' (include) or 'out' (exclude);
+// absent = don't care. Entries without a mode (older paths) count as 'in'.
+export function filterMode(kind, value) {
+  const f = S.filters.sel.find((x) => x.kind === kind && x.value === value);
+  return f ? f.mode || 'in' : '';
+}
+export function filterSelected(kind, value) { return filterMode(kind, value) === 'in'; }
+// board/table/detail owner+label clicks: plain include on/off (never exclude)
 export function toggleFilter(kind, value) {
   if (!value) return;
   const i = S.filters.sel.findIndex((f) => f.kind === kind && f.value === value);
-  if (i >= 0) S.filters.sel.splice(i, 1); else S.filters.sel.push({ kind, value });
+  const wasIn = i >= 0 && (S.filters.sel[i].mode || 'in') === 'in';
+  if (i >= 0) S.filters.sel.splice(i, 1);
+  if (!wasIn) S.filters.sel.push({ kind, value, mode: 'in' });
+  render();
+}
+// the popup's per-item 3-position switch: set the state directly
+// (mode '' = don't care, 'in' = include, 'out' = exclude)
+export function setFilter(kind, value, mode) {
+  if (!value) return;
+  const i = S.filters.sel.findIndex((f) => f.kind === kind && f.value === value);
+  if (i >= 0) S.filters.sel.splice(i, 1);
+  if (mode === 'in' || mode === 'out') S.filters.sel.push({ kind, value, mode });
   render();
 }
 export function clearFilters() {
@@ -244,12 +262,15 @@ export function cardVisible(c) {
   if (S.filters.columns.length && !S.filters.columns.includes(c.column)) return false;
   return selMatches(c);
 }
-// the owner/label chips: OR within each dimension, AND across them — two
-// owners selected means "either owner", never the impossible "both"
+// the owner/label chips: excludes drop the card outright; includes are OR
+// within each dimension, AND across them — two owners included means "either
+// owner", never the impossible "both"
 export function selMatches(c) {
-  const owners = [], labels = [];
-  for (const f of S.filters.sel) (f.kind === 'owner' ? owners : labels).push(f.value);
-  if (owners.length && !owners.includes(c.owner || '')) return false;
-  if (labels.length && !labels.some((n) => (c.labels || []).includes(n))) return false;
+  const inc = { owner: [], label: [] }, exc = { owner: [], label: [] };
+  for (const f of S.filters.sel) ((f.mode === 'out' ? exc : inc)[f.kind] || []).push(f.value);
+  if (exc.owner.includes(c.owner || '')) return false;
+  if (exc.label.some((n) => (c.labels || []).includes(n))) return false;
+  if (inc.owner.length && !inc.owner.includes(c.owner || '')) return false;
+  if (inc.label.length && !inc.label.some((n) => (c.labels || []).includes(n))) return false;
   return true;
 }
