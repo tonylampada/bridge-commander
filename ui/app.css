@@ -258,6 +258,7 @@ body.resizing { user-select: none; cursor: col-resize; }
 #chat-send-err {
   flex: none; padding: 6px 12px 0; font-size: 12px; color: var(--danger);
 }
+#chat-send-err.sync { color: var(--dim); }
 /* pending-attachment chips (composer, before send) */
 #chat-atts { flex: none; display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px 0; }
 .att-chip {

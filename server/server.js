@@ -2667,7 +2667,12 @@ const server = http.createServer(async (req, res) => {
       const target = String(body.target || '');
       if (!/^(lieutenant:.+|card:.+)$/.test(target)) return sendJson(res, 400, { error: 'bad target' });
       r.threads[target] = body.ts || now();
-      saveBoard(); broadcast();
+      // No broadcast: a read marker only moves the POSTING user's unread/bell
+      // derivation, and that device applies it locally when it POSTs. The
+      // unified stream fires one POST per viewed thread per device — full
+      // board pushes here burst every SSE client. Other devices of the same
+      // user converge on the next real broadcast.
+      saveBoard();
       return sendJson(res, 200, { ok: true });
     }
 
