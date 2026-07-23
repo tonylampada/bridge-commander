@@ -208,14 +208,13 @@ export function toggleFilter(kind, value) {
   if (!wasIn) S.filters.sel.push({ kind, value, mode: 'in' });
   render();
 }
-// the popup's tri-state rows: don't care → include → exclude → don't care
-export function cycleFilter(kind, value) {
+// the popup's per-item 3-position switch: set the state directly
+// (mode '' = don't care, 'in' = include, 'out' = exclude)
+export function setFilter(kind, value, mode) {
   if (!value) return;
-  const cur = filterMode(kind, value);
   const i = S.filters.sel.findIndex((f) => f.kind === kind && f.value === value);
   if (i >= 0) S.filters.sel.splice(i, 1);
-  if (cur === '') S.filters.sel.push({ kind, value, mode: 'in' });
-  else if (cur === 'in') S.filters.sel.push({ kind, value, mode: 'out' });
+  if (mode === 'in' || mode === 'out') S.filters.sel.push({ kind, value, mode });
   render();
 }
 export function clearFilters() {

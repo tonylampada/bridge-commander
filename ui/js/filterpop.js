@@ -5,7 +5,7 @@
 // mode shares this state (S.filters) — clicking a label or owner anywhere adds
 // a chip here. In 🧊 archived mode the popup slims down to what makes sense on
 // frozen snapshots (owner/label/type); status and updated hide.
-import { S, lieutenants, columns, render, clearFilters, activeFilterCount, cycleFilter, filterMode, toggleDim } from './state.js';
+import { S, lieutenants, columns, render, clearFilters, activeFilterCount, setFilter, filterMode, toggleDim } from './state.js';
 import { registryLabels } from './labels.js';
 import { esc, setHtmlIfChanged } from './util.js';
 
@@ -63,17 +63,21 @@ function optChips(dim, list) {
 // which tri-state dropdown list is unfolded ('owner' | 'label' | null) — kept
 // across repaints so cycling a row doesn't snap the list shut
 let ddOpen = null;
-// a tri-state picker row set: every option shows its state (· don't care /
-// ✓ include / ⊘ exclude); a click cycles it. The trigger sums up the picks.
+// a tri-state picker row set: every option carries a 3-position switch
+// (⊘ exclude / · don't care / ✓ include) — a tap sets the state directly.
+// The trigger sums up the picks.
 function triDd(kind, list) {
   const nIn = list.filter((o) => filterMode(kind, o.v) === 'in').length;
   const nOut = list.filter((o) => filterMode(kind, o.v) === 'out').length;
   const sum = (nIn ? '✓' + nIn : '') + (nIn && nOut ? ' ' : '') + (nOut ? '⊘' + nOut : '');
   const open = ddOpen === kind;
+  const seg = (kind2, v, m, mode, glyph) =>
+    '<button type="button" class="sw-' + (mode || 'off') + (m === mode ? ' on' : '') +
+    '" data-sw="' + kind2 + '" data-v="' + esc(v) + '" data-m="' + mode + '">' + glyph + '</button>';
   const rows = list.map((o) => {
     const m = filterMode(kind, o.v);
-    return '<button type="button" class="fp-tri' + (m ? ' ' + m : '') + '" data-tri="' + kind + '" data-v="' + esc(o.v) + '">' +
-      '<span class="st">' + (m === 'in' ? '✓' : m === 'out' ? '⊘' : '·') + '</span><span class="nm">' + esc(o.t) + '</span></button>';
+    return '<div class="fp-tri' + (m ? ' ' + m : '') + '"><span class="nm">' + esc(o.t) + '</span>' +
+      '<span class="fp-sw">' + seg(kind, o.v, m, 'out', '⊘') + seg(kind, o.v, m, '', '·') + seg(kind, o.v, m, 'in', '✓') + '</span></div>';
   }).join('');
   return '<div class="fp-dd">' +
     '<button type="button" class="fp-dd-btn' + (open ? ' open' : '') + '" data-dd="' + kind + '">' +
@@ -113,8 +117,8 @@ function wire() {
   for (const b of panel.querySelectorAll('[data-dd]')) {
     b.onclick = () => { ddOpen = ddOpen === b.dataset.dd ? null : b.dataset.dd; panel.__bcHtml = null; renderFilterPanel(); };
   }
-  for (const b of panel.querySelectorAll('.fp-tri')) {
-    b.onclick = () => cycleFilter(b.dataset.tri, b.dataset.v);
+  for (const b of panel.querySelectorAll('[data-sw]')) {
+    b.onclick = () => setFilter(b.dataset.sw, b.dataset.v, b.dataset.m);
   }
   for (const chip of panel.querySelectorAll('.fchip')) {
     chip.onclick = () => {

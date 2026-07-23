@@ -1214,15 +1214,23 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
   border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
 }
 .fp-tri {
-  display: flex; align-items: center; gap: 8px; background: none; border: 0; cursor: pointer;
-  color: var(--dim); font-size: 12px; padding: 7px 10px; text-align: left;
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  color: var(--dim); font-size: 12px; padding: 5px 10px;
 }
-.fp-tri:hover { background: var(--accent-soft); }
-.fp-tri .st { flex: none; width: 14px; text-align: center; color: var(--faint); }
 .fp-tri .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.fp-tri.in, .fp-tri.in .st { color: var(--accent); }
-.fp-tri.out, .fp-tri.out .st { color: var(--danger); }
-.fp-tri.out .nm { text-decoration: line-through; opacity: .85; }
+.fp-tri.in .nm { color: var(--ok); }
+.fp-tri.out .nm { color: var(--danger); text-decoration: line-through; opacity: .85; }
+/* the 3-position switch: ⊘ exclude / · don't care / ✓ include, direct tap */
+.fp-sw { flex: none; display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.fp-sw button {
+  background: none; border: 0; cursor: pointer; color: var(--faint);
+  font-size: 12px; line-height: 1; padding: 5px 9px;
+}
+.fp-sw button + button { border-left: 1px solid var(--line); }
+.fp-sw button:hover { color: var(--dim); background: var(--panel2); }
+.fp-sw .sw-out.on { background: rgba(239, 100, 97, .22); color: var(--danger); }
+.fp-sw .sw-off.on { background: var(--panel3); color: var(--text); }
+.fp-sw .sw-in.on { background: rgba(62, 207, 142, .2); color: var(--ok); }
 /* exclude chips: same removable chip, visibly negated */
 .fchip.ex { background: #7c2f2e; color: #ffe3e2; }
 .fchip.ex > span:first-child { text-decoration: line-through; }
@@ -1264,8 +1272,9 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 @media (max-width: 760px) {
   #filter-open { display: inline-flex; }
   #topbar.searching #filter-open { display: none; }
-  /* fatter tri-state rows for thumbs */
-  .fp-tri { padding: 10px 12px; font-size: 13px; }
+  /* fatter tri-state rows + switch targets for thumbs */
+  .fp-tri { padding: 6px 12px; font-size: 13px; }
+  .fp-sw button { padding: 8px 12px; font-size: 13px; }
   .fp-dd-list { max-height: 220px; }
   /* the mode switcher collapses to ONE button — the current mode; tapping it
      opens the #mode-menu dropdown (main.js) */
