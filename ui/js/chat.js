@@ -431,10 +431,24 @@ export function renderChat() {
 // One POST per target per newest-activity ts: the `marked` map remembers what
 // was already sent, and a failed POST forgets it so the next render retries.
 const marked = new Map(); // target -> newest ts already POSTed
+let readRepaint = 0; // one coalesced repaint per burst of markRead calls
 function markRead(target, ts) {
   if (marked.get(target) === ts) return;
   marked.set(target, ts);
   api.markThreadRead(target).catch(() => marked.delete(target));
+  // The server persists the marker WITHOUT broadcasting (a read only moves
+  // this user's own derivation), so apply it locally: the reads map feeds
+  // threadUnread/bell, the card's server-derived status.unread feeds the
+  // board dot. The next real broadcast carries the same state.
+  const reads = S.doc.reads || (S.doc.reads = {});
+  const u = reads[USER] || (reads[USER] = { notifSeq: 0, notifSeqs: [], threads: {} });
+  const threads = u.threads || (u.threads = {});
+  if (!threads[target] || threads[target] < ts) threads[target] = ts;
+  const m = /^card:(.+)$/.exec(target);
+  const c = m && card(m[1]);
+  if (c && c.status) c.status.unread = false;
+  // markRead fires from inside render; repaint dots/bell on the next tick
+  if (!readRepaint) readRepaint = setTimeout(() => { readRepaint = 0; render(); }, 0);
 }
 // A card target uses the server-derived card.status.unread (unread also derives
 // from level-1 EVENTS, not just thread messages — message gating alone would
@@ -633,30 +647,54 @@ document.addEventListener('click', (e) => {
   if (slash.open && !composerEl.contains(e.target)) closeSlash();
 });
 
-// The POST already triggered a broadcast, so the echo normally arrives over SSE
-// within a beat; poll the local state for it, with one direct refetch as a
-// fallback (e.g. the SSE stream is stale and hasn't been reaped yet).
+// Delivery is the POST 200 (the QueueItem lands write-ahead, server-side); the
+// echo normally paints over SSE within a beat. A missing echo means the LOCAL
+// view is stale, not that the message was lost — so the watchdog is soft: it
+// polls with one direct refetch as a fallback, shows a muted "syncing" hint
+// after a generous window (never red, never blocks the composer), and clears
+// the hint when the echo lands. A newer send supersedes the running watchdog.
 function threadMsgs(target) {
   const m = /^card:(.+)$/.exec(target);
   if (m) { const c = card(m[1]); return (c && c.thread) || []; }
   const l = lieutenant(target.replace(/^lieutenant:/, ''));
   return (l && l.chat) || [];
 }
-async function waitForEcho(target, text) {
+let echoWatch = 0;
+async function watchEcho(target, text) {
+  const token = ++echoWatch;
   const seen = () => threadMsgs(target).some((m) => m.author === USER && m.text === text);
-  for (let i = 0; i < 20; i++) {
-    if (seen()) return true;
-    if (i === 10) api.board().then((doc) => { S.doc = doc; trackMessages(doc); render(); }).catch(() => {});
-    await new Promise((r) => setTimeout(r, 150));
+  for (let i = 0; i < 120; i++) { // 250ms steps: refetch at 3s, hint at 10s, give up at 30s
+    if (token !== echoWatch) return;
+    if (seen()) { clearSyncHint(); return; }
+    if (i === 12) api.board().then((doc) => { if (token === echoWatch) { S.doc = doc; trackMessages(doc); render(); } }).catch(() => {});
+    if (i === 40) setSyncHint();
+    await new Promise((r) => setTimeout(r, 250));
   }
-  return seen();
+  console.warn('bc: no echo yet for a delivered message on ' + target);
+}
+let syncHinted = false;
+function setSyncHint() {
+  syncHinted = true;
+  sendErrEl.classList.add('sync');
+  sendErrEl.textContent = 'delivered — syncing…';
+  sendErrEl.hidden = false;
+}
+function clearSyncHint() {
+  if (!syncHinted) return;
+  syncHinted = false;
+  sendErrEl.classList.remove('sync');
+  sendErrEl.hidden = true;
 }
 function setSendError(msg) {
+  syncHinted = false;
+  sendErrEl.classList.remove('sync');
   inputEl.classList.add('send-fail');
   sendErrEl.textContent = '⚠ not delivered — ' + msg + '. Your message is still below; try again.';
   sendErrEl.hidden = false;
 }
 function clearSendError() {
+  syncHinted = false;
+  sendErrEl.classList.remove('sync');
   inputEl.classList.remove('send-fail');
   sendErrEl.hidden = true;
 }
@@ -680,15 +718,16 @@ async function send() {
     // (the server re-resolves them authoritatively by id).
     const metas = await Promise.all(atts.map((p) => api.uploadAttachment(p.file)));
     await api.feedback(target, text, metas);
-    // With text, wait for its echo; attachments-only has no text to match, so the
-    // 200 is the confirmation (the SSE board push renders the bubble a beat later).
-    if (text && !(await waitForEcho(target, text))) throw new Error('sent, but no echo from the server');
+    // The 200 IS delivery (write-ahead queue) — clear the composer now. The
+    // soft watchdog only flags a stalled echo; attachments-only has no text
+    // to match, so the 200 alone confirms it.
     inputEl.value = '';
     closeSlash();
     pendingAtts = [];
     renderPendingAtts();
+    if (text) watchEcho(target, text);
   } catch (e) {
-    setSendError(e.message);
+    setSendError(e.message); // a real POST failure: red + input preserved
   } finally {
     sending = false;
     sendBtn.disabled = false;
