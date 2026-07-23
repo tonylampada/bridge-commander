@@ -5,7 +5,7 @@
 // mode shares this state (S.filters) — clicking a label or owner anywhere adds
 // a chip here. In 🧊 archived mode the popup slims down to what makes sense on
 // frozen snapshots (owner/label/type); status and updated hide.
-import { S, lieutenants, columns, render, clearFilters, activeFilterCount, toggleFilter, toggleDim } from './state.js';
+import { S, lieutenants, columns, render, clearFilters, activeFilterCount, cycleFilter, filterMode, toggleDim } from './state.js';
 import { registryLabels } from './labels.js';
 import { esc, setHtmlIfChanged } from './util.js';
 
@@ -14,7 +14,7 @@ const badge = document.getElementById('filter-btn-n');
 const panel = document.getElementById('filter-panel');
 
 export function filterPanelOpen() { return !panel.hidden; }
-export function closeFilterPanel() { panel.hidden = true; btn.classList.remove('on'); }
+export function closeFilterPanel() { panel.hidden = true; btn.classList.remove('on'); ddOpen = null; }
 export function openFilterPanel() {
   panel.hidden = false;
   btn.classList.add('on');
@@ -31,7 +31,10 @@ btn.onclick = (e) => {
   if (filterPanelOpen()) closeFilterPanel(); else openFilterPanel();
 };
 document.addEventListener('click', (e) => {
-  if (!panel.hidden && !panel.contains(e.target) && !btn.contains(e.target)) closeFilterPanel();
+  // composedPath, not contains: a tri-state row click repaints the panel
+  // synchronously, so by the time the click bubbles here its target is detached
+  const path = e.composedPath ? e.composedPath() : [];
+  if (!panel.hidden && !path.includes(panel) && !path.includes(btn)) closeFilterPanel();
 });
 
 // badge + (when open) panel content — called from the main render pass
@@ -57,11 +60,32 @@ function optChips(dim, list) {
     '<button type="button" class="fp-opt' + (S.filters[dim].includes(o.v) ? ' on' : '') + '" data-dim="' + dim + '" data-v="' + esc(o.v) + '">' +
     esc(o.t) + '</button>').join('') + '</span>';
 }
+// which tri-state dropdown list is unfolded ('owner' | 'label' | null) — kept
+// across repaints so cycling a row doesn't snap the list shut
+let ddOpen = null;
+// a tri-state picker row set: every option shows its state (· don't care /
+// ✓ include / ⊘ exclude); a click cycles it. The trigger sums up the picks.
+function triDd(kind, list) {
+  const nIn = list.filter((o) => filterMode(kind, o.v) === 'in').length;
+  const nOut = list.filter((o) => filterMode(kind, o.v) === 'out').length;
+  const sum = (nIn ? '✓' + nIn : '') + (nIn && nOut ? ' ' : '') + (nOut ? '⊘' + nOut : '');
+  const open = ddOpen === kind;
+  const rows = list.map((o) => {
+    const m = filterMode(kind, o.v);
+    return '<button type="button" class="fp-tri' + (m ? ' ' + m : '') + '" data-tri="' + kind + '" data-v="' + esc(o.v) + '">' +
+      '<span class="st">' + (m === 'in' ? '✓' : m === 'out' ? '⊘' : '·') + '</span><span class="nm">' + esc(o.t) + '</span></button>';
+  }).join('');
+  return '<div class="fp-dd">' +
+    '<button type="button" class="fp-dd-btn' + (open ? ' open' : '') + '" data-dd="' + kind + '">' +
+    '<span>' + (sum || 'any') + '</span><span class="car">' + (open ? '▴' : '▾') + '</span></button>' +
+    (open ? '<div class="fp-dd-list">' + rows + '</div>' : '') + '</div>';
+}
 function renderFilterPanel() {
   const f = S.filters;
   const archMode = S.boardMode === 'archive';
   const chips = f.sel.map((s, i) =>
-    '<span class="fchip" data-i="' + i + '" title="remove this filter"><span>' +
+    '<span class="fchip' + (s.mode === 'out' ? ' ex' : '') + '" data-i="' + i +
+    '" title="remove this filter"><span>' + (s.mode === 'out' ? '⊘ ' : '') +
     (s.kind === 'owner' ? '@' : '') + esc(s.value) + '</span><span class="x">✕</span></span>').join('');
   const html =
     (chips ? '<div class="fp-chips">' + chips + '</div>' : '') +
@@ -70,10 +94,10 @@ function renderFilterPanel() {
         optChips('columns', columns().map((k) => ({ v: k.id, t: k.title }))) + '</div>') +
     '<div class="fp-row"><span class="fp-lbl">type</span>' +
     optChips('types', [{ v: 'plan', t: '🧠 plan' }, { v: 'implementation', t: '🔥 impl' }, { v: 'investigation', t: '🕵️ invest' }]) + '</div>' +
-    '<div class="fp-row"><span class="fp-lbl">owner</span><select data-fp-add="owner">' +
-    opts([{ v: '', t: 'add owner…' }].concat(lieutenants().map((l) => ({ v: l.id, t: l.name || l.id }))), '') + '</select></div>' +
-    '<div class="fp-row"><span class="fp-lbl">label</span><select data-fp-add="label">' +
-    opts([{ v: '', t: 'add label…' }].concat(registryLabels().map((l) => ({ v: l.name, t: l.name }))), '') + '</select></div>' +
+    '<div class="fp-row"><span class="fp-lbl">owner</span>' +
+    triDd('owner', lieutenants().map((l) => ({ v: l.id, t: l.name || l.id }))) + '</div>' +
+    '<div class="fp-row"><span class="fp-lbl">label</span>' +
+    triDd('label', registryLabels().map((l) => ({ v: l.name, t: l.name }))) + '</div>' +
     (archMode ? '' : '<div class="fp-row"><span class="fp-lbl">updated</span><select data-fp="age">' + opts(AGES, f.age) + '</select></div>') +
     '<div class="fp-foot"><button id="fp-clear"' + (activeFilterCount() || f.text ? '' : ' disabled') + '>clear all</button></div>';
   if (!setHtmlIfChanged(panel, html)) return;
@@ -86,13 +110,11 @@ function wire() {
   for (const b of panel.querySelectorAll('.fp-opt')) {
     b.onclick = () => toggleDim(b.dataset.dim, b.dataset.v);
   }
-  // owner/label are multi: choosing adds a chip; the select snaps back to its placeholder
-  for (const sel of panel.querySelectorAll('[data-fp-add]')) {
-    sel.onchange = () => {
-      const v = sel.value;
-      sel.value = '';
-      if (v) toggleFilter(sel.dataset.fpAdd, v);
-    };
+  for (const b of panel.querySelectorAll('[data-dd]')) {
+    b.onclick = () => { ddOpen = ddOpen === b.dataset.dd ? null : b.dataset.dd; panel.__bcHtml = null; renderFilterPanel(); };
+  }
+  for (const b of panel.querySelectorAll('.fp-tri')) {
+    b.onclick = () => cycleFilter(b.dataset.tri, b.dataset.v);
   }
   for (const chip of panel.querySelectorAll('.fchip')) {
     chip.onclick = () => {
