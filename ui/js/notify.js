@@ -1,7 +1,8 @@
 // notification bell: level-1 filter over the unified event stream, with
 // expandable "· N events ·" dividers revealing the suppressed level-2 events.
-import { S, allEvents, notifItems, notifUnreadCount, card, kindEmoji, render } from './state.js';
+import { S, allEvents, notifItems, notifUnreadCount, card, kindEmoji, lieutenantByActor, render } from './state.js';
 import { api } from './api.js';
+import { openLieutenantChat } from './chat.js';
 
 const bellBtn = document.getElementById('bell');
 const bellN = document.getElementById('bell-n');
@@ -55,7 +56,12 @@ function itemNode(e, lvl2) {
   }
   row.onclick = async () => {
     if (e.level === 1 && !e.read) { try { await api.markNotifRead([e.seq]); } catch (err) {} }
-    if (e.card && card(e.card) && detailOpener) { S.notifOpen = false; detailOpener(e.card); }
+    if (e.card && card(e.card) && detailOpener) { S.notifOpen = false; detailOpener(e.card); return; }
+    // a lieutenant's main-chat message rides a board-level event with an actor
+    // and NO card — land in that lieutenant's conversation instead of a dead
+    // click; actor-less server/system events stay mark-read-only
+    const lt = lieutenantByActor(e.actor);
+    if (lt) { S.notifOpen = false; openLieutenantChat(lt.id); }
   };
   return row;
 }

@@ -7,6 +7,8 @@ const DISMISS_MS = 6000;
 let root = null;
 let openCard = null;
 export function onOpenCard(fn) { openCard = fn; }
+let openLt = null;
+export function onOpenLieutenant(fn) { openLt = fn; }
 
 function ensureRoot() {
   if (root) return root;
@@ -16,7 +18,7 @@ function ensureRoot() {
   return root;
 }
 
-// e: { emoji, text, cardTitle, actor, card }
+// e: { emoji, text, cardTitle, actor, card, lieutenant }
 export function push(e) {
   const stack = ensureRoot();
   const el = document.createElement('div');
@@ -50,7 +52,13 @@ export function push(e) {
   el.onmouseenter = () => clearTimeout(timer);
   el.onmouseleave = arm;
   x.onclick = (ev) => { ev.stopPropagation(); dismiss(); };
-  el.onclick = () => { if (e.card && openCard) openCard(e.card); dismiss(); };
+  // card-less toasts (a lieutenant's main-chat message) land in that
+  // lieutenant's conversation instead of dying on the click
+  el.onclick = () => {
+    if (e.card && openCard) openCard(e.card);
+    else if (e.lieutenant && openLt) openLt(e.lieutenant);
+    dismiss();
+  };
 
   stack.appendChild(el);
   while (stack.children.length > MAX_VISIBLE) stack.firstChild.remove();

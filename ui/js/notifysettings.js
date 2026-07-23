@@ -1,7 +1,7 @@
 // notifysettings.js — persisted notification settings, the "notifications"
 // section of the settings panel, and the driver that turns new board events
 // into toasts/sounds. Mirrors voice.js's localStorage + gesture-unlock pattern.
-import { S, kindEmoji } from './state.js';
+import { S, kindEmoji, lieutenantByActor } from './state.js';
 import { defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages, shouldSuppressChat } from './notifypolicy.js';
 import * as sound from './sound.js';
 import * as toast from './toast.js';
@@ -69,7 +69,8 @@ export function trackEvents(doc) {
   if (firstLoad) { firstLoad = false; return; }
   for (const e of events) {
     const p = policyFor(e.kind, e.level, settings);
-    if (p.toast) toast.push({ emoji: kindEmoji(e.kind), text: e.text, cardTitle: e.cardTitle, actor: e.actor, card: e.card });
+    if (p.toast) toast.push({ emoji: kindEmoji(e.kind), text: e.text, cardTitle: e.cardTitle, actor: e.actor, card: e.card,
+      lieutenant: e.card ? undefined : (lieutenantByActor(e.actor) || {}).id });
     if (p.sound && p.sound !== 'none') sound.play(p.sound);
   }
   for (const m of messages) {
@@ -80,7 +81,10 @@ export function trackEvents(doc) {
       chatVisible: isChatVisible(),
     };
     const p = policyFor('reply', 1, settings);
-    if (p.toast && !shouldSuppressChat(m.scope, ctx)) toast.push({ emoji: '💬', text: m.text, cardTitle: m.cardTitle, actor: m.author, card: m.card });
+    if (p.toast && !shouldSuppressChat(m.scope, ctx)) {
+      const lt = /^lieutenant:(.+)$/.exec(m.scope || ''); // main-chat scope carries the id itself
+      toast.push({ emoji: '💬', text: m.text, cardTitle: m.cardTitle, actor: m.author, card: m.card, lieutenant: lt ? lt[1] : undefined });
+    }
     if (p.sound && p.sound !== 'none') sound.play(p.sound); // ALWAYS — captain: "mantém o som"
   }
 }
