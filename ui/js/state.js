@@ -199,9 +199,11 @@ export function filterMode(kind, value) {
   return f ? f.mode || 'in' : '';
 }
 export function filterSelected(kind, value) { return filterMode(kind, value) === 'in'; }
-// board/table/detail owner+label clicks: plain include on/off (never exclude)
-export function toggleFilter(kind, value) {
+// board/table/detail owner+label clicks: plain click = include on/off,
+// alt-click (exclude=true) = exclude on/off
+export function toggleFilter(kind, value, exclude) {
   if (!value) return;
+  if (exclude) { setFilter(kind, value, filterMode(kind, value) === 'out' ? '' : 'out'); return; }
   const i = S.filters.sel.findIndex((f) => f.kind === kind && f.value === value);
   const wasIn = i >= 0 && (S.filters.sel[i].mode || 'in') === 'in';
   if (i >= 0) S.filters.sel.splice(i, 1);

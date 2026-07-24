@@ -82,6 +82,17 @@ test('toggleFilter stays a plain include on/off; an exclude flips to include', (
   assert.strictEqual(filterMode('label', 'ux'), 'in');
 });
 
+test('toggleFilter with exclude=true (alt-click): exclude on/off; include flips to exclude', () => {
+  toggleFilter('owner', 'rex', true);
+  assert.strictEqual(filterMode('owner', 'rex'), 'out');
+  toggleFilter('owner', 'rex', true);
+  assert.strictEqual(filterMode('owner', 'rex'), '');
+  toggleFilter('owner', 'rex'); // plain click: include
+  toggleFilter('owner', 'rex', true);
+  assert.strictEqual(filterMode('owner', 'rex'), 'out');
+  assert.strictEqual(S.filters.sel.length, 1); // replaced, not stacked
+});
+
 test('filterSelected means include only; excludes count in the badge', () => {
   setFilter('owner', 'rex', 'out');
   assert.strictEqual(filterSelected('owner', 'rex'), false);

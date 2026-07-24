@@ -83,7 +83,7 @@ function rowHtml(row) {
     '<td class="c-title">' + titleCellHtml(row) + '</td>' +
     '<td class="c-status">' + statusCellHtml(row) + '</td>' +
     '<td class="c-type hide-m">' + esc(c.type || '') + '</td>' +
-    '<td class="c-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) + '" title="filter by lieutenant">' +
+    '<td class="c-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) + '" title="click: filter by lieutenant · alt-click: exclude">' +
     '<span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((l && l.name) || c.owner) + '</td>' +
     '<td class="c-labels hide-m">' + (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('') + '</td>' +
     '<td class="c-prs">' + cardPrs(c).map((pr) => prChipHtml(pr)).join('') + '</td>' +
@@ -117,9 +117,9 @@ function wire() {
       if (e.target.closest('a')) return; // PR chip: let the link navigate
       // label / owner clicks feed the shared filter (a chip in the popup)
       const lab = e.target.closest('.label');
-      if (lab) { toggleFilter('label', lab.dataset.label); return; }
+      if (lab) { toggleFilter('label', lab.dataset.label, e.altKey); return; }
       const own = e.target.closest('.c-owner');
-      if (own) { toggleFilter('owner', own.dataset.owner); return; }
+      if (own) { toggleFilter('owner', own.dataset.owner, e.altKey); return; }
       openDetail(tr.dataset.id);
     };
   }

@@ -12,7 +12,7 @@ export function labelChipHtml(name, active) {
   const col = active ? null : labelColor(name);
   const style = col ? ' style="border-color:' + col + ';color:' + col + '"' : '';
   return '<span class="label' + (active ? ' active' : '') + '" data-label="' + esc(name) + '"' + style +
-    ' title="filter by this label">' + esc(name) + '</span>';
+    ' title="click: filter by this label · alt-click: exclude">' + esc(name) + '</span>';
 }
 
 async function labelApi(body) {

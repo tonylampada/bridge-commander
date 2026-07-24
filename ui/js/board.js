@@ -71,7 +71,7 @@ function tileHtml(c) {
     (labels || prs || order ? '<div class="t-chips">' + order + labels + prs + '</div>' : '') +
     '<div class="t-foot">' +
     '<span class="t-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) +
-      '" title="filter by lieutenant"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
+      '" title="click: filter by lieutenant · alt-click: exclude"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
     (repo ? '<span class="t-repo" title="repo">' + esc(repo) + '</span>' : '') +
     hint +
     '<span class="grow"></span>' +
@@ -124,9 +124,9 @@ function wire() {
       const t = e.target;
       if (t.closest('a')) return; // PR chip / link: let the anchor navigate, don't open detail
       if (t.closest('.t-peek')) { openCardPane(el.dataset.id); return; }
-      if (t.classList.contains('label')) { toggleFilter('label', t.dataset.label); return; }
+      if (t.classList.contains('label')) { toggleFilter('label', t.dataset.label, e.altKey); return; }
       const own = t.closest('.t-owner');
-      if (own) { toggleFilter('owner', own.dataset.owner); return; }
+      if (own) { toggleFilter('owner', own.dataset.owner, e.altKey); return; }
       openDetail(el.dataset.id);
     };
     // drag&drop (desktop)

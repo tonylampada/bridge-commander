@@ -484,7 +484,7 @@ export function renderDetail() {
   // data-card keys the markup to THIS card: the chip handlers below close over
   // c, so a same-looking attrs row on another card must not skip the rebuild
   const attrsChanged = setHtmlIfChanged(attrsEl,
-    '<span class="attr attr-owner" data-card="' + esc(c.id) + '" title="filter by lieutenant"><span class="k">lieutenant</span>' +
+    '<span class="attr attr-owner" data-card="' + esc(c.id) + '" title="click: filter by lieutenant · alt-click: exclude"><span class="k">lieutenant</span>' +
     '<span class="v" style="color:' + esc(lieutenantColor(c.owner)) + '">' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
     // ✎ only while no worker is bound — mirrors the server guard on owner PATCH.
     // Rendered in the markup (not appended after) so a worker binding/unbinding
@@ -500,7 +500,7 @@ export function renderDetail() {
   const ownerChip = attrsChanged && attrsEl.querySelector('.attr-owner');
   if (ownerChip) {
     ownerChip.style.cursor = 'pointer';
-    ownerChip.onclick = () => toggleFilter('owner', c.owner);
+    ownerChip.onclick = (e) => toggleFilter('owner', c.owner, e.altKey);
     const edit = ownerChip.querySelector('.owner-edit');
     if (edit) edit.onclick = (e) => {
       e.stopPropagation(); // the chip click is the owner filter, not the menu
@@ -521,7 +521,7 @@ export function renderDetail() {
       const chip = document.createElement('span');
       chip.className = 'dlabel';
       chip.innerHTML = labelChipHtml(name, filterSelected('label', name));
-      chip.querySelector('.label').onclick = () => toggleFilter('label', name);
+      chip.querySelector('.label').onclick = (e) => toggleFilter('label', name, e.altKey);
       if (!arch) { // frozen labels filter but never change
         const x = document.createElement('button');
         x.type = 'button'; x.textContent = '✕'; x.title = 'remove label';

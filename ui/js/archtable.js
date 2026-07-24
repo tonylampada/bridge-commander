@@ -22,7 +22,7 @@ function rowHtml(row) {
     '<span class="tv-title">' + esc(c.title || c.id) + '</span></td>' +
     '<td class="c-status"><span class="tv-rsn tv-rsn-' + r + '"' + (row.arch.note ? ' title="' + esc(row.arch.note) + '"' : '') + '>' +
     (r === 'merged' ? '🏁 merged' : '🪦 killed') + '</span></td>' +
-    '<td class="c-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) + '" title="filter by lieutenant">' +
+    '<td class="c-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) + '" title="click: filter by lieutenant · alt-click: exclude">' +
     '<span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((l && l.name) || c.owner) + '</td>' +
     '<td class="c-labels hide-m">' + (c.labels || []).map((n) => labelChipHtml(n, filterSelected('label', n))).join('') + '</td>' +
     '<td class="c-prs hide-m">' + cardPrs(c).map((pr) => prChipHtml(pr)).join('') + '</td>' +
@@ -57,9 +57,9 @@ function wire() {
     tr.onclick = (e) => {
       if (e.target.closest('a')) return;
       const lab = e.target.closest('.label');
-      if (lab) { toggleFilter('label', lab.dataset.label); return; }
+      if (lab) { toggleFilter('label', lab.dataset.label, e.altKey); return; }
       const own = e.target.closest('.c-owner');
-      if (own) { toggleFilter('owner', own.dataset.owner); return; }
+      if (own) { toggleFilter('owner', own.dataset.owner, e.altKey); return; }
       openArchivedDetail(tr.dataset.id); // the frozen snapshot in the card detail
     };
   }
