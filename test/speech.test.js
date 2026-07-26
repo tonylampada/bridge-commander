@@ -20,10 +20,12 @@ const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 // ── the page ──────────────────────────────────────────────────────────────
 // The hidden <audio> the sound leaves through. `refuse` is a browser that will
 // not autoplay: the module drops to the speakers rather than to silence.
+// `fed` counts how many times it was handed a stream, because "was it armed for
+// THIS message" is a different question from "does it hold a stream".
 const sinkEl = {
-  tag: 'audio', plays: 0, paused: true, refuse: false, _src: null,
+  tag: 'audio', plays: 0, fed: 0, paused: true, refuse: false, _src: null,
   get srcObject() { return this._src; },
-  set srcObject(v) { this._src = v; },
+  set srcObject(v) { this._src = v; if (v) this.fed++; },
   play() { this.plays++; this.paused = false; return this.refuse ? Promise.reject(new Error('autoplay blocked')) : Promise.resolve(); },
   pause() { this.paused = true; },
 };
@@ -38,9 +40,11 @@ const bar = {
 const styles = [];
 let session;
 function fakePage() {
-  // Only what a new test needs fresh: the element itself is the module's, made
-  // once and fed once, and resetting its stream would be resetting the module.
-  Object.assign(sinkEl, { plays: 0, paused: true, refuse: false });
+  // Only what a new test needs fresh. The element itself is the module's, made
+  // once for the life of the page — but it is re-fed the stream every session,
+  // so the counters reset and `_src` does not: what it holds between messages is
+  // the module's business, and one of the tests below is exactly about that.
+  Object.assign(sinkEl, { plays: 0, fed: 0, paused: true, refuse: false });
   bar.hidden = true;
   bar.what.textContent = '';
   global.document = {
@@ -218,6 +222,57 @@ test('the sound leaves through a media element, behind a transport the captain c
   assert.equal(bar.hidden, true, 'and gone when it stops');
   assert.ok(sinkEl.paused);
   assert.equal(session.playbackState, 'none');
+});
+
+// ── the SECOND message ────────────────────────────────────────────────────
+// The bug these two are here for: the board spoke once per page load and then
+// went quiet, with nothing to show for it — no toast, no console error, the
+// element still holding its stream, still in the document, at readyState 4. An
+// element WebKit has stopped does not play the stream it is already holding, and
+// says so nowhere: play() resolves, the context renders the whole message into a
+// sink nobody is listening to, and speak() reports a clean success over silence.
+// So neither test may settle for "it spoke" — each asserts the element was
+// ARMED AGAIN for the second message, which is the part that was missing.
+test('a second message re-arms the element — a stream the element already holds is not enough', async () => {
+  fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
+  // The stream being read is over before the SOUND is: the last buffer still has
+  // to be heard, and that is what closes the sink. Every await below is for that
+  // beat, not for the fetch.
+  const said = async (input, title) => { await speak({ ...ASK, input, title }); await tick(10); };
+
+  await said('first', 'Ana');
+  assert.equal(sinkEl.srcObject, null, 'the element lets the stream go when the speech is over');
+
+  const fed = sinkEl.fed, plays = sinkEl.plays;
+  await said('second', 'Bea');
+  assert.ok(sinkEl.fed > fed, 'the second message feeds the element the stream again');
+  assert.equal(sinkEl.srcObject, null, 'and lets it go again at the end');
+  assert.ok(sinkEl.plays > plays, 'and it played — silence here is the whole bug');
+
+  // Third, because "works twice" was never the claim: it has to keep working.
+  const fed2 = sinkEl.fed;
+  await said('third', 'Cida');
+  assert.ok(sinkEl.fed > fed2, 'and the one after that, and the one after that');
+  assert.deepEqual(session.titles, ['Ana', 'Bea', 'Cida']);
+});
+
+// The captain's own path to it: speak, press stop, ask again. stop() is the
+// destructive verb, so it is the one most likely to leave the element unusable.
+test('a message after stop() re-arms the element too', async () => {
+  fakeFetch((b, sig) => (b.input === 'stopped mid-word'
+    ? openStream(sig)
+    : pcmResponse([0, 100, -100, 0], 4, 24000)));
+  const cut = speak({ ...ASK, input: 'stopped mid-word', title: 'Ana' });
+  await tick(10);
+  assert.ok(!sinkEl.paused, 'playing before the stop');
+  stop();
+  assert.equal((await cut).stopped, true);
+  assert.equal(sinkEl.srcObject, null, 'stop lets the element go');
+
+  const fed = sinkEl.fed, plays = sinkEl.plays;
+  await speak({ ...ASK, input: 'and again', title: 'Bea' });
+  assert.ok(sinkEl.fed > fed, 're-armed after a stop, not left holding the old stream');
+  assert.ok(sinkEl.plays > plays, 'and speaking again — no refresh needed');
 });
 
 // An abandoned synthesis keeps the GPU busy for another half-minute, and voxcpm2

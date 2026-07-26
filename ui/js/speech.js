@@ -100,13 +100,29 @@ function openSink() {
   if (!sink) {
     if (!ctx.createMediaStreamDestination) { sink = null; return; }
     sink = ctx.createMediaStreamDestination();
-    element().srcObject = sink.stream;
   }
+  // EVERY session, not just the one that made the sink. An element WebKit has
+  // stopped will not play the stream it is already holding: play() resolves, no
+  // error is thrown and nothing is heard — the element sits at paused with
+  // readyState 4 while the context cheerfully renders into a sink no one is
+  // listening to. The message runs its full length in silence and speak()
+  // reports success, so the board has nothing to complain about either. Handing
+  // it the stream again is what arms it; that is why closeSink() lets go.
+  //
+  // The board's own player did this before speech.js was extracted out of it —
+  // a new stream per message, dropped at the end — and the extraction lost it.
+  // The board then spoke exactly once per page load, and only the captain's
+  // home-screen app showed it: in a plain tab the same code is forgiving.
+  element().srcObject = sink.stream;
   element().play().catch(() => { sink = null; });   // blocked → the speakers
 }
 
+// Let the element go. Pausing alone is not enough in either direction: it leaves
+// the lock screen showing a player for speech that is over, and it leaves the
+// element holding a stream it will never play again (see openSink).
 function closeSink() {
   element().pause();
+  element().srcObject = null;
   transport(false);
   playbackState('none');
 }

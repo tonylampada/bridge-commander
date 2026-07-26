@@ -7,8 +7,15 @@
 // and a tiny "fake lieutenant" simulation answers captain messages and acts on
 // start/rework orders after a short delay, so clicking around feels real.
 //
-// It never touches server/server.js or any real workspace state, and binds
-// 127.0.0.1 ONLY. Usage: node dev/ui-server.js [--port N]   (default 4790)
+// It never touches server/server.js or any real workspace state. It binds
+// loopback by default and a SPECIFIC address on request — never all interfaces.
+//
+//   node dev/ui-server.js [--port N] [--host ADDR] [--tts URL]   (default 4790)
+//
+// --tts is the one thing the playground cannot fake: speech needs a real engine,
+// so the fixture's config block points at one when it is given a url, and the
+// board is simply mute when it is not. That is what makes the speech path
+// testable here — on a phone, on a home-screen app — without a real workspace.
 'use strict';
 
 const http = require('http');
@@ -68,7 +75,8 @@ const MIME = {
   '.webp': 'image/webp', '.ico': 'image/x-icon', '.woff2': 'font/woff2',
 };
 
-function createDevServer() {
+function createDevServer(opts) {
+  const ttsUrl = (opts && opts.ttsUrl) || '';
   const base = Date.now();
   const BOOT_ID = 'dev-' + process.pid + '-' + base;
 
@@ -387,7 +395,13 @@ function createDevServer() {
 
       // ----- reads -----
       if (route === 'GET /api/board') return sendJson(res, 200, publicBoard());
-      if (route === 'GET /api/config') return sendJson(res, 200, { voices: null });
+      // Same shape the real server sends (server.js ttsConfig): no tts key at
+      // all when there is no engine, so the UI sees exactly what it sees today.
+      if (route === 'GET /api/config') {
+        const cfg = { voices: null };
+        if (ttsUrl) cfg.tts = { enabled: true, url: ttsUrl, lang: 'pt', voice: null, params: {} };
+        return sendJson(res, 200, cfg);
+      }
       if (route === 'GET /api/status') {
         return sendJson(res, 200, {
           workspace: '/fake/ws (dev playground)', port: server.address() && server.address().port,
@@ -737,10 +751,12 @@ module.exports = { createDevServer };
 if (require.main === module) {
   let port = 4790;
   let host = '';
+  let ttsUrl = '';
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') port = parseInt(argv[++i], 10);
     else if (argv[i] === '--host') host = String(argv[++i] || '').trim();
+    else if (argv[i] === '--tts') ttsUrl = String(argv[++i] || '').trim();
   }
   if (!Number.isInteger(port) || port <= 0) { console.error('bad --port'); process.exit(1); }
   if (host && !/^[\w.:-]+$/.test(host)) { console.error('bad --host'); process.exit(1); }
@@ -748,10 +764,12 @@ if (require.main === module) {
   if (host === '0.0.0.0' || host === '::') { console.error('refusing to bind all interfaces — give a specific address'); process.exit(1); }
   const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
   const BIND_HOST = host || '127.0.0.1';
-  const { server } = createDevServer();
+  if (ttsUrl && !/^https?:\/\//.test(ttsUrl)) { console.error('bad --tts (want http://host:port)'); process.exit(1); }
+  const { server } = createDevServer({ ttsUrl });
   server.on('error', (e) => { console.error('server error: ' + e.message); process.exit(1); });
   server.listen(port, BIND_HOST, () => {
     console.log('[dev-playground] http://' + BIND_HOST + ':' + port + '  (fixture board, nothing persists)');
+    console.log('[dev-playground] speech: ' + (ttsUrl || 'no engine (--tts URL to give it one) — the board stays mute'));
   });
   // Non-loopback bind: also listen on loopback, the same way server.js does it,
   // so the local browser/curl keep working alongside the tailscale address.
