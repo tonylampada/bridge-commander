@@ -16,7 +16,7 @@ test.before(async () => {
 
 // A recording speaker: `fail` makes speak() reject the way a dead engine does.
 function fake(id, fail) {
-  const calls = { speak: [], cancel: 0, voices: 0 };
+  const calls = { speak: [], cancel: 0, voices: 0, pause: 0, resume: 0 };
   return {
     calls,
     id,
@@ -27,6 +27,8 @@ function fake(id, fail) {
       return fail ? Promise.reject(new Error(id + ' is down')) : Promise.resolve();
     },
     cancel() { calls.cancel++; },
+    pause() { calls.pause++; },
+    resume() { calls.resume++; },
   };
 }
 
@@ -66,6 +68,17 @@ test('the picker follows the primary; cancel reaches both', async () => {
   s.cancel();
   assert.equal(a.calls.cancel, 1);
   assert.equal(b.calls.cancel, 1);
+});
+
+// The board's transport presses these, and so does the phone's lock screen. Which
+// of the two speakers is actually mid-utterance is not knowable from up here, so
+// both hear it — same rule as cancel.
+test('pause and resume reach both speakers', () => {
+  const a = fake('remote'), b = fake('browser');
+  const s = withFallback(a, b);
+  s.pause(); s.resume();
+  assert.deepEqual([a.calls.pause, a.calls.resume], [1, 1]);
+  assert.deepEqual([b.calls.pause, b.calls.resume], [1, 1]);
 });
 
 test('speakerFor: no tts config is the browser speaker, plain', () => {

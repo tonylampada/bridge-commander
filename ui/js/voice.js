@@ -111,7 +111,7 @@ function speakPlain(plain, who) {
   const my = ++session;
   speaker.cancel();
   speaking = true;
-  speakingBubble.show();
+  speakingBubble.show(who);
   // `who` is the author, and it is not decoration: it picks the voice that
   // speaks (each lieutenant may own one), and the remote speaker puts it on the
   // phone's lock screen, which is where the captain sees WHO is talking to him
@@ -134,27 +134,38 @@ export function stopSpeaking() {
   speakingBubble.hide();
 }
 
-// ---------- floating "speaking" indicator ----------
-// A small fixed bubble shown ONLY while a speech session is live: up when one
+// ---------- floating transport ----------
+// A small fixed transport shown ONLY while a speech session is live: up when one
 // starts, down when the speaker settles it (natural end, error, or cancel).
-// Clicking the bubble cancels all speech immediately.
+// Three buttons — play, pause, stop — and a label saying WHO is speaking.
+//
+// It used to be a pill with four animated wave bars, and that is exactly what
+// broke the phone: the lock screen goes deaf behind a page that shows no player.
+// WebKit wants a transport it can SEE, so this is one — plain on purpose, here to
+// be seen and pressed by a thumb, not admired.
 const speakingBubble = (() => {
   let el = null;
   function ensureEl() {
     if (el) return el;
-    el = document.createElement('button');
+    el = document.createElement('div');
     el.id = 'tts-bubble';
-    el.type = 'button';
-    el.title = 'click to stop speaking';
-    el.setAttribute('aria-label', 'stop speaking');
     el.hidden = true;
-    el.innerHTML = '<span class="wave"><i></i><i></i><i></i><i></i></span><span class="lbl">speaking…</span>';
-    el.onclick = () => stopSpeaking();
+    el.innerHTML = '<span class="lbl"></span>'
+      + '<button type="button" class="t-play" title="play" aria-label="play">▶</button>'
+      + '<button type="button" class="t-pause" title="pause" aria-label="pause">❚❚</button>'
+      + '<button type="button" class="t-stop" title="stop" aria-label="stop">■</button>';
+    el.querySelector('.t-play').onclick = () => speaker.resume();
+    el.querySelector('.t-pause').onclick = () => speaker.pause();
+    el.querySelector('.t-stop').onclick = () => stopSpeaking();
     document.body.appendChild(el);
     return el;
   }
   return {
-    show() { ensureEl().hidden = false; },
+    show(who) {
+      const e = ensureEl();
+      e.querySelector('.lbl').textContent = who || 'speaking…';
+      e.hidden = false;
+    },
     hide() { if (el) el.hidden = true; },
   };
 })();

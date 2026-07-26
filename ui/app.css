@@ -1045,26 +1045,23 @@ a.a-uri { color: var(--accent); }
 #av-download { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; text-decoration: none; }
 #av-download:hover { color: var(--accent); }
 
-/* ---------- TTS speaking indicator ---------- */
+/* ---------- TTS transport ---------- */
+/* Up while the board speaks: who is talking, and three buttons for it. Plain on
+   purpose — a player WebKit can see is what keeps the lock screen answering. */
 #tts-bubble {
   position: fixed; right: 16px; bottom: 16px; z-index: 88;
-  display: inline-flex; align-items: center; gap: 9px; padding: 8px 14px;
+  display: inline-flex; align-items: center; gap: 7px; padding: 7px 8px 7px 14px;
   border-radius: 999px; background: var(--panel2); border: 1px solid var(--accent2);
   color: var(--accent); box-shadow: var(--shadow); font-size: 12px; font-weight: 600;
-  cursor: pointer; animation: pop-in .16s ease-out; transition: background .15s, color .15s;
+  animation: pop-in .16s ease-out;
 }
-#tts-bubble:hover { background: var(--panel3); color: var(--text); }
-/* sound-wave bars — gentle staggered pulse, drawn in the current text color */
-#tts-bubble .wave { display: inline-flex; align-items: center; gap: 2px; height: 15px; }
-#tts-bubble .wave i {
-  width: 3px; height: 100%; border-radius: 2px; background: currentColor;
-  transform: scaleY(.35); animation: tts-wave 1s ease-in-out infinite;
+#tts-bubble .lbl { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#tts-bubble button {
+  width: 30px; height: 30px; border-radius: 50%; padding: 0; cursor: pointer;
+  background: var(--panel); border: 1px solid var(--line2); color: var(--text);
+  font-size: 11px; line-height: 1;
 }
-#tts-bubble .wave i:nth-child(2) { animation-delay: .15s; }
-#tts-bubble .wave i:nth-child(3) { animation-delay: .3s; }
-#tts-bubble .wave i:nth-child(4) { animation-delay: .45s; }
-@keyframes tts-wave { 0%, 100% { transform: scaleY(.35); opacity: .6; } 50% { transform: scaleY(1); opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { #tts-bubble .wave i { animation: none; transform: scaleY(.7); } }
+#tts-bubble button:hover { border-color: var(--accent); color: var(--accent); }
 
 /* ---------- mobile ---------- */
 @media (max-width: 760px) {

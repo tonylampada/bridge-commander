@@ -1,6 +1,11 @@
 // The speaker seam. One interface, two implementations, one composition:
 //
-//   { id, key, voices(), speak(text, {voice, who}), cancel() }
+//   { id, key, voices(), speak(text, {voice, who}), cancel(), pause(), resume() }
+//
+// cancel() is destructive and ends the message; pause()/resume() are the
+// reversible pair behind the board's transport (and the phone's lock screen),
+// which is why they are part of the interface and not one speaker's private
+// detail.
 //
 // `who` is the author of what is being spoken. The browser speaker ignores it;
 // the remote one shows it on the lock screen, because a phone with its screen
@@ -27,6 +32,10 @@ export function withFallback(primary, secondary) {
     voices: () => primary.voices(),
     speak: (text, opts) => primary.speak(text, opts).catch(() => secondary.speak(text, {})),
     cancel: () => { primary.cancel(); secondary.cancel(); },
+    // Both, like cancel: which of the two is actually speaking is not knowable
+    // from here, and asking an idle speaker to pause costs nothing.
+    pause: () => { primary.pause(); secondary.pause(); },
+    resume: () => { primary.resume(); secondary.resume(); },
   };
 }
 

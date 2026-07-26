@@ -307,6 +307,36 @@ test('the lock screen pause freezes the message, and play brings it back', async
   assert.ok(posts[0].signal.aborted, 'stop stays the only destructive verb, and reaches the GPU');
 });
 
+// The board's own transport presses the SAME two verbs the lock screen does —
+// they are on the speaker interface, not private to the media-session handlers.
+// That is what makes a visible player possible, and a visible player is what
+// keeps WebKit answering the lock screen at all.
+test('the page transport pauses and resumes the same message the lock screen does', async () => {
+  const audio = fakeAudioContext(true);
+  const session = fakeDom();
+  const posts = fakeFetch(() => new Response(new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array([0, 1, 0, 1])); },        // never closes on its own
+  }), { status: 200, headers: { 'x-sample-rate': '24000' } }));
+  const s = remoteSpeaker({ url: 'http://e' });
+  const done = s.speak('olá', { who: 'Ana' });
+  await new Promise((r) => setTimeout(r, 10));
+  const ctx = audio.ctxs[0];
+
+  s.pause();
+  assert.ok(sinkEl.paused);
+  assert.equal(ctx.state, 'suspended');
+  assert.equal(posts[0].signal.aborted, false, 'the page pause is no more destructive than the lock screen one');
+
+  const plays = sinkEl.plays;
+  s.resume();
+  assert.equal(ctx.state, 'running');
+  assert.ok(sinkEl.plays > plays);
+
+  s.cancel();
+  await done;
+  assert.ok(posts[0].signal.aborted, 'and the transport stop is still the cancel that reaches the engine');
+});
+
 // Stop while paused has to abort too — a frozen message left synthesizing on the
 // GPU is exactly the abandoned synthesis that kills voxcpm2 on the next request.
 test('stop while paused aborts the engine as well', async () => {

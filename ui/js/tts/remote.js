@@ -227,5 +227,9 @@ export function remoteSpeaker(cfg) {
       }
     },
     cancel,
+    // The same two verbs the lock screen presses, now reachable from the page's
+    // own transport — one pause, one resume, whoever asks.
+    pause: pauseLive,
+    resume: resumeLive,
   };
 }

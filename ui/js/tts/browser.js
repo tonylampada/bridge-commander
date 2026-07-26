@@ -31,12 +31,14 @@ export function browserSpeaker() {
   let retried = false;
   let keepalive = null;
   let settle = null;     // resolve of the in-flight speak()
+  let paused = false;    // the transport asked for silence — the keepalive must respect it
 
   function stopKeepalive() { if (keepalive) { clearInterval(keepalive); keepalive = null; } }
   function startKeepalive() {
     stopKeepalive();
     keepalive = setInterval(() => {
       if (!window.speechSynthesis) return stopKeepalive();
+      if (paused) return;                      // else the anti-idle resume() would undo the pause
       if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.resume();
       else stopKeepalive();
     }, 7000);
@@ -98,6 +100,7 @@ export function browserSpeaker() {
         current = opts || {};
         queue = chunkText(text);
         retried = false;
+        paused = false;                        // a new message always starts speaking
         settle = resolve;
         startKeepalive();
         // Only do the cancel-then-wait dance when something is actually in
@@ -109,10 +112,20 @@ export function browserSpeaker() {
       });
     },
     cancel() {
-      gen++; queue = []; stopKeepalive();
+      gen++; queue = []; paused = false; stopKeepalive();
       try { if (window.speechSynthesis) speechSynthesis.cancel(); } catch (e) {}
       const done = settle; settle = null;
       if (done) done();                        // a cancelled message is finished, not failed
+    },
+    // The engine's own pause/resume. Reversible, unlike cancel(): the queue and
+    // the utterance mid-flight are untouched, so resume picks the word back up.
+    pause() {
+      paused = true;
+      try { if (window.speechSynthesis) speechSynthesis.pause(); } catch (e) {}
+    },
+    resume() {
+      paused = false;
+      try { if (window.speechSynthesis) speechSynthesis.resume(); } catch (e) {}
     },
   };
 }
