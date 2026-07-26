@@ -1,18 +1,29 @@
 // TTS: speak new agent messages when enabled; toggle persists in localStorage.
-// WHICH speaker does the talking — the browser's speechSynthesis or an external
-// engine, with the browser as the fallback under it — is decided once in
-// ./tts/index.js. Everything below holds a single `speaker` and never asks.
+//
+// HOW the sound is made is not here. ./speech.js owns the whole speech path —
+// the engine request, the streaming playback, the <audio> the OS can see, the
+// lock screen and the visible transport — and it is the module that was proven
+// on the captain's phone. This file is the board's policy on top of it: WHICH
+// messages get spoken, WHOSE voice speaks them, and the on/off toggle.
+//
+// There is no second way to speak. When the engine refuses, or no voice is
+// chosen, the board is silent AND says so on screen. It used to fall through to
+// the browser voice without a word, which is how it spoke English in a
+// Portuguese room for an afternoon while the bug was hunted somewhere else.
 import { api } from './api.js';
-import { speakerFor, pickVoice } from './tts/index.js';
+import { speak as engineSpeak, stop as engineStop } from './speech.js';
+import { push as toast } from './toast.js';
+import { fetchVoices, sortedVoices, pickVoice } from './voices.js';
 import { lieutenantByActor } from './state.js';
 
 const VOICE_ON_KEY = 'bc-voice-on';
+const VOICE_KEY = 'bc-tts-voice';   // the board's voice, an engine id
 const voiceSelect = document.getElementById('voice-select');
 const voiceBtn = document.getElementById('voice-btn');
 
 let voiceOn = false;
-let speaker = speakerFor(null);   // browser-only until /api/config answers
-let voiceList = [];               // [{id, name, lang}] from speaker.voices()
+let engine = null;                // /api/config's tts block, or null if none
+let voiceList = [];               // [{id, name, lang}] from the engine
 let voiceFilter = null;           // lowercase substrings from /api/config, or null
 
 // One load, settled once: the lieutenant-settings picker awaits the SAME work
@@ -21,47 +32,28 @@ const voicesReady = api.config().then((cfg) => {
   if (cfg && Array.isArray(cfg.voices) && cfg.voices.length) {
     voiceFilter = cfg.voices.map((s) => String(s).toLowerCase());
   }
-  speaker = speakerFor(cfg);
-}, () => {})
-  .then(() => speaker.voices())
+  const tts = cfg && cfg.tts;
+  if (tts && tts.enabled && tts.url) engine = tts;
+  return engine ? fetchVoices(engine.url, engine.lang) : [];
+}, () => [])
   .then((list) => { voiceList = list; populatePicker(); }, () => {});
-// The picker's saved choice is keyed per speaker (speaker.key), so a browser
-// voice name can never come back as an engine voice id. The legacy {name,lang}
-// shape is still read, so an existing selection survives the upgrade.
+
 function savedVoiceId() {
-  let raw = null;
-  try { raw = localStorage.getItem(speaker.key); } catch (e) {}
-  if (!raw) return '';
-  if (raw[0] !== '{') return raw;
-  try { const o = JSON.parse(raw); return o.name + '|' + o.lang; } catch (e) { return ''; }
-}
-function voiceRank(v) {
-  if (/^pt[-_]BR/i.test(v.lang)) return 0;
-  if (/^pt/i.test(v.lang)) return 1;
-  if (/^en/i.test(v.lang)) return 2;
-  return 3;
-}
-// The offered voices, best-language first. `keep` is an id to never filter out —
-// whatever is currently chosen stays visible even when the workspace narrows the
-// list to a few names.
-function sortedVoices(keep) {
-  let sorted = voiceList.slice().sort((a, b) =>
-    voiceRank(a) - voiceRank(b) || a.lang.localeCompare(b.lang) || a.name.localeCompare(b.name));
-  if (voiceFilter) {
-    const matches = (v) => voiceFilter.some((f) => v.name.toLowerCase().includes(f));
-    if (sorted.some(matches)) sorted = sorted.filter((v) => matches(v) || v.id === keep);
-  }
-  return sorted;
+  try { return localStorage.getItem(VOICE_KEY) || ''; } catch (e) { return ''; }
 }
 // The same catalogue the settings panel shows, for the per-lieutenant picker.
-export function voiceOptions(keep) { return voicesReady.then(() => sortedVoices(keep)); }
+export function voiceOptions(keep) {
+  return voicesReady.then(() => sortedVoices(voiceList, voiceFilter, keep));
+}
 function populatePicker() {
-  const saved = savedVoiceId();
-  const sorted = sortedVoices(saved);
+  // The workspace may name a voice; that is the board's until the captain picks
+  // another. Nothing at all is a real state, and a loud one — see speakPlain.
+  const saved = savedVoiceId() || (engine && engine.voice) || '';
+  const sorted = sortedVoices(voiceList, voiceFilter, saved);
   voiceSelect.textContent = '';
   const def = document.createElement('option');
   def.value = '';
-  def.textContent = 'default voice';
+  def.textContent = 'no voice — the board stays silent';
   voiceSelect.appendChild(def);
   for (const v of sorted) {
     const o = document.createElement('option');
@@ -73,7 +65,7 @@ function populatePicker() {
 }
 voiceSelect.onchange = () => {
   const id = voiceSelect.value;
-  try { if (id) localStorage.setItem(speaker.key, id); else localStorage.removeItem(speaker.key); } catch (e) {}
+  try { if (id) localStorage.setItem(VOICE_KEY, id); else localStorage.removeItem(VOICE_KEY); } catch (e) {}
 };
 // The voice for what `who` said: their own if they have one, else the board's.
 // pickVoice owns the rule (and the "must be in the catalogue" guard); this only
@@ -95,30 +87,44 @@ function stripForSpeech(text) {
 }
 
 // ---------- speech sessions ----------
-// One session at a time: a new message supersedes the old, so the newest is
-// always what you hear. speak() settles when the message is done (spoken,
-// cancelled, or — after every fallback under it failed — given up on), which is
-// also what drives the floating indicator.
+// One session at a time: a new message supersedes the old (speech.js stops the
+// previous one itself), so the newest is always what you hear. `speaking` is
+// what the per-message speak button toggles against.
 let session = 0;
 let speaking = false;
+
+// A silence the captain can see. Every way this board can fail to speak comes
+// through here — no path ends in nothing happening.
+function mute(text) {
+  speaking = false;
+  toast({ emoji: '🔇', text });
+}
 
 // The message is spoken whole. It used to be cut at 1200 characters, from when a
 // long message meant half a minute of silence before any sound — the cap bought
 // a shorter wait by throwing the rest of the answer away. Streaming removed the
 // wait, so the cap only truncated: a 2664-character reply stopped mid-sentence,
-// at 45% of itself. Stopping early is the bubble's job, not a slice().
+// at 45% of itself. Stopping early is the transport's job, not a slice().
 function speakPlain(plain, who) {
   const my = ++session;
-  speaker.cancel();
+  if (!engine) return mute('no speech engine configured — the board cannot speak');
+  const voice = voiceForAuthor(who);
+  if (!voice) return mute('no voice chosen — pick one in settings; the board will not guess');
   speaking = true;
-  speakingBubble.show(who);
   // `who` is the author, and it is not decoration: it picks the voice that
-  // speaks (each lieutenant may own one), and the remote speaker puts it on the
-  // phone's lock screen, which is where the captain sees WHO is talking to him
-  // while the screen is off. Nothing here knows that — it just carries it.
-  speaker.speak(plain, { voice: voiceForAuthor(who), who })
-    .catch(() => {})
-    .then(() => { if (my !== session) return; speaking = false; speakingBubble.hide(); });
+  // speaks (each lieutenant may own one) and it is what the phone's lock screen
+  // shows, which is where the captain sees WHO is talking while the screen is off.
+  engineSpeak({
+    url: engine.url + '/v1/audio/speech',
+    voice,
+    input: plain,
+    params: engine.params && Object.keys(engine.params).length ? engine.params : undefined,
+    title: who || 'Bridge Commander',
+    artist: 'Bridge Commander',
+  }).then(
+    () => { if (my === session) speaking = false; },
+    (err) => { if (my === session) mute('speech failed: ' + (err && err.message ? err.message : err)); },
+  );
 }
 export function speak(text, who) {
   if (!voiceOn) return;
@@ -130,45 +136,8 @@ export function speak(text, who) {
 export function stopSpeaking() {
   session++;
   speaking = false;
-  speaker.cancel();
-  speakingBubble.hide();
+  engineStop();
 }
-
-// ---------- floating transport ----------
-// A small fixed transport shown ONLY while a speech session is live: up when one
-// starts, down when the speaker settles it (natural end, error, or cancel).
-// Three buttons — play, pause, stop — and a label saying WHO is speaking.
-//
-// It used to be a pill with four animated wave bars, and that is exactly what
-// broke the phone: the lock screen goes deaf behind a page that shows no player.
-// WebKit wants a transport it can SEE, so this is one — plain on purpose, here to
-// be seen and pressed by a thumb, not admired.
-const speakingBubble = (() => {
-  let el = null;
-  function ensureEl() {
-    if (el) return el;
-    el = document.createElement('div');
-    el.id = 'tts-bubble';
-    el.hidden = true;
-    el.innerHTML = '<span class="lbl"></span>'
-      + '<button type="button" class="t-play" title="play" aria-label="play">▶</button>'
-      + '<button type="button" class="t-pause" title="pause" aria-label="pause">❚❚</button>'
-      + '<button type="button" class="t-stop" title="stop" aria-label="stop">■</button>';
-    el.querySelector('.t-play').onclick = () => speaker.resume();
-    el.querySelector('.t-pause').onclick = () => speaker.pause();
-    el.querySelector('.t-stop').onclick = () => stopSpeaking();
-    document.body.appendChild(el);
-    return el;
-  }
-  return {
-    show(who) {
-      const e = ensureEl();
-      e.querySelector('.lbl').textContent = who || 'speaking…';
-      e.hidden = false;
-    },
-    hide() { if (el) el.hidden = true; },
-  };
-})();
 
 // Manual, on-demand speak for a single message. Independent of the auto-speak
 // toggle: this call happens inside a real user gesture (the speak-button click),

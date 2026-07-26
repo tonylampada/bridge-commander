@@ -81,7 +81,7 @@ document.addEventListener('click', (e) => {
     t.closest('#label-picker') ||
     t.closest('#av-overlay') ||               // artifact viewer sits above the detail
     t.closest('#mmd-overlay') ||              // fullscreen mermaid diagram overlay
-    t.closest('#tts-bubble') ||               // floating speech transport (and its buttons)
+    t.closest('.speech-transport') ||         // floating speech transport (and its buttons)
     t.closest('[data-label-add]')
   )) return;
   if (editingTitle) commitTitleEdit();        // save the in-progress rename first

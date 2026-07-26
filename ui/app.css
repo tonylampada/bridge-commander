@@ -1045,23 +1045,12 @@ a.a-uri { color: var(--accent); }
 #av-download { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; text-decoration: none; }
 #av-download:hover { color: var(--accent); }
 
-/* ---------- TTS transport ---------- */
-/* Up while the board speaks: who is talking, and three buttons for it. Plain on
-   purpose — a player WebKit can see is what keeps the lock screen answering. */
-#tts-bubble {
-  position: fixed; right: 16px; bottom: 16px; z-index: 88;
-  display: inline-flex; align-items: center; gap: 7px; padding: 7px 8px 7px 14px;
-  border-radius: 999px; background: var(--panel2); border: 1px solid var(--accent2);
-  color: var(--accent); box-shadow: var(--shadow); font-size: 12px; font-weight: 600;
-  animation: pop-in .16s ease-out;
-}
-#tts-bubble .lbl { max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-#tts-bubble button {
-  width: 30px; height: 30px; border-radius: 50%; padding: 0; cursor: pointer;
-  background: var(--panel); border: 1px solid var(--line2); color: var(--text);
-  font-size: 11px; line-height: 1;
-}
-#tts-bubble button:hover { border-color: var(--accent); color: var(--accent); }
+/* ---------- speech transport ---------- */
+/* The transport belongs to ui/js/speech.js and brings its own stylesheet — a
+   player WebKit can SEE is what keeps the lock screen answering, so it is part
+   of the module, not of the page. All the board does is lend it the three
+   palette names it looks for and this board does not have. */
+.speech-transport { --muted: var(--dim); --signal: var(--accent); --inset: var(--panel2); }
 
 /* ---------- mobile ---------- */
 @media (max-width: 760px) {
@@ -1126,8 +1115,9 @@ a.a-uri { color: var(--accent); }
   .attr .v { max-width: 150px; }
   #notif-panel { top: 48px; }
   #settings-panel { top: 48px; }
-  /* sit above the bottom tab bar + home-indicator inset */
-  #tts-bubble { right: 12px; bottom: calc(60px + env(safe-area-inset-bottom)); }
+  /* sit above the bottom tab bar + home-indicator inset. `body ` outranks the
+     module's own rule, which is injected after this sheet. */
+  body .speech-transport { bottom: calc(60px + env(safe-area-inset-bottom)); }
 }
 @media (hover: none) {
   .tile:hover { transform: none; box-shadow: none; }
