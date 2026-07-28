@@ -289,6 +289,34 @@ test('harness without pane input → 501, not a pretend success', async () => {
   } finally { await teardown(); }
 });
 
+// The fake used to carry its OWN copy of the key grammar, so route tests could
+// go green against payloads the real harness rejects (and vice versa: these
+// five punctuation keys passed the fake and 502'd on tmux). Both now call the
+// single validatePaneInput() in port.js — this pins that they agree.
+test('the route accepts every key the shared port grammar allows, and caps text', async () => {
+  const { PANE_INPUT_MAX } = require('../harness/port.js');
+  const { s, fdir, teardown } = await boot();
+  try {
+    const key = await startWorker(s, s.dir, 'shared-rules');
+    const url = '/api/cards/shared-rules/pane/input';
+
+    for (const k of ['C-[', 'C-\\', 'C-]', 'C-^', 'C-_']) {
+      const r = await s.api('POST', url, { key: k });
+      assert.strictEqual(r.status, 200, k + ' → ' + JSON.stringify(r.body));
+    }
+    const log = await waitLog(fdir, key, (l) => l.filter((e) => e.event === 'input').length === 5);
+    assert.deepStrictEqual(log.filter((e) => e.event === 'input').map((e) => e.key),
+      ['C-[', 'C-\\', 'C-]', 'C-^', 'C-_']);
+
+    // one POST must not be able to paste a whole file into a live agent pane
+    let r = await s.api('POST', url, { text: 'x'.repeat(PANE_INPUT_MAX) });
+    assert.strictEqual(r.status, 200, 'at the cap is fine');
+    r = await s.api('POST', url, { text: 'x'.repeat(PANE_INPUT_MAX + 1) });
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.error, /text too long/);
+  } finally { await teardown(); }
+});
+
 test('a payload the harness refuses comes back as a harness failure, with the reason', async () => {
   const { s, fdir, teardown } = await boot();
   try {

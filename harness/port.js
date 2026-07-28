@@ -45,7 +45,10 @@
 //       forward RAW input to the pane: `text` typed literally (multi-line
 //       rides a bracketed paste), `key` ONE tmux key name ('Enter', 'BSpace',
 //       'Up', 'BTab', 'C-c', …). Exactly one of the two; anything else throws,
-//       as does an unusable key name or a pane that is gone. Deliberately NOT
+//       as does an unusable key name, a pane that is gone, or text past
+//       PANE_INPUT_MAX. Validate with the SHARED validatePaneInput() below —
+//       a harness with its own copy of the rules is a harness that drifts from
+//       them. Deliberately NOT
 //       send(): that one types, settles, Enters and retries until the composer
 //       verifies empty — right for delivering a brief, wrong for a keystroke.
 //       A harness MAY offer paneInput while send() throws (`command` does):
@@ -80,6 +83,38 @@
 //       them (codex); claude omits the field.
 
 const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnEnd'];
+
+// ---------- paneInput payload validation (the port contract, in one place) ----------
+// Lives HERE, not in an implementation, because every harness that offers
+// paneInput must enforce the SAME contract: a fake that is laxer than the real
+// thing turns route tests green against payloads tmux would choke on. port.js
+// has no dependencies, so both the tmux adapters and the fake can require it.
+//
+// KEY_RE — tmux's key-name grammar. Anchored, and no branch can begin with '-':
+// tmux is spawned via execFile (an argv array, so no shell) and sendKey passes
+// `--`, but a name that looks like a flag has no business reaching argv at all.
+// The punctuation branch is the five control keys that are not letters — C-[
+// (Escape on a lot of muscle memory), C-\, C-], C-^, C-_ — every one verified
+// accepted by tmux 3.4. The client emits them, so the grammar must too.
+const KEY_RE = /^(C-|M-|S-)*([A-Za-z0-9]+|[[\\\]^_])$/;
+// One POST must not be able to shove a whole file into a live agent's pane.
+// Generous enough for a real paste (a stack trace, a config block), far below
+// the 8 MB a request body may otherwise carry.
+const PANE_INPUT_MAX = 64 * 1024;
+
+// validatePaneInput(input) -> { key, text } — exactly one of the two is
+// non-empty. Throws with the reason otherwise; callers let it propagate.
+function validatePaneInput(input) {
+  const key = input && input.key != null ? String(input.key) : '';
+  const text = input && input.text != null ? String(input.text) : '';
+  if (key && text) throw new Error('paneInput: pass key or text, not both');
+  if (!key && !text) throw new Error('paneInput: nothing to send (pass key or text)');
+  if (key && !KEY_RE.test(key)) throw new Error(`paneInput: invalid tmux key name "${key}"`);
+  if (text.length > PANE_INPUT_MAX) {
+    throw new Error(`paneInput: text too long (${text.length} > ${PANE_INPUT_MAX} chars)`);
+  }
+  return { key, text };
+}
 
 // Builtins are lazy-required so requiring port.js never drags in tmux/claude
 // machinery for callers that only use the fake.
@@ -137,4 +172,5 @@ function harnessFor(ref) {
   return getHarness(ref.harness);
 }
 
-module.exports = { VERBS, registerHarness, getHarness, isHarnessRef, harnessFor };
+module.exports = { VERBS, registerHarness, getHarness, isHarnessRef, harnessFor,
+  validatePaneInput, KEY_RE, PANE_INPUT_MAX };

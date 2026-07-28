@@ -15,6 +15,7 @@ const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const t = require('./tmux.js');
+const { validatePaneInput } = require('./port.js');
 
 // A pane sitting back at a bare shell means the agent process exited.
 const SHELLS = new Set(['bash', 'zsh', 'sh', 'fish', 'dash', 'ksh']);
@@ -335,16 +336,22 @@ function openPane(ref, opts = {}) {
     try { onFrame(frame); } catch { /* a throwing subscriber must not kill the feed */ }
   }
 
-  function schedule() {
+  // schedule(spentMs) — the next hop, measured from when the LAST one STARTED.
+  // Subtracting the time the capture already burned keeps the period at
+  // max(interval, capture) instead of interval + capture; without it a 60ms
+  // tmux would turn the advertised 120ms burst into 180ms and the 1s baseline
+  // into 1.06s. Still strictly sequential, so captures cannot overlap.
+  function schedule(spentMs = 0) {
     if (closed) return;
-    const fast = feed.until > Date.now();
-    timer = setTimeout(loop, fast ? Math.min(burstMs, intervalMs) : intervalMs);
+    const base = feed.until > Date.now() ? Math.min(burstMs, intervalMs) : intervalMs;
+    timer = setTimeout(loop, Math.max(0, base - spentMs));
     timer.unref?.();
   }
   async function loop() {
+    const started = Date.now();
     ticking = true;
     try { await tick(); } finally { ticking = false; }
-    schedule();
+    schedule(Date.now() - started);
   }
 
   function close() {
@@ -378,18 +385,13 @@ async function paneSnapshot(ref, opts = {}) {
 // verify and a retried Enter would submit twice. Raw passthrough bypasses all
 // of it: one keystroke in, one keystroke out.
 //
-// `key` is validated against tmux's key-name grammar before it becomes argv.
-// tmux is spawned via execFile (an argv array, so no shell), but an unchecked
-// value starting with '-' would still be read by tmux as a FLAG; the anchored
-// pattern makes that impossible.
-const KEY_RE = /^(C-|M-|S-)*[A-Za-z0-9]+$/;
-
+// The payload contract (key XOR text, the key grammar, the size cap) lives in
+// port.js so the fake enforces the SAME rules — two copies of a validation
+// regex are two regexes that drift. Text needs no pattern of its own: tmux.js's
+// sendLiteral passes `--` so a flag-shaped payload can never be read as flags,
+// which is the guarantee every caller of that primitive now gets.
 async function paneInput(ref, input = {}) {
-  const key = input && input.key != null ? String(input.key) : '';
-  const text = input && input.text != null ? String(input.text) : '';
-  if (key && text) throw new Error('paneInput: pass key or text, not both');
-  if (!key && !text) throw new Error('paneInput: nothing to send (pass key or text)');
-  if (key && !KEY_RE.test(key)) throw new Error(`paneInput: invalid tmux key name "${key}"`);
+  const { key, text } = validatePaneInput(input);
   if (!(await paneExists(ref.session, ref.window))) {
     throw new Error(`pane ${stateKey(ref.session, ref.window)} is gone`);
   }
@@ -401,6 +403,12 @@ async function paneInput(ref, input = {}) {
   const feed = feeds.get(target);
   if (feed) feed.bump();
 }
+
+// openFeedCount() — how many pane feeds are registered right now. A test hook,
+// not a port verb: the "a burst cannot outlive its feed" claim rests on the map
+// being emptied on close, and without a way to look at the map that claim is
+// untestable — deleting the delete kept every other assertion green.
+function openFeedCount() { return feeds.size; }
 
 module.exports = {
   SHELLS,
@@ -422,4 +430,5 @@ module.exports = {
   openPane,
   paneSnapshot,
   paneInput,
+  openFeedCount,
 };

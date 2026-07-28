@@ -43,6 +43,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const { SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
+const { validatePaneInput } = require('./port.js');
 
 const sessions = new Map(); // key (session or session:window) -> { alive, cwd, resumeId, transcript, hooks, turns }
 
@@ -306,17 +307,11 @@ async function paneSnapshot(ref) {
 
 // paneInput records the keystroke into the same <key>.pane.jsonl the open/close
 // events land in, so a watching test process can assert what the server
-// forwarded. Validation mirrors the tmux implementation (the port contract is
-// "key OR text", and a bad key must fail here too or route tests would pass
-// against a harness laxer than the real one).
+// forwarded. Validation is the SHARED one from port.js, not a copy: a fake that
+// is laxer than the real harness turns route tests green against payloads tmux
+// would choke on, and two copies of a regex are two regexes that drift.
 async function paneInput(ref, input = {}) {
-  const key = input && input.key != null ? String(input.key) : '';
-  const text = input && input.text != null ? String(input.text) : '';
-  if (key && text) throw new Error('paneInput: pass key or text, not both');
-  if (!key && !text) throw new Error('paneInput: nothing to send (pass key or text)');
-  if (key && !/^(C-|M-|S-)*[A-Za-z0-9]+$/.test(key)) {
-    throw new Error(`paneInput: invalid tmux key name "${key}"`);
-  }
+  const { key, text } = validatePaneInput(input);
   logPane(refKey(ref), 'input', key ? { key } : { text });
 }
 

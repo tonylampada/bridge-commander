@@ -165,18 +165,31 @@ function captureStyled(target, lines = 200) {
 // Single-line text goes via `send-keys -l`. Multi-line text goes via a tmux
 // buffer paste in bracketed-paste mode (-p) so embedded newlines land as part
 // of the paste instead of acting as Enter presses that submit mid-text.
+//
+// `--` before the text is LOad-bearing, not decoration. execFile passes an argv
+// array, so there is no shell — but tmux still runs the trailing operand
+// through getopt, which permutes: text beginning with '-' is read as FLAGS, not
+// typed. Unguarded, `{text:'-t=<other-session>:'}` retargets send-keys at a
+// pane the caller was never authorised to touch, and `-R`/`-N5`/`--` are
+// swallowed instead of typed. Verified against tmux 3.4 both ways: without `--`
+// the retarget lands, with it every flag-shaped payload arrives as literal
+// text. The multi-line branch was never exposed — that text rides load-buffer's
+// STDIN, never argv — which is why `-R` was dangerous while `-R\n` was not.
 async function sendLiteral(target, text) {
   if (text.includes('\n')) {
     await tmuxRun(['load-buffer', '-b', 'bc-harness', '-'], text);
     await tmux('paste-buffer', '-p', '-d', '-b', 'bc-harness', '-t', target);
   } else {
-    await tmux('send-keys', '-t', target, '-l', text);
+    await tmux('send-keys', '-t', target, '-l', '--', text);
   }
 }
 
 // sendKey(target, key) — one named tmux key ('Enter', 'Escape', 'C-c', ...).
+// Same `--` terminator and the same reason: the key name is an operand too, and
+// this primitive must be safe for every caller rather than only for the ones
+// that happen to validate first.
 function sendKey(target, key) {
-  return tmux('send-keys', '-t', target, key);
+  return tmux('send-keys', '-t', target, '--', key);
 }
 
 // submit(target, text, opts) — type text once, then Enter with verification.

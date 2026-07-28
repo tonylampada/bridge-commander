@@ -42,18 +42,48 @@ function showMsg(text) {
 // One POST per keystroke, chained: fetches to the same origin can complete out
 // of order, and out-of-order keystrokes would scramble typed text ("abc" → "acb").
 // The chain costs one promise per key and makes ordering a non-question.
+//
+// Two things keep the chain from becoming a trap. Each hop is bounded by a
+// timeout, so one stalled request cannot wedge every key behind it forever; and
+// INTERRUPTS SKIP THE QUEUE entirely — Ctrl-C is the one key whose whole purpose
+// is to arrive when the pane is not keeping up, and ordering an interrupt
+// against the text it interrupts is meaningless anyway.
+const SEND_TIMEOUT_MS = 5000;
+const JUMPS_QUEUE = new Set(['C-c', 'C-d', 'C-z', 'C-\\']);
+
 let sending = Promise.resolve();
-function sendInput(payload) {
-  if (!inputUrl) return;
-  const url = inputUrl;
-  sending = sending.then(() => fetch(url, {
+function post(url, payload) {
+  return fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
-  }).catch(() => { /* a dropped keystroke is not worth a dialog; the frame shows the truth */ }));
+    signal: AbortSignal.timeout(SEND_TIMEOUT_MS),
+  }).then((r) => {
+    // A 4xx/5xx is a RESOLVED fetch, so .catch() never sees it: without this a
+    // rejected keystroke is preventDefaulted away from the browser and then
+    // vanishes with no trace anywhere.
+    if (!r.ok) return r.json().catch(() => ({})).then((b) => { throw new Error(b.error || 'HTTP ' + r.status); });
+    return null;
+  }).catch((e) => { flash(String((e && e.message) || e)); });
+}
+function sendInput(payload) {
+  if (!inputUrl) return;
+  const url = inputUrl;
+  if (payload.key && JUMPS_QUEUE.has(payload.key)) { post(url, payload); return; }
+  sending = sending.then(() => post(url, payload));
 }
 
 function typing() { return document.activeElement === preEl; }
+// flash(msg) — a rejected keystroke says so in the head line (this overlay's
+// status line already) and then gets out of the way. A dropped key does not
+// deserve a dialog, but it must not disappear in silence either.
+let flashTimer = null;
+function flash(msg) {
+  hintEl.textContent = '⚠ ' + msg;
+  hintEl.classList.remove('on');
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(setHint, 4000);
+}
 // The head line doubles as the focus indicator and as the way OUT: once the
 // pane has focus Escape belongs to the terminal (Claude's own composer uses
 // it), so the close affordance has to be stated somewhere the eye already is.

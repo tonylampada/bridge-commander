@@ -41,6 +41,20 @@ feel dead, so a keystroke drops the interval to `burstMs` (~120) for
 the feed object itself, so it cannot outlive the feed — closing the pane, or
 typing into one nobody is watching, leaves nothing behind.
 
+The poll is a self-rescheduling `setTimeout`, so captures are strictly
+sequential and can never stack. Each hop's delay is measured from when the
+previous one STARTED, not when it finished, which keeps the period at
+`max(interval, capture)` — schedule from the end instead and a 60ms tmux turns
+the advertised 120ms burst into 180ms and the 1s baseline into 1.06s.
+
+Neither `paneInput` nor `sendLiteral` needs a pattern for `text`: `tmux.js`
+passes `--` before every operand, so a payload beginning with `-` is typed
+rather than parsed as flags. That guard is not cosmetic — without it
+`{text:'-t=<other-session>:'}` retargets `send-keys` at a pane the caller was
+never authorised to touch (`harness/test/tmux-literal.test.js` pins it against
+real tmux). `text` is capped at `PANE_INPUT_MAX` (64 KB) so one call cannot
+paste a whole file into a live agent's pane.
+
 `command` panes accept `paneInput` even though their `send` always throws: those
 are different capabilities. `send` refuses because a program has no COMPOSER for
 a brief to land in; `paneInput` assumes nothing about what the pane runs, which
