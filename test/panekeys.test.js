@@ -9,10 +9,15 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let keyForEvent;
+// The server-side guard ITSELF, not a copy of it: the whole point of the last
+// test in this file is that client and server cannot drift apart.
+const { KEY_RE } = require('../harness/port.js');
+
+let keyForEvent, panekeys;
 test.before(async () => {
-  ({ keyForEvent } = await import(
-    pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'panekeys.js')).href));
+  panekeys = await import(
+    pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'panekeys.js')).href);
+  ({ keyForEvent } = panekeys);
 });
 
 // A KeyboardEvent stand-in: only the fields the mapper reads.
@@ -74,15 +79,15 @@ test('Alt/Meta chords and unmappable keys are never stolen', () => {
 });
 
 test('every key name it emits is one tmux would accept as a key, never as a flag', () => {
-  const KEY_RE = /^(C-|M-|S-)*[A-Za-z0-9]+$/; // the server-side guard, verbatim
-  const keys = ['Enter', 'Backspace', 'Tab', 'Escape', 'ArrowUp', 'ArrowDown', 'ArrowLeft',
-    'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown', 'Delete', 'Insert'];
-  for (const k of keys) {
-    const out = keyForEvent(ev(k));
-    assert.match(out.key, KEY_RE, k);
+  // Both loops walk what the client REALLY emits, not a hand-typed subset:
+  // add a character the server rejects and this test is what says so.
+  for (const dom of Object.keys(panekeys.NAMED)) {
+    assert.match(keyForEvent(ev(dom)).key, KEY_RE, dom);
   }
   assert.match(keyForEvent(ev('Tab', { shift: true })).key, KEY_RE);
-  for (const c of 'abcdefghijklmnopqrstuwxyz') { // v is excluded on purpose
-    assert.match(keyForEvent(ev(c, { ctrl: true })).key, KEY_RE, 'C-' + c);
+  for (const c of panekeys.CTRL_KEYS) {
+    const out = keyForEvent(ev(c, { ctrl: true }));
+    if (!out) continue; // C-v alone is left to the browser, so it emits nothing
+    assert.match(out.key, KEY_RE, 'C-' + c);
   }
 });

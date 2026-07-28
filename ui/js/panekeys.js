@@ -10,7 +10,7 @@
 
 // The named keys worth having in a terminal. tmux spells several of them
 // differently from the DOM (BSpace, DC), which is the whole point of the table.
-const NAMED = {
+export const NAMED = {
   Enter: 'Enter',
   Backspace: 'BSpace',
   Tab: 'Tab',
@@ -28,8 +28,10 @@ const NAMED = {
 };
 
 // Ctrl-<x> combos tmux understands: the letters plus the five punctuation
-// controls (C-[ is Escape, C-\ quits, C-_ undoes).
-const CTRL_RE = /^[a-z[\\\]^_]$/;
+// controls (C-[ is Escape, C-\ quits, C-_ undoes). A plain string, and exported
+// with NAMED, because the test iterates exactly this to check every name we emit
+// against the server's KEY_RE — a set it cannot read is a set it cannot pin.
+export const CTRL_KEYS = 'abcdefghijklmnopqrstuvwxyz[\\]^_';
 
 export function keyForEvent(e) {
   // Alt/Meta chords belong to the browser and the OS (⌘W, Alt-Tab). Never steal
@@ -50,7 +52,7 @@ export function keyForEvent(e) {
     // better than sending a bare C-v. Ctrl-C is NOT excluded — interrupting a
     // runaway agent is the headline reason this pane became typeable at all.
     if (c === 'v') return null;
-    return CTRL_RE.test(c) ? { key: 'C-' + c } : null;
+    return CTRL_KEYS.includes(c) ? { key: 'C-' + c } : null;
   }
 
   // Any single printable character (letters, digits, punctuation, space, and
