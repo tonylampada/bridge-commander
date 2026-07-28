@@ -14,7 +14,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let speak, stopSpeaking;
+let speak, stopSpeaking, stripForSpeech;
 
 const ENGINE = 'http://127.0.0.1:8883';
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -153,7 +153,7 @@ test.before(async () => {
   fakePage();
   fakeEngine();
   answer = () => said();
-  ({ speak, stopSpeaking } =
+  ({ speak, stopSpeaking, stripForSpeech } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'voice.js')).href));
   // The catalogue lands a few promises after import; the board is mute (and says
   // so) until it does, so every test would otherwise be testing that instead.
@@ -168,6 +168,86 @@ test.beforeEach(async () => {
   asked.length = 0;
   made.length = 0;
   answer = () => said();
+});
+
+// ── what is left of the markdown when it has to be heard ──────────────────
+// Every assertion below is an EAR test written down. The thing being checked is
+// never "the character is gone" — it is what a person would hear: no pipes read
+// out, no "greater than" in front of a quotation, a pause where the writing had
+// a heading or a list, and the words of a link without the URL after them.
+//
+// A pause is a full stop or a newline, because those are the two things the
+// engine breathes on. That is why these tests look at punctuation and line
+// breaks so closely: for speech they ARE the content.
+test('a table is not read out — it is announced', () => {
+  const said = stripForSpeech('Antes.\n\n| Nome | Idade |\n| --- | --- |\n| Ana | 30 |\n| Bo | 41 |\n\nDepois.');
+  assert.ok(!/\|/.test(said), 'no pipe survives to be spoken: ' + JSON.stringify(said));
+  assert.match(said, /Antes\.\s+table\.\s+Depois\./,
+    'the whole table collapses to ONE announcement — not one per row');
+});
+
+test('a quotation is spoken as speech, not as "greater than"', () => {
+  const said = stripForSpeech('Ele disse:\n\n> a pressa é inimiga\n> da perfeição\n\nE foi.');
+  assert.equal(said, 'Ele disse:\n\na pressa é inimiga\nda perfeição\n\nE foi.',
+    'the markers are gone and the words are untouched');
+});
+
+test('underscore emphasis gives up its underscores; an identifier keeps them', () => {
+  assert.equal(stripForSpeech('isso é _assim_ e também __assim__.'), 'isso é assim e também assim.');
+  assert.equal(stripForSpeech('a chave bc_voice_on fica.'), 'a chave bc_voice_on fica.',
+    'snake_case is one spoken word, not a pair of emphasis marks');
+});
+
+test('a heading ends in a full stop instead of colliding with the next line', () => {
+  const said = stripForSpeech('## Recomendação\nMantida: pipeline em YAML.');
+  assert.equal(said, 'Recomendação.\nMantida: pipeline em YAML.',
+    'the hashes are gone AND there is something to breathe on between the two');
+});
+
+test('a link says its words and never its URL', () => {
+  assert.equal(stripForSpeech('Clique em [abre o card](https://exemplo.com/x?a=1) agora.'),
+    'Clique em abre o card agora.',
+    'no trailing "link" after the text — the URL had nothing to say');
+});
+
+test('list items stay separate items, not one long breath', () => {
+  const said = stripForSpeech('Três coisas:\n\n- primeira\n- segunda\n* terceira\n\n1. um\n2. dois');
+  assert.equal(said, 'Três coisas:\n\nprimeira.\nsegunda.\nterceira.\n\num.\ndois.',
+    'bullets and numbers are gone, and every item is its own sentence');
+});
+
+test('a horizontal rule is a silence, not three dashes', () => {
+  assert.equal(stripForSpeech('Acima.\n\n---\n\nAbaixo.'), 'Acima.\n\nAbaixo.');
+  assert.equal(stripForSpeech('Acima.\n\n***\n\nAbaixo.'), 'Acima.\n\nAbaixo.');
+});
+
+test('a code fence is still "code" and a bare URL is still "link"', () => {
+  const said = stripForSpeech('Rode:\n\n```sh\nnpm test\n```\n\nveja https://ex.com/a pra mais.');
+  assert.match(said, /Rode:\s+code\s+veja link pra mais\./,
+    'these two were already right and were left alone: ' + JSON.stringify(said));
+});
+
+test('a real message from the board comes out as prose', () => {
+  const said = stripForSpeech([
+    '**Correção: eu procurei mal.** Achei: [`mattpocock/sandcastle`](https://github.com/mattpocock/sandcastle).',
+    '',
+    '## O que o Sandcastle faz',
+    '',
+    '- cria e limpa **git worktree**',
+    '- **retoma sessão**: `resumeSession`',
+    '',
+    'Mantida: pipeline em YAML nosso.',
+  ].join('\n'));
+  assert.equal(said, [
+    'Correção: eu procurei mal. Achei: mattpocock/sandcastle .',
+    '',
+    'O que o Sandcastle faz.',
+    '',
+    'cria e limpa git worktree.',
+    'retoma sessão: resumeSession .',
+    '',
+    'Mantida: pipeline em YAML nosso.',
+  ].join('\n'));
 });
 
 test('a burst past the cap drops the MIDDLE of the queue and keeps the newest', async () => {

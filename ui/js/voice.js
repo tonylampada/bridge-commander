@@ -80,11 +80,53 @@ function stripEmoji(s) { // spoken text only
     .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, ' ')
     .replace(/\p{Extended_Pictographic}/gu, ' ')
     .replace(/[\u{FE00}-\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}\u{20E3}]/gu, '')
-    .replace(/[←-⇿⌀-⏿■-◿☀-➿⬀-⯿]/g, ' ')
-    .replace(/\s{2,}/g, ' ').trim();
+    .replace(/[←-⇿⌀-⏿■-◿☀-➿⬀-⯿]/g, ' ');
 }
-function stripForSpeech(text) {
-  return stripEmoji(text.replace(/```[\s\S]*?```/g, ' code ').replace(/[`*#\[\]()]/g, ' ').replace(/https?:\S+/g, ' link '));
+// Line breaks SURVIVE this. They are not decoration left over from the source:
+// a newline and a full stop are the only two things the engine breathes on, so
+// throwing them away is throwing away every pause in the message.
+function tidy(s) {
+  return s
+    .replace(/[^\S\n]+/g, ' ')      // runs of space/tab, never the newlines
+    .replace(/ ?\n ?/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+// A line that carried a block mark is a sentence, and it has to end like one —
+// otherwise "## Recomendação" runs straight into the paragraph under it and six
+// list items come out as one breathless paragraph.
+function sentence(s) {
+  return /[.!?:;…]\s*$/.test(s) ? s : s.replace(/\s*$/, '.');
+}
+// Markdown is written to be READ. This is what is left of it when it must be
+// HEARD instead. The old version deleted CHARACTERS — which is why a table
+// spoke its pipes, `> ` came out as "maior que", `_assim_` kept its
+// underscores, and a link said its text and then the word "link" for the URL
+// behind it. Marks are structure, so each one is answered by what it means out
+// loud: the ones that carry words give the words up, the blocks that cannot be
+// spoken at all collapse to the one word that says what was there.
+//
+// A table becomes the single word "table" rather than sentences. Read aloud,
+// even a small one is a chant of column headings repeated per row; the captain
+// is being told a table exists in the card, and can look.
+//
+// This is the ONE function the speech paths call. `code` and `link` are
+// unchanged — they were already right.
+export function stripForSpeech(text) {
+  const t = String(text == null ? '' : text)
+    .replace(/```[\s\S]*?```/g, ' code ')                       // a fence is not read out
+    .replace(/(?:^[ \t]*\|.*\|[ \t]*\n?)+/gm, '\ntable.\n')     // a whole table, once
+    .replace(/^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$/gm, '')     // --- is a page break, silent
+    .replace(/^[ \t]*#{1,6}[ \t]+(.*)$/gm, (m, h) => sentence(h))
+    .replace(/^[ \t]*>[ \t]?/gm, '')                            // a quote is just someone talking
+    .replace(/^[ \t]*(?:[-*+]|\d+[.)])[ \t]+(.*)$/gm, (m, i) => sentence(i))
+    .replace(/!?\[([^\]\n]*)\]\([^)\n]*\)/g, '$1')              // the link's words, never its URL
+    .replace(/https?:\S+/g, ' link ')                           // a bare one has no words to say
+    // emphasis gives up its delimiters and keeps the word — but only when they
+    // really are delimiters, so snake_case survives as one spoken word.
+    .replace(/(^|[\s("'])([*_]{1,3}|~~)(?=\S)(.+?)\2(?=[\s.,;:!?)"']|$)/gm, '$1$3')
+    .replace(/[`*#\[\]()~]/g, ' ');                             // leftovers, as before
+  return tidy(stripEmoji(t));
 }
 
 // ---------- the speech queue ----------
