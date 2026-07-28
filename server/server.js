@@ -792,6 +792,25 @@ function broadcastArtifact(uri, version, by) { sseSend('artifact', { uri, versio
 //                 no live session, or the open itself failed)
 //   busy        — the concurrent-pane cap (bounds child-process load) is hit
 const PANE_MAX = parseInt(process.env.BC_PANE_MAX, 10) > 0 ? parseInt(process.env.BC_PANE_MAX, 10) : 8;
+// resolvePaneRef(kind, id) -> { ref, reason } — which harness ref does a pane
+// target address? Shared by BOTH pane routes (the read stream and the write
+// input) so they can never disagree about what `/api/cards/x/pane/*` means.
+// ref null + a human reason is the "nothing to watch / nothing to type into"
+// answer; each route renders it in its own dialect (SSE event vs 404).
+function resolvePaneRef(kind, id) {
+  if (kind === 'cards') {
+    const card = findCard(id);
+    const w = card && findWorker(card.id);
+    if (!card) return { ref: null, reason: 'unknown card: ' + id };
+    if (card.column !== 'working') return { ref: null, reason: 'card is not Working' };
+    if (!w) return { ref: null, reason: 'no worker bound to ' + id };
+    return { ref: w.ref, reason: '' };
+  }
+  const lt = findLieutenant(id);
+  if (!lt) return { ref: null, reason: 'unknown lieutenant: ' + id };
+  if (!isHarnessRef(lt.ref)) return { ref: null, reason: 'lieutenant has no live session' };
+  return { ref: lt.ref, reason: '' };
+}
 const panes = new Map(); // paneKey -> { clients: Set<res>, handle, last }
 function paneKey(ref) { return ref.harness + '/' + ref.session + (ref.window ? ':' + ref.window : ''); }
 function paneWrite(res, event, data) {
@@ -2963,23 +2982,34 @@ const server = http.createServer(async (req, res) => {
     // an EventSource, which can't read error bodies.
     const paneRoute = /^\/api\/(cards|lieutenants)\/([^/]+)\/pane\/stream$/.exec(p);
     if (paneRoute && req.method === 'GET') {
-      const id = decodeURIComponent(paneRoute[2]);
-      let ref = null;
-      let reason = '';
-      if (paneRoute[1] === 'cards') {
-        const card = findCard(id);
-        const w = card && findWorker(card.id);
-        if (!card) reason = 'unknown card: ' + id;
-        else if (card.column !== 'working') reason = 'card is not Working';
-        else if (!w) reason = 'no worker bound to ' + id;
-        else ref = w.ref;
-      } else {
-        const lt = findLieutenant(id);
-        if (!lt) reason = 'unknown lieutenant: ' + id;
-        else if (!isHarnessRef(lt.ref)) reason = 'lieutenant has no live session';
-        else ref = lt.ref;
-      }
+      const { ref, reason } = resolvePaneRef(paneRoute[1], decodeURIComponent(paneRoute[2]));
       return paneStream(req, res, ref, reason);
+    }
+
+    // ----- pane input (⌨️ type into the LIVE pane — the write half of 👁) -----
+    // Same ref resolution as the stream above (resolvePaneRef), same targets,
+    // opposite direction: one keystroke or a short literal burst forwarded raw
+    // to the pane's tmux target. NOT the agent `send` verb — that one types,
+    // settles and Enters with verified retries, which is right for a brief and
+    // wrong for an arrow key. Ordinary JSON in, ordinary status codes out (the
+    // client is fetch(), not an EventSource): 404 nothing to type into, 501 the
+    // harness cannot take input, 502 the harness refused or tmux failed.
+    // Same-origin only, exactly like every other route that writes — the
+    // network boundary is the auth boundary (README).
+    const paneInputRoute = /^\/api\/(cards|lieutenants)\/([^/]+)\/pane\/input$/.exec(p);
+    if (paneInputRoute && req.method === 'POST') {
+      const { ref, reason } = resolvePaneRef(paneInputRoute[1], decodeURIComponent(paneInputRoute[2]));
+      if (!ref) return sendJson(res, 404, { error: reason });
+      let impl;
+      try { impl = harnessFor(ref); }
+      catch (e) { return sendJson(res, 404, { error: String((e && e.message) || e) }); }
+      if (typeof impl.paneInput !== 'function') {
+        return sendJson(res, 501, { error: 'harness "' + ref.harness + '" cannot take pane input' });
+      }
+      const body = JSON.parse(await readBody(req) || '{}');
+      try { await impl.paneInput(ref, { key: body.key, text: body.text }); }
+      catch (e) { return sendJson(res, 502, { error: String((e && e.message) || e) }); }
+      return sendJson(res, 200, { ok: true });
     }
 
     // ----- sysload stream (⚙️ → monitoring; see the sysload section above) -----

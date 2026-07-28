@@ -178,10 +178,19 @@ function onTurnEnd(ref, hook, opts = {}) {
   return close;
 }
 
-// openPane / paneSnapshot — the shared implementations (OPTIONAL capability
-// verbs, port.js): a pane is a pane, and watching a program run is the same
-// capture-pane the agent adapters use. No commands/runCommand/status: those
-// address an agent session, and there is none here.
-const { openPane, paneSnapshot } = s;
+// openPane / paneSnapshot / paneInput — the shared implementations (OPTIONAL
+// capability verbs, port.js): a pane is a pane, and watching a program run is
+// the same capture-pane the agent adapters use. No commands/runCommand/status:
+// those address an agent session, and there is none here.
+//
+// paneInput IS offered here even though send() above always throws, because
+// they are not the same capability. send() refuses because there is no
+// COMPOSER: a brief typed at a program has nowhere to land. paneInput carries
+// no such assumption — it forwards one keystroke to whatever the pane is
+// running, which is exactly how you answer a prompt, hit `q` in a pager, or
+// Ctrl-C a stuck script. A command pane is arguably the most useful place to
+// type of all; the refusal was always about briefs, not keys.
+const { openPane, paneSnapshot, paneInput } = s;
 
-module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, openPane, paneSnapshot };
+module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd,
+  openPane, paneSnapshot, paneInput };

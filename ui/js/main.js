@@ -173,6 +173,11 @@ document.addEventListener('keydown', (e) => {
     filterInput.focus();
     return;
   }
+  // Escape closes the topmost thing — EXCEPT when the LIVE pane has focus: a
+  // focused pane is a terminal, and Escape is a key its agent uses (Claude's
+  // own composer clears on it). pane.js stops that keydown at the <pre>, so it
+  // never reaches this handler; the pane's head line carries the way out
+  // instead (✕, or click outside).
   if (e.key === 'Escape') {
     if (artifactOpen()) closeArtifact();
     else if (paneOpen()) closePane();

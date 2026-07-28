@@ -246,11 +246,12 @@ async function runCommand(ref, command) {
   throw new Error('unknown command ' + name + ' (see /help)');
 }
 
-// onTurnEnd / openPane / paneSnapshot / adoptWindow — the shared
+// onTurnEnd / openPane / paneSnapshot / paneInput / adoptWindow — the shared
 // implementations verbatim (tmux-session.js): codex-notify.js writes the same
 // turnend.jsonl shape the claude Stop hook does, pane viewing is pure
-// capture-pane, and adoption is pure rename-window.
-const { onTurnEnd, openPane, paneSnapshot, adoptWindow } = s;
+// capture-pane, pane input is pure send-keys, and adoption is pure
+// rename-window.
+const { onTurnEnd, openPane, paneSnapshot, paneInput, adoptWindow } = s;
 
 module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd,
-  openPane, paneSnapshot, commands, runCommand, status, adoptWindow };
+  openPane, paneSnapshot, paneInput, commands, runCommand, status, adoptWindow };

@@ -281,15 +281,16 @@ async function runCommand(ref, command) {
   throw new Error('unknown command ' + name + ' (see /help)');
 }
 
-// onTurnEnd / openPane / paneSnapshot / adoptWindow — the shared
+// onTurnEnd / openPane / paneSnapshot / paneInput / adoptWindow — the shared
 // implementations verbatim (tmux-session.js): the Stop-hook relay writes the
 // same turnend.jsonl shape every tmux adapter tails, pane viewing is pure
-// capture-pane, and adoption is pure rename-window.
-const { onTurnEnd, openPane, paneSnapshot, adoptWindow } = s;
+// capture-pane, pane input is pure send-keys, and adoption is pure
+// rename-window.
+const { onTurnEnd, openPane, paneSnapshot, paneInput, adoptWindow } = s;
 
 // installHooks is exported beyond the seven port verbs so `bc-axi init` can
 // install the workspace-level Stop hook (session-agnostic; the server dedupes
-// turn-end POSTs by session_id). openPane/paneSnapshot and
+// turn-end POSTs by session_id). openPane/paneSnapshot/paneInput and
 // commands/runCommand/status are OPTIONAL capability verbs (port.js).
 module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks,
-  openPane, paneSnapshot, commands, runCommand, status, adoptWindow };
+  openPane, paneSnapshot, paneInput, commands, runCommand, status, adoptWindow };

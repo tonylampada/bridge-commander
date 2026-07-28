@@ -936,6 +936,10 @@ a.a-uri { color: var(--accent); }
 .pane-live-lbl { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; flex: none; }
 .pane-live.on + .pane-live-lbl { color: var(--ok); }
 .pane-title { flex: 1; min-width: 0; font-family: var(--mono); font-size: 12.5px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* the typing hint: also the FOCUS indicator, and the only place the way out is
+   written down (focused, Escape belongs to the pane, not to the overlay) */
+.pane-hint { flex: none; color: var(--faint); font-size: 10.5px; white-space: nowrap; }
+.pane-hint.on { color: var(--accent); }
 #pane-close { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; }
 #pane-close:hover { color: var(--text); }
 /* the terminal surface: mono, whole-screen frames, no wrapping — the frame IS
@@ -944,7 +948,11 @@ a.a-uri { color: var(--accent); }
   flex: 1; min-height: 0; overflow: auto; margin: 0; padding: 12px 14px;
   font-family: var(--mono); font-size: 11.5px; line-height: 1.4; color: #c9d4e0;
   white-space: pre; overscroll-behavior: contain;
+  outline: none; cursor: text; border-top: 2px solid transparent;
 }
+/* focused == typing: an unmistakable state, because a pane that silently
+   swallows keystrokes is worse than a read-only one */
+#pane-body.typing { border-top-color: var(--accent); background: #0c1016; }
 #pane-msg { flex: 1; display: flex; align-items: center; justify-content: center; color: var(--dim); font-size: 13px; padding: 24px; text-align: center; }
 /* 👁 affordance: hover-revealed on the tile foot */
 .tile .t-peek { color: var(--faint); font-size: 12px; line-height: 1; padding: 0 2px; border-radius: 5px; opacity: 0; flex: none; transition: opacity .12s, color .12s; }
@@ -1199,6 +1207,10 @@ a.a-uri { color: var(--accent); }
   #detail { width: 100vw; border-left: none; }
   /* the peek drawer goes full-screen — a terminal needs every column it can get */
   #pane-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: none; }
+  /* the typing hint would crowd the session name off a phone head, and typing
+     into a pane is a physical-keyboard affordance anyway — the accent border on
+     a focused screen still says everything it needs to */
+  .pane-hint { display: none; }
   .attr .v { max-width: 150px; }
   #notif-panel { top: 48px; }
   #settings-panel { top: 48px; }

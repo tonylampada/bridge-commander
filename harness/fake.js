@@ -267,11 +267,11 @@ async function adoptWindow(ref, window) {
 // the process boundary.
 //   BC_FAKE_PANE_MS   default frame interval (callers' intervalMs still wins)
 //   BC_FAKE_NO_PANE   hides both verbs — the "harness without pane support"
-function logPane(session, event) {
+function logPane(session, event, extra) {
   const dir = fakeStateDir();
   if (!dir) return;
   fs.appendFileSync(path.join(dir, session + '.pane.jsonl'),
-    JSON.stringify({ ts: new Date().toISOString(), session, event }) + '\n');
+    JSON.stringify({ ts: new Date().toISOString(), session, event, ...extra }) + '\n');
 }
 
 function openPane(ref, opts = {}) {
@@ -302,6 +302,22 @@ function openPane(ref, opts = {}) {
 
 async function paneSnapshot(ref) {
   return 'fake pane ' + refKey(ref) + ' — snapshot\n';
+}
+
+// paneInput records the keystroke into the same <key>.pane.jsonl the open/close
+// events land in, so a watching test process can assert what the server
+// forwarded. Validation mirrors the tmux implementation (the port contract is
+// "key OR text", and a bad key must fail here too or route tests would pass
+// against a harness laxer than the real one).
+async function paneInput(ref, input = {}) {
+  const key = input && input.key != null ? String(input.key) : '';
+  const text = input && input.text != null ? String(input.text) : '';
+  if (key && text) throw new Error('paneInput: pass key or text, not both');
+  if (!key && !text) throw new Error('paneInput: nothing to send (pass key or text)');
+  if (key && !/^(C-|M-|S-)*[A-Za-z0-9]+$/.test(key)) {
+    throw new Error(`paneInput: invalid tmux key name "${key}"`);
+  }
+  logPane(refKey(ref), 'input', key ? { key } : { text });
 }
 
 // ---------- slash commands + status (OPTIONAL capability verbs — see port.js) ----------
@@ -356,6 +372,7 @@ const impl = { spawn, send, alive, resumable, resume, onTurnEnd, kill, adoptWind
 if (!process.env.BC_FAKE_NO_PANE) {
   impl.openPane = openPane;
   impl.paneSnapshot = paneSnapshot;
+  impl.paneInput = paneInput;
 }
 // Slash commands + status are OPTIONAL too; BC_FAKE_NO_COMMANDS simulates a
 // harness that never implemented them.

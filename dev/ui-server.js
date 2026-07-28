@@ -320,13 +320,42 @@ function createDevServer(opts) {
       head + g('⏺') + ' ' + g('✔') + ' committed a1b2c3d\n' + d('  waiting for the next instruction ') + c('▋'),
     ];
   }
+  // ⌨️ typing into the pane, faked: the pane keeps one editable prompt line per
+  // label and repaints its watchers the instant a key lands, so the playground
+  // shows the real feel (echo, backspace, Ctrl-C, arrows do nothing here) with
+  // no tmux anywhere. Enough to click through the focus states and the latency.
+  const typed = new Map(); // label -> the line currently "at the prompt"
+  const watching = new Map(); // label -> Set<res>
+  function paneFrame(label, i) {
+    const frames = paneFrames(label);
+    return frames[i % frames.length] + '\n' + ESC + '36m' + '❯ ' + ESC + '0m'
+      + (typed.get(label) || '') + ESC + '7m' + ' ' + ESC + '0m';
+  }
+  function paintPane(label, i) {
+    for (const res of watching.get(label) || []) {
+      res.write('event: frame\ndata: ' + JSON.stringify(paneFrame(label, i)) + '\n\n');
+    }
+  }
+  function paneInput(label, body) {
+    let line = typed.get(label) || '';
+    if (body.text) line += String(body.text);
+    else if (body.key === 'BSpace') line = line.slice(0, -1);
+    else if (body.key === 'Enter' || body.key === 'C-c') line = '';
+    typed.set(label, line);
+    paintPane(label, 3); // repaint NOW — the burst, playground-flavored
+  }
   function streamPane(res, label) {
     sseHead(res);
-    const frames = paneFrames(label);
+    if (!watching.has(label)) watching.set(label, new Set());
+    watching.get(label).add(res);
     let i = 0;
-    const t = every(900, () => res.write('event: frame\ndata: ' + JSON.stringify(frames[i++ % frames.length]) + '\n\n'));
-    res.write('event: frame\ndata: ' + JSON.stringify(frames[frames.length - 1]) + '\n\n');
-    res.on('close', () => { clearInterval(t); timers.delete(t); });
+    const t = every(900, () => paintPane(label, i++));
+    res.write('event: frame\ndata: ' + JSON.stringify(paneFrame(label, 3)) + '\n\n');
+    res.on('close', () => {
+      clearInterval(t); timers.delete(t);
+      const set = watching.get(label);
+      if (set) { set.delete(res); if (!set.size) watching.delete(label); }
+    });
   }
 
   // ----- fake sysload samples -----
@@ -525,6 +554,13 @@ function createDevServer(opts) {
         if (!lt.ref) { sseHead(res); res.write('event: no-pane\ndata: {"reason":"session died"}\n\n'); return res.end(); }
         return streamPane(res, lt.ref.session);
       }
+      m = /^\/api\/lieutenants\/([^/]+)\/pane\/input$/.exec(p);
+      if (m && req.method === 'POST') {
+        const lt = findLt(decodeURIComponent(m[1]));
+        if (!lt || !lt.ref) return sendJson(res, 404, { error: 'no live session' });
+        paneInput(lt.ref.session, JSON.parse(await readBody(req) || '{}'));
+        return sendJson(res, 200, { ok: true });
+      }
 
       // ----- cards -----
       if (route === 'POST /api/cards') {
@@ -652,6 +688,14 @@ function createDevServer(opts) {
           return res.end();
         }
         return streamPane(res, w.ref.session);
+      }
+      m = /^\/api\/cards\/([^/]+)\/pane\/input$/.exec(p);
+      if (m && req.method === 'POST') {
+        const card = findCard(decodeURIComponent(m[1]));
+        const w = card && board.workers.find((x) => x.card === card.id);
+        if (!w) return sendJson(res, 404, { error: 'no live worker' });
+        paneInput(w.ref.session, JSON.parse(await readBody(req) || '{}'));
+        return sendJson(res, 200, { ok: true });
       }
 
       // ----- chat -----

@@ -41,6 +41,17 @@
 //       stops delivery and releases resources. All async-safe.
 //   paneSnapshot(ref, { lines? }) -> Promise<string>
 //       one-shot capture — the initial paint / non-streaming fallback.
+//   paneInput(ref, { text? | key? }) -> Promise<void>
+//       forward RAW input to the pane: `text` typed literally (multi-line
+//       rides a bracketed paste), `key` ONE tmux key name ('Enter', 'BSpace',
+//       'Up', 'BTab', 'C-c', …). Exactly one of the two; anything else throws,
+//       as does an unusable key name or a pane that is gone. Deliberately NOT
+//       send(): that one types, settles, Enters and retries until the composer
+//       verifies empty — right for delivering a brief, wrong for a keystroke.
+//       A harness MAY offer paneInput while send() throws (`command` does):
+//       "no composer for a brief" and "no way to press a key" are different
+//       claims. Implementations that also stream SHOULD speed their feed up
+//       briefly after input, so the echo is not stuck behind the poll.
 // — migration of a session-granular ref to window granularity (the lieutenant
 // whose session it turned out to cohabit with its worker windows):
 //   adoptWindow(ref, window, taken?) -> Promise<HarnessRef|null>

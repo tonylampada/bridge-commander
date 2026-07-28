@@ -27,12 +27,24 @@ and degrades gracefully when the verb is absent (the pane endpoints answer
 
 | Verb | Signature | Purpose |
 |---|---|---|
-| `openPane` | `(ref, {onFrame, intervalMs?, lines?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
+| `openPane` | `(ref, {onFrame, intervalMs?, lines?, burstMs?, burstWindowMs?}) → {close()}` | deliver the pane's CURRENT RENDERED SCREEN as successive frames: `onFrame(frameString)` fires whenever the content changes (identical frames are skipped); `close()` stops delivery and releases resources |
 | `paneSnapshot` | `(ref, {lines?}) → Promise<string>` | one-shot capture — the initial paint / non-streaming fallback |
+| `paneInput` | `(ref, {text?\|key?}) → Promise<void>` | forward RAW input to the pane — `text` typed literally (multi-line becomes a bracketed paste), `key` one tmux key name (`Enter`, `BSpace`, `Up`, `BTab`, `C-c`, …). Pass one, not both. **Not `send`**: no type→settle→Enter, no composer verification — one keystroke in, one keystroke out |
 | `adoptWindow` | `(ref, window, taken?) → Promise<HarnessRef\|null>` | migrate a SESSION-granular ref to window granularity **without restarting the agent** — the tmux adapters rename the session's first window; `taken` names windows that belong to someone else and must never be adopted; `null` = the agent's window cannot be identified, keep the old ref |
 
 `intervalMs` defaults to ~1000, `lines` (scrollback depth) to ~200. A frame is
 a string that MAY carry ANSI SGR escapes (colors/bold).
+
+`paneInput` also **bursts** the open feed for that pane: a 1s poll makes typing
+feel dead, so a keystroke drops the interval to `burstMs` (~120) for
+`burstWindowMs` (~1500) and it falls back on its own. The burst is registered on
+the feed object itself, so it cannot outlive the feed — closing the pane, or
+typing into one nobody is watching, leaves nothing behind.
+
+`command` panes accept `paneInput` even though their `send` always throws: those
+are different capabilities. `send` refuses because a program has no COMPOSER for
+a brief to land in; `paneInput` assumes nothing about what the pane runs, which
+is exactly how you answer a prompt, quit a pager, or Ctrl-C a stuck script.
 
 The claude implementation polls `capture-pane -e` — deliberately **rendered
 frames, not a `pipe-pane` byte stream**: the target is a full-screen TUI that

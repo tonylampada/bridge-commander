@@ -223,6 +223,96 @@ test('no live worker / card not Working / unknown targets → no-pane', async ()
   } finally { await teardown(); }
 });
 
+// ---------- ⌨️ pane input: the write half, same ref resolution ----------
+
+test('card pane input: keys and text reach the ref the stream would have watched', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    const key = await startWorker(s, s.dir, 'type-me');
+    const url = '/api/cards/type-me/pane/input';
+
+    assert.strictEqual((await s.api('POST', url, { key: 'C-c' })).status, 200);
+    assert.strictEqual((await s.api('POST', url, { text: 'ls -la' })).status, 200);
+    assert.strictEqual((await s.api('POST', url, { key: 'Enter' })).status, 200);
+
+    const log = await waitLog(fdir, key, (l) => l.filter((e) => e.event === 'input').length === 3);
+    assert.deepStrictEqual(log.filter((e) => e.event === 'input').map((e) => e.key || e.text),
+      ['C-c', 'ls -la', 'Enter'], 'forwarded verbatim, in order, to this worker\'s pane');
+    // input is not a board event: nothing to save, nothing to broadcast
+    assert.ok(!log.some((e) => e.event === 'open'), 'typing does not open a feed of its own');
+  } finally { await teardown(); }
+});
+
+test('lieutenant pane input: resolves the lieutenant ref, like its stream', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    let r = await s.api('PATCH', '/api/lieutenants/' + LT,
+      { ref: { harness: 'fake', session: 'bc-lt-type', cwd: '/tmp' } });
+    assert.strictEqual(r.status, 200);
+    r = await s.api('POST', '/api/lieutenants/' + LT + '/pane/input', { key: 'Escape' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const log = await waitLog(fdir, 'bc-lt-type', (l) => l.some((e) => e.event === 'input'));
+    assert.deepStrictEqual(log.filter((e) => e.event === 'input').map((e) => e.key), ['Escape']);
+  } finally { await teardown(); }
+});
+
+test('pane input refuses what the stream refuses: unknown / not Working / no session', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Parked idea', id: 'parked-idea' }));
+
+    let r = await s.api('POST', '/api/cards/parked-idea/pane/input', { key: 'Enter' });
+    assert.strictEqual(r.status, 404);
+    assert.match(r.body.error, /not Working/);
+
+    r = await s.api('POST', '/api/cards/never-was/pane/input', { key: 'Enter' });
+    assert.strictEqual(r.status, 404);
+    assert.match(r.body.error, /unknown card/);
+
+    r = await s.api('POST', '/api/lieutenants/nobody/pane/input', { key: 'Enter' });
+    assert.strictEqual(r.status, 404);
+    assert.match(r.body.error, /unknown lieutenant/);
+
+    r = await s.api('POST', '/api/lieutenants/' + LT + '/pane/input', { key: 'Enter' });
+    assert.strictEqual(r.status, 404);
+    assert.match(r.body.error, /no live session/);
+  } finally { await teardown(); }
+});
+
+test('harness without pane input → 501, not a pretend success', async () => {
+  const { s, teardown } = await boot({ BC_FAKE_NO_PANE: '1' });
+  try {
+    await startWorker(s, s.dir, 'no-input');
+    const r = await s.api('POST', '/api/cards/no-input/pane/input', { key: 'Enter' });
+    assert.strictEqual(r.status, 501, JSON.stringify(r.body));
+    assert.match(r.body.error, /cannot take pane input/);
+  } finally { await teardown(); }
+});
+
+test('a payload the harness refuses comes back as a harness failure, with the reason', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    const key = await startWorker(s, s.dir, 'bad-input');
+    const url = '/api/cards/bad-input/pane/input';
+
+    let r = await s.api('POST', url, { key: '-X' }); // would be a tmux FLAG, not a key
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.error, /invalid tmux key name/);
+
+    r = await s.api('POST', url, {});
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.error, /nothing to send/);
+
+    r = await s.api('POST', url, { key: 'Enter', text: 'x' });
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.error, /not both/);
+
+    await sleep(100);
+    assert.deepStrictEqual(paneLog(fdir, key).filter((e) => e.event === 'input'), [],
+      'nothing was forwarded');
+  } finally { await teardown(); }
+});
+
 test('concurrent-pane cap → busy (existing streams unaffected)', async () => {
   const { s, teardown } = await boot({ BC_PANE_MAX: '1' });
   try {

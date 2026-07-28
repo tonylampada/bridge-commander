@@ -270,9 +270,12 @@
       <span class="pane-live" id="pane-live" title="not streaming"></span>
       <span class="pane-live-lbl">live</span>
       <span class="pane-title" id="pane-title"></span>
+      <span class="pane-hint" id="pane-hint">click the screen to type</span>
       <button id="pane-close" title="close">✕</button>
     </div>
-    <pre id="pane-body"></pre>
+    <!-- tabindex makes the screen focusable: focused, it forwards keystrokes to
+         the pane (including Escape, which is why the head carries the way out) -->
+    <pre id="pane-body" tabindex="0"></pre>
     <div id="pane-msg" hidden></div>
   </div>
 </div>
