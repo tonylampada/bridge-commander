@@ -194,12 +194,14 @@ async function escalate(ctx, text) {
   log('ESCALATING: ' + firstLine(text));
   ctx.board.event(ctx.card.id, { level: 1, text: `🔔 pipeline ${ctx.pipelineName} needs you\n\n${text}` });
   await killAgents(ctx);
+  ctx.state.set({ finished: new Date().toISOString() });
   ctx.board.done(ctx.card.id, `pipeline ${ctx.pipelineName} STOPPED without a PR — ${firstLine(text)}`);
 }
 
 async function finish(ctx, outcome) {
   await killAgents(ctx);
   const rounds = ctx.state.round;
+  ctx.state.set({ finished: new Date().toISOString() });
   ctx.board.done(ctx.card.id,
     `pipeline ${ctx.pipelineName} finished in ${rounds} round${rounds === 1 ? '' : 's'}: ${outcome}`);
   log('done: ' + firstLine(outcome));
@@ -289,6 +291,14 @@ async function main(argv) {
   }
 
   log(`card ${card.id} · pipeline ${pipelineName} · cwd ${ctx.cwd}`);
+  if (state.data.finished) {
+    // A resume re-runs the command, and this run already ended. Reporting done
+    // a second time would put a second item in the lieutenant's queue for work
+    // that landed once. Say so on the pane and stop.
+    log(`this pipeline already finished at ${state.data.finished} — nothing to do.`);
+    log(`to run it again, remove ${state.file}`);
+    return 0;
+  }
   if (state.resumed) {
     log(`resuming at stage ${state.stage}, round ${state.round} (state: ${state.file})`);
     board.signal(card.id, `pipeline ${pipelineName}: executor restarted — resuming at ${state.stage} round ${state.round}`);

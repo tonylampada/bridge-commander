@@ -167,6 +167,12 @@ test('two stages, one rejection, and the findings reach the implementer\'s secon
     assert.strictEqual(await exited, 0, out.text);
 
     // What the board learned: the PR, and nothing it was not supposed to.
+    // Re-running a finished pipeline (a resume after it ended) must not report
+    // a second time — one landing, one item in the lieutenant's queue.
+    const again = startExecutor(s, fdir);
+    assert.strictEqual(await again.exited, 0, again.out.text);
+    assert.match(again.out.text, /already finished/);
+
     const card = (await s.api('GET', '/api/cards/demo')).body;
     assert.deepStrictEqual(card.attributes.prs, [{ url: 'https://github.com/o/r/pull/42', state: 'open' }]);
     const done = card.events.filter((e) => e.kind === 'worker-done');
