@@ -1658,6 +1658,10 @@ async function doStartCard(card, body) {
         + 'and the brief would be silently dropped. To hand a live worker new instructions: '
         + 'bc-axi worker send ' + card.id + ' --text-file <f|->' };
     }
+    if (body.command) {
+      return { error: 'resume does not take a command — it re-runs the one the recorded worker was '
+        + 'started with. To run a different one: archive the worker and start again with --command' };
+    }
     if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
     let ref;
     try {
@@ -1690,9 +1694,20 @@ async function doStartCard(card, body) {
   const project = findProject(String(repoAttr));
   if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path> --mode <mode>)' };
 
-  // Harness precedence: explicit CLI --harness wins, then the card's stored
-  // hint (attributes.harness, set from the new-card modal), then config/default.
-  const harnessName = String((body && body.harness) || (card.attributes && card.attributes.harness) || readConfig().harness || 'claude');
+  // body.command starts a session that RUNS THAT LINE instead of an agent with
+  // a brief (the `command` harness — harness/command-tmux.js). Everything else
+  // about the start is identical: same worktree, same branch, same registry
+  // entry, same supervision. What the line does is not the board's business.
+  const command = String((body && body.command) || '').trim();
+  if (command && body && body.brief) {
+    return { error: 'a --command start has no brief to deliver: the session runs the command line, '
+      + 'nothing reads a brief. Drop one of the two.' };
+  }
+  // Harness precedence: explicit CLI --harness wins, then --command (which
+  // names the harness by implication), then the card's stored hint
+  // (attributes.harness, set from the new-card modal), then config/default.
+  const harnessName = String((body && body.harness) || (command ? 'command' : '')
+    || (card.attributes && card.attributes.harness) || readConfig().harness || 'claude');
   let impl;
   try { impl = getHarness(harnessName); } catch (e) { return { error: String((e && e.message) || e) }; }
 
@@ -1723,7 +1738,9 @@ async function doStartCard(card, body) {
   const session = ownerSession(card);
   const window = names.workerWindow(card.id);
   const branch = card.type === 'investigation' ? null : 'bc/' + card.id;
-  const prompt = workerBrief({
+  // What spawn's second argument means is the harness's business: a brief for
+  // an agent, the line to run for `command`.
+  const prompt = command || workerBrief({
     card, task: body && body.brief, thread: card.thread || [],
     project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
     cli: path.join(__dirname, '..', 'cli', 'bc-axi'),

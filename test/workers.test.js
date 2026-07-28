@@ -586,3 +586,61 @@ test('card start honors card.attributes.harness/.model as a fallback; explicit b
     fs.rmSync(path.dirname(recFile), { recursive: true, force: true });
   }
 });
+
+// card.start --command: the SAME atomic op, except the session runs a command
+// line instead of an agent with a brief. The board stays generic — what the
+// command does is none of its business — so what is pinned here is only that
+// the line reaches spawn untouched and that the two inputs never mix.
+test('card.start --command starts the session on the command line, not on a brief', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Run a thing', id: 'runner', attributes: { repo: 'proj' },
+      body: 'this body is NOT a brief for a command worker',
+    }));
+    // harness: 'fake' keeps the test tmux-free; the point under test is what
+    // the server hands to spawn, which the fake records verbatim.
+    const r = await s.api('POST', '/api/cards/runner/start',
+      { harness: 'fake', command: '  node bin/thing.js runner  ' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+
+    // same binding as any other start: worktree, branch, Working
+    const w = r.body.worker;
+    assert.strictEqual(w.branch, 'bc/runner');
+    assert.strictEqual(r.body.card.column, 'working');
+    assert.strictEqual(r.body.card.attributes.worktree, w.worktree.path);
+
+    // and the launch payload is the command line — trimmed, and nothing else
+    const rec = JSON.parse(fs.readFileSync(path.join(fdir, workerKey(s.dir, 'runner') + '.json'), 'utf8'));
+    assert.strictEqual(rec.prompt, 'node bin/thing.js runner');
+    assert.ok(!/Worker brief|Ground rules/.test(rec.prompt), 'no brief was composed');
+  } finally {
+    await teardown();
+  }
+});
+
+test('--command refuses to mix with a brief, and --resume re-runs the recorded line', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Mix', id: 'mix', attributes: { repo: 'proj' } }));
+    let r = await s.api('POST', '/api/cards/mix/start',
+      { harness: 'fake', command: 'node x.js', brief: 'and also read this' });
+    assert.strictEqual(r.status, 400);
+    assert.match(r.body.error, /no brief to deliver/);
+
+    r = await s.api('POST', '/api/cards/mix/start', { harness: 'fake', command: 'node x.js' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    // resume takes no command: it re-runs the one the recorded worker carries
+    r = await s.api('POST', '/api/cards/mix/start', { resume: true, command: 'node other.js' });
+    assert.strictEqual(r.status, 400);
+    assert.match(r.body.error, /re-runs the one the recorded worker was started with/);
+
+    // the CLI refuses the mix before it ever reaches the server
+    const cli = await runCli(['card', 'start', 'mix', '--command', 'node x.js',
+      '--brief-file', '/nope/brief.md', '--workspace', s.dir, '--port', String(s.port)]);
+    assert.notStrictEqual(cli.code, 0);
+    assert.match(cli.stderr, /mutually exclusive/);
+  } finally {
+    await teardown();
+  }
+});

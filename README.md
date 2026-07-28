@@ -79,7 +79,7 @@ Per-workspace config lives in `.bridge-commander/config.json`:
 |---|---|---|
 | `port` | `4780` | server port (also `--port N` on `init`/`open`) |
 | `host` | `127.0.0.1` | bind address — see network exposure below |
-| `harness` | `claude` | default agent harness (`claude` \| `codex`) |
+| `harness` | `claude` | default agent harness (`claude` \| `codex`; `command` is selected per start by `card start --command`) |
 | `voices` | — | UI text-to-speech voice filter |
 | `tts` | — | speak through an external TTS engine instead of the browser: `{"url": "http://127.0.0.1:8883", "lang": "pt", "voice": null, "params": {}}` (voxbench API). Absent = the browser's own voice; any engine failure falls back to it. The **browser** calls the engine, so the url must be reachable from wherever the board is open and the engine must allow that origin (CORS) |
 

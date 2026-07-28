@@ -85,7 +85,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `card.create` | `lieutenant, title, type, attrs → card` | 🤠 · ⚓ (proactive) | an idea/task is worth tracking; born in Backlog, nowhere else |
-| `card.start` | `card, {brief?, resume?, harness?, model?, effort?} → worker` | ⚓ (own judgment, or executing a captain drag-order) | ready to work: ONE atomic op — spawn worker window + worktree, bind to card, card → Working. Harness/model resolve: explicit arg → card attribute hint → config default. The brief is auto-attached as a card artifact (label `brief`, idempotent across resumes); `--resume` reincarnates the recorded worker instead (refuses a brief — steer with `worker.send`). Implementation cards get branch `bc/<card-id>`; investigations get NO branch — their deliverable is the report. `plan` cards never start |
+| `card.start` | `card, {brief?, command?, resume?, harness?, model?, effort?} → worker` | ⚓ (own judgment, or executing a captain drag-order) | ready to work: ONE atomic op — spawn worker window + worktree, bind to card, card → Working. Harness/model resolve: explicit arg → card attribute hint → config default. The brief is auto-attached as a card artifact (label `brief`, idempotent across resumes); `--resume` reincarnates the recorded worker instead (refuses a brief — steer with `worker.send`). `--command` starts the session on that command line instead of an agent with a brief (the `command` harness) — same worktree, branch, registry entry and supervision; the two are mutually exclusive and `worker.send` on such a worker fails loudly. Implementation cards get branch `bc/<card-id>`; investigations get NO branch — their deliverable is the report. `plan` cards never start |
 | `card.move` | `card, column` | 🤠 drag = **order** · ⚓ only → Your review (the handoff) · ⚙️ only on objective facts (start, merge) | see side effects for drag semantics |
 | `card.patch` | `card, {title?, body?, type?, attrs?, labels?, owner?}` | ⚓ · ⚙️ (mechanical attrs: prs, session) | body rewritten to current state before every handoff. `owner` is patchable ONLY while no worker record is bound (see invariant 4) |
 | `card.park` | `card → ()` | ⚓ | the narrow lieutenant door out of Working back to Backlog — legal only when the card's worker is absent or dead (liveness re-checked server-side) |
@@ -132,8 +132,11 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `harness.kill` | `ref` | ⚙️ | end a session for good (idempotent): merged-PR cleanup, card archive, lieutenant.retire |
 | `harness.onTurnEnd` | `ref, hook` | embedders | turn-boundary detection for port consumers; the SERVER's channel is the spawn-time callback URL — a Stop hook in the session POSTs each turn end (with its tmux session for exact attribution) |
 
-The server speaks ONLY this port. Builtins: `claude`, `codex` (OpenAI Codex CLI), and a
-file-backed `fake` for tests; adding a harness is implementing these seven verbs, nothing else.
+The server speaks ONLY this port. Builtins: `claude`, `codex` (OpenAI Codex CLI), `command`
+(runs a command line instead of an agent — see `card.start --command`), and a file-backed
+`fake` for tests; adding a harness is implementing these seven verbs, nothing else. A verb a
+harness cannot honor THROWS with the reason (`command.send`: there is no composer) — never
+silently succeeds.
 Harness working state (session ids, prompts, turn-end logs) lives in the workspace's
 `.bridge-commander/harness/` — never global; spawned session names are unique per workspace.
 

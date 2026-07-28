@@ -22,6 +22,11 @@
 // Adding a harness = implementing the seven verbs and registering it here
 // (or shipping it as a builtin module). Nothing else.
 //
+// All seven must EXIST; one that cannot be honored must THROW with the reason
+// rather than pretend. `command` (a session that runs a program instead of an
+// agent) is the case in point: it has no composer, so its send() always throws
+// and the caller learns why instead of watching text vanish.
+//
 // OPTIONAL capability verbs: beyond the seven REQUIRED verbs a harness MAY
 // expose extra verbs for features not every harness can honor. They are
 // deliberately NOT validated here — adding one to VERBS would force every
@@ -70,6 +75,7 @@ const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnE
 const BUILTINS = {
   claude: './claude-tmux.js',
   codex: './codex-tmux.js',
+  command: './command-tmux.js',
   fake: './fake.js',
 };
 

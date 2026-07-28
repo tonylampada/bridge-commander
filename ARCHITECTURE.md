@@ -31,7 +31,8 @@ them drift.
   non-event.
 - **The harness port** is the only seam to agent sessions — seven verbs (`spawn`, `send`,
   `alive`, `resumable`, `resume`, `kill`, `onTurnEnd`); see [harness/README.md](harness/README.md).
-  Builtins: `claude` and `codex` over tmux, plus an in-memory `fake` for tests.
+  Builtins: `claude` and `codex` over tmux, `command` (a session that runs a command line
+  instead of an agent), plus an in-memory `fake` for tests.
 - **Workers**: `bc-axi card start <id>` is ONE atomic op — isolated worktree
   (`treehouse get --lease` when available, else `git worktree add`), a real worker session
   launched with the generated brief (task + card thread + the project's delivery-mode

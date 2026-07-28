@@ -50,6 +50,7 @@ const opts = {
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   worker: null, ttl: null, spawn: false, harness: null,
   mode: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
+  command: null,
   uri: null, file: null, version: null,
 };
 const positional = [];
@@ -86,6 +87,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--effort') opts.effort = argv[++i];
   else if (a === '--mode') opts.mode = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
+  else if (a === '--command') opts.command = argv[++i];
   else if (a === '--resume') opts.resume = true;
   else if (a === '--park') opts.park = true;
   else if (a === '--outcome') opts.outcome = argv[++i];
@@ -709,11 +711,16 @@ async function cmdArtifactWrite() {
 async function cmdStart() {
   const id = positional[0];
   if (!id) {
-    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume] [--harness h] [--model m] [--effort l]\n' +
+    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--command "<cmd>"] [--resume]\n' +
+      '                             [--harness h] [--model m] [--effort l]\n' +
       '  ONE atomic op: provision an isolated worktree, spawn the worker session with the brief\n' +
       '  as launch prompt, bind session/worktree/branch to the card, move it to Working.\n' +
       '  --brief-file adds/overrides the task text (default: the card body).\n' +
-      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.\n' +
+      '  --command runs that command line in the worker session instead of launching an agent\n' +
+      '    with a brief. Same worktree, branch, registry entry and supervision; no composer,\n' +
+      '    so `worker send` on it fails. Mutually exclusive with --brief-file.\n' +
+      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree\n' +
+      '    (a --command worker: it runs its recorded command line again, from the top).\n' +
       '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.\n' +
       '  --effort sets reasoning effort (low|medium|high|xhigh|max) for a claude worker; ignored with --resume.');
   }
@@ -722,8 +729,13 @@ async function cmdStart() {
       'brief would be silently dropped. To hand a live worker new instructions:\n' +
       '  bc-axi worker send ' + id + ' --text-file <f|->');
   }
+  if (opts.command && opts.briefFile) {
+    die('--command and --brief-file are mutually exclusive: a command session runs the line,\n' +
+      'nothing in it reads a brief.');
+  }
   const body = { actor: opts.actor || 'agent' };
   if (opts.briefFile) body.brief = readInput(opts.briefFile);
+  if (opts.command) body.command = opts.command;
   if (opts.resume) body.resume = true;
   if (opts.harness) body.harness = opts.harness;
   if (opts.model) body.model = opts.model;
@@ -1074,13 +1086,16 @@ if (!commands[cmd]) {
     '                                         kill = archive (append-only file, off the board)\n' +
     '  card restore <card-id> [--note "..."]  resurrect the most recent archived snapshot in full;\n' +
     '                                         appends a loud level-1 event\n' +
-    '  card start <card-id> [--brief-file f|-] [--resume] [--harness h]\n' +
+    '  card start <card-id> [--brief-file f|-] [--command "<cmd>"] [--resume] [--harness h]\n' +
     '                                         card.start: ONE atomic op — isolated worktree + real\n' +
     '                                         worker session (brief as launch prompt), session/worktree/\n' +
     '                                         branch bound to the card, card -> Working. Refuses plan\n' +
     '                                         cards, Working cards, and unregistered repos. --resume\n' +
     '                                         reincarnates the recorded worker (after worker-died);\n' +
-    '                                         it never takes --brief-file (use worker send instead)\n' +
+    '                                         it never takes --brief-file (use worker send instead).\n' +
+    '                                         --command runs a command line in the session instead of\n' +
+    '                                         an agent: same worktree/branch/supervision, no composer\n' +
+    '                                         (worker send fails), --resume re-runs the line\n' +
     '  card park <card-id>                    move a Working card whose worker is absent or DEAD back\n' +
     '                                         to Backlog (liveness re-checked server-side; a live\n' +
     '                                         worker refuses — pause it instead). Timeline event\n' +

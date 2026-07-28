@@ -68,6 +68,9 @@ focus, so an agent with siblings must always carry its window.
 - `port.js` — the contract: `getHarness(name)`, `registerHarness(name, impl)`, `harnessFor(ref)`, `isHarnessRef(ref)`
 - `claude-tmux.js` — the claude implementation over tmux (v0's real harness)
 - `codex-tmux.js` — the OpenAI Codex CLI implementation over tmux
+- `command-tmux.js` — runs a command line in a tmux pane instead of an agent
+  (`card start --command`): the process IS the session, its exit is the only
+  turn boundary, and `send` throws (a program has no composer)
 - `tmux-session.js` — session/window/pane plumbing shared by the tmux adapters
   (pane lifecycle, naming, launch-and-settle skeleton, turn-end tail, pane viewing)
 - `tmux.js` — shared tmux primitives (composer state, ghost-text stripping, verified submit)
