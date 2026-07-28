@@ -314,6 +314,14 @@ test('the route accepts every key the shared port grammar allows, and caps text'
     r = await s.api('POST', url, { text: 'x'.repeat(PANE_INPUT_MAX + 1) });
     assert.strictEqual(r.status, 502);
     assert.match(r.body.error, /text too long/);
+
+    // The refusal names the limit and does NOT hand the payload back: an
+    // over-size paste used to return a 502 whose body WAS the paste.
+    const huge = 'q'.repeat(20 * 1024);
+    r = await s.api('POST', url, { text: huge });
+    assert.strictEqual(r.status, 502);
+    assert.match(r.body.error, new RegExp(`text too long \\(${huge.length} > ${PANE_INPUT_MAX} bytes\\)`));
+    assert.ok(!r.body.error.includes('qqqq'), 'the payload must not ride the error body out');
   } finally { await teardown(); }
 });
 

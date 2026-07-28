@@ -117,3 +117,36 @@ test('multi-line text still rides the buffer path and lands intact', { skip }, a
     assert.match(out, /-R second/);
   } finally { await t.tryTmux('kill-session', '-t', `=${PANE}:`); }
 });
+
+// The cap in port.js is a claim about tmux, and only tmux can confirm it: a
+// full-size payload must actually LAND, not 502. tmux packs one command into a
+// single imsg, so the ceiling is on the whole argv — target included.
+test('a payload at PANE_INPUT_MAX actually gets through send-keys', { skip }, async () => {
+  await makeSession(PANE);
+  try {
+    await t.sleep(250);
+    await clearLine(PANE);
+    const { PANE_INPUT_MAX } = require('../port.js');
+    await t.sendLiteral(tgt(PANE), 'x'.repeat(PANE_INPUT_MAX)); // rejects → test fails
+  } finally { await t.tryTmux('kill-session', '-t', `=${PANE}:`); }
+});
+
+// Past the ceiling tmux fails, and execFile builds its message out of the FULL
+// argv — so the error used to carry the entire payload out as an HTTP body.
+// A 20 KB paste produced a 20 KB error.
+test('a payload tmux refuses does not come back inside the error', { skip }, async () => {
+  await makeSession(PANE);
+  try {
+    await t.sleep(250);
+    const payload = 'z'.repeat(64 * 1024); // past any imsg budget, whatever the target
+    const err = await t.sendLiteral(tgt(PANE), payload).then(() => null, (e) => e);
+    assert.ok(err, 'tmux must reject a payload this size');
+    assert.ok(err.message.length < 600, `error was ${err.message.length} chars: not truncated`);
+    assert.ok(!err.message.includes(payload), 'the payload must not ride the error out');
+    assert.match(err.message, /tmux send-keys/, 'the command is still named');
+    // tmux 3.4 says "command too long" here and "failed to send command" just
+    // past the imsg budget; either way its reason must outlive the truncation.
+    assert.match(err.message, /command too long|failed to send command/,
+      "tmux's own reason survives truncation");
+  } finally { await t.tryTmux('kill-session', '-t', `=${PANE}:`); }
+});

@@ -55,3 +55,35 @@ test('harnessFor dispatches by ref.harness', () => {
   assert.strictEqual(harnessFor(ref), getHarness('fake'));
   assert.throws(() => harnessFor({ harness: 'fake' }), /not a HarnessRef/);
 });
+
+// The cap used to be 64 KB — four times what tmux can swallow — so a big
+// SINGLE-LINE paste passed validation, reached `send-keys -l -- <text>` and
+// came back as a 502 whose body was the failed command, payload and all.
+test('the text cap fits inside tmux\'s single-command budget', () => {
+  const { PANE_INPUT_MAX } = require('../port.js');
+  // Measured on tmux 3.4: `send-keys -t <target> -l -- <text>` fails once
+  // target.length + text.length exceeds 16343 (one imsg, MAX_IMSGSIZE 16384
+  // less its header and the fixed argv words). Room must be left for the
+  // longest pane target we can build: `=bc-<6 hex>:=<window>`.
+  assert.ok(PANE_INPUT_MAX + 256 < 16343,
+    `cap ${PANE_INPUT_MAX} must sit below tmux's budget with room for the target`);
+});
+
+// String.length counts UTF-16 units; argv is UTF-8. A payload of emoji is four
+// bytes each, so a length-based cap let ~4x the byte budget through, and the
+// refusal came back as `spawn E2BIG` instead of a clean "too long".
+test('the cap counts BYTES, not UTF-16 units', () => {
+  const { validatePaneInput, PANE_INPUT_MAX } = require('../port.js');
+  const emoji = '😀'; // 2 UTF-16 units, 4 UTF-8 bytes
+  const under = emoji.repeat(Math.floor(PANE_INPUT_MAX / 4));
+  assert.ok(under.length < PANE_INPUT_MAX, 'shorter than the cap by String.length');
+  assert.strictEqual(validatePaneInput({ text: under }).text, under);
+
+  const over = under + emoji; // still short by String.length, 4 bytes past by weight
+  assert.ok(over.length < PANE_INPUT_MAX, 'a length check would wave this through');
+  assert.throws(() => validatePaneInput({ text: over }), /text too long .*bytes/);
+
+  // and the boundary in plain ASCII, where one char is one byte
+  assert.doesNotThrow(() => validatePaneInput({ text: 'x'.repeat(PANE_INPUT_MAX) }));
+  assert.throws(() => validatePaneInput({ text: 'x'.repeat(PANE_INPUT_MAX + 1) }), /text too long/);
+});

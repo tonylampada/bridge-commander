@@ -52,8 +52,10 @@ passes `--` before every operand, so a payload beginning with `-` is typed
 rather than parsed as flags. That guard is not cosmetic — without it
 `{text:'-t=<other-session>:'}` retargets `send-keys` at a pane the caller was
 never authorised to touch (`harness/test/tmux-literal.test.js` pins it against
-real tmux). `text` is capped at `PANE_INPUT_MAX` (64 KB) so one call cannot
-paste a whole file into a live agent's pane.
+real tmux). `text` is capped at `PANE_INPUT_MAX` (16 KB less 512 bytes, counted
+in UTF-8 BYTES) so one call cannot paste a whole file into a live agent's pane —
+and, more sharply, cannot hand tmux more than tmux takes: a single-line
+`send-keys` is one imsg, so target + text must stay under ~16343 bytes.
 
 `command` panes accept `paneInput` even though their `send` always throws: those
 are different capabilities. `send` refuses because a program has no COMPOSER for

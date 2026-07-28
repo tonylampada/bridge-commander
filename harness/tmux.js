@@ -30,6 +30,15 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// execFile builds its "Command failed: ..." message out of the FULL argv, so a
+// failed send-keys carries the entire payload — and that message travels all
+// the way out as an HTTP 502 body. A 20 KB paste produced a 20 KB error. The
+// command name and tmux's own stderr are the diagnostic; the payload never was,
+// so the head is kept and the tail is dropped — with stderr re-appended, since
+// execFile puts it AFTER the argv and truncation would otherwise eat the one
+// line that says why ("failed to send command").
+const ERR_MAX = 200;
+
 // tmuxRun(args, input?) -> Promise<stdout>; rejects on tmux error. input, when
 // given, is piped to stdin (load-buffer); otherwise stdin is closed immediately.
 function tmuxRun(args, input) {
@@ -37,6 +46,9 @@ function tmuxRun(args, input) {
     const child = execFile('tmux', args, { encoding: 'utf8' }, (err, stdout, stderr) => {
       if (err) {
         err.stderr = stderr;
+        if (err.message.length > ERR_MAX) {
+          err.message = err.message.slice(0, ERR_MAX) + '… ' + String(stderr || '').trim().slice(0, ERR_MAX);
+        }
         reject(err);
       } else {
         resolve(stdout);

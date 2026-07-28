@@ -97,10 +97,19 @@ const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnE
 // (Escape on a lot of muscle memory), C-\, C-], C-^, C-_ — every one verified
 // accepted by tmux 3.4. The client emits them, so the grammar must too.
 const KEY_RE = /^(C-|M-|S-)*([A-Za-z0-9]+|[[\\\]^_])$/;
-// One POST must not be able to shove a whole file into a live agent's pane.
-// Generous enough for a real paste (a stack trace, a config block), far below
-// the 8 MB a request body may otherwise carry.
-const PANE_INPUT_MAX = 64 * 1024;
+// One POST must not be able to shove a whole file into a live agent's pane —
+// and, more sharply, must not hand tmux more than tmux can take. Single-line
+// text rides `send-keys -l -- <text>` in ARGV, and a tmux client packs one
+// command into a single imsg: MAX_IMSGSIZE 16384 minus the 16-byte header, so
+// the whole NUL-packed argv must fit in 16368 bytes. Measured against tmux 3.4:
+// `send-keys -t <target> -l -- <text>` succeeds while
+// target.length + text.length <= 16343 and fails at 16344 with "failed to send
+// command" — the same total for an 8-char target and a 49-char one, which is
+// how we know the budget is the command, not the payload. Multi-line text is
+// unconstrained (it rides load-buffer's STDIN), but one cap is honest and does
+// not drift; 16 KB less 512 bytes leaves room for the longest pane target plus
+// the fixed argv words.
+const PANE_INPUT_MAX = 16 * 1024 - 512;
 
 // validatePaneInput(input) -> { key, text } — exactly one of the two is
 // non-empty. Throws with the reason otherwise; callers let it propagate.
@@ -110,8 +119,11 @@ function validatePaneInput(input) {
   if (key && text) throw new Error('paneInput: pass key or text, not both');
   if (!key && !text) throw new Error('paneInput: nothing to send (pass key or text)');
   if (key && !KEY_RE.test(key)) throw new Error(`paneInput: invalid tmux key name "${key}"`);
-  if (text.length > PANE_INPUT_MAX) {
-    throw new Error(`paneInput: text too long (${text.length} > ${PANE_INPUT_MAX} chars)`);
+  // BYTES, not String.length: argv is UTF-8, so 16384 emoji is 65536 bytes and
+  // would sail past a UTF-16-unit check to die as `spawn E2BIG`.
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes > PANE_INPUT_MAX) {
+    throw new Error(`paneInput: text too long (${bytes} > ${PANE_INPUT_MAX} bytes)`);
   }
   return { key, text };
 }
