@@ -36,7 +36,10 @@
 //
 // The pane is deliberately left sitting at its shell after the command exits,
 // so the last screen (the error, the summary) is still there to read through
-// the 👁 peek. That is also how alive() tells "finished" from "running".
+// the 👁 peek. That is also how alive() tells "finished" from "running" — with
+// the one consequence worth knowing: a command whose own process IS a shell
+// (`bash deploy.sh`) reads as finished the whole time it runs. Give the pane
+// something that is not a shell (`node x.js`, `python x.py`, a compiled tool).
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -47,6 +50,12 @@ const s = require('./tmux-session.js');
 // the agent adapters use before their first Enter) — a fresh pane still
 // running its rc files swallows keys sent back-to-back.
 const ENTER_DELAY_MS = 300;
+// After Enter the pane is still the shell for a moment while it starts the
+// command. Without waiting for the handover, an alive() right after spawn
+// reads that shell and the board declares the worker dead on its first
+// supervision tick. Bounded: a command that finishes faster than this simply
+// comes back already-finished, which is the truth.
+const SETTLE_MS = 3000;
 
 function commandOf(ref) {
   const line = String((ref && ref.command) || '').trim();
@@ -64,6 +73,12 @@ async function runLine(session, window, cwd, line) {
   } catch (err) {
     await s.killPane(session, window);
     throw err;
+  }
+  const deadline = Date.now() + SETTLE_MS;
+  while (Date.now() < deadline) {
+    const cmd = await s.paneCommand(target);
+    if (cmd === null || !s.SHELLS.has(cmd)) return; // running (or the pane is gone)
+    await t.sleep(100);
   }
 }
 
