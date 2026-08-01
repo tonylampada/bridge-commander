@@ -22,7 +22,8 @@
 
 import * as THREE from '../../vendor/three/three.module.min.js';
 import { BoardPanel, LieutenantBar, CardWindow, ChatWindow } from './panels.js';
-import { EYE, FRONT, BACK, BAR, placeWindow, nextFront, openWindows } from './room.js';
+import { EYE, FRONT, BACK, BAR, TYPE, placeWindow, nextFront, openWindows, eyeDistance } from './room.js';
+import { whenFaces } from './faces.js';
 import { keyForEvent } from '../panekeys.js';
 
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
@@ -38,11 +39,18 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.xr.enabled = true;
 renderer.xr.setReferenceSpaceType('local-floor');
+// three.js ships foveation at 1.0 — MAXIMUM — which renders the edges of the
+// view at reduced resolution. This room parks its secondary panels off-centre on
+// purpose, for a head turn to find, so the default blurs exactly the things it
+// was told to keep readable. A room of text pays the GPU instead.
+renderer.xr.setFoveation(0);
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color('#05070b');
-const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.05, 100);
+// Near at 0.3 m: closer than that a panel is intersecting his face, and nothing
+// he reads is ever meant to be inside 0.5 m anyway.
+const camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.3, 100);
 camera.position.set(0, EYE, 0);
 scene.add(camera);
 
@@ -74,6 +82,10 @@ const state = { open: [], front: 'board' };
 rig.add(bar.group, board.group);
 bar.group.position.set(BAR.x, BAR.y, BAR.z);
 bar.group.lookAt(0, EYE, 0);
+
+// The sheet of faces arrives after the first paint, and a bar of dots that never
+// became faces is worse than one that took a moment to.
+whenFaces(() => repaint());
 
 function surfaceFor(id) {
   if (id === 'board') return board;
@@ -113,11 +125,15 @@ function layout() {
     const p = placeWindow(i, ids.length);
     s.group.position.set(p.x, p.y, p.z);
     s.group.lookAt(0, EYE, 0);
+    s.setDistance(eyeDistance(p));
   });
   const boardBack = state.front !== 'board';
   const at = boardBack ? BACK : FRONT;
   board.group.position.set(0, at.y, at.z);
   board.group.lookAt(0, EYE, 0);
+  // Pushing the board back moves it 36 cm further off, and its type is re-cut
+  // for the new distance — that is what "readable wherever it sits" costs.
+  board.setDistance(eyeDistance({ x: 0, y: at.y, z: at.z }));
   board.setFront(!boardBack);
   for (const [id, s] of windows) s.setFront(id === state.front);
   repaint();
@@ -225,6 +241,9 @@ for (let i = 0; i < 2; i++) {
     if (!h) return;
     rig.attach(h.surface.group);
     held.delete(c);
+    // He put it down somewhere else, so it is a different number of degrees
+    // wide than it was when he picked it up: re-cut the type at where it now is.
+    if (h.surface.setDistance(eyeDistance(h.surface.group.position))) h.surface.paint(doc);
   });
 }
 
@@ -287,11 +306,12 @@ function draftPaint() {
   s.paint(doc);
   const g = s.ctx;
   const h = s.canvas.height, w = s.canvas.width;
+  const strip = s.line(TYPE.body) + s.px(0.4);
   g.fillStyle = '#111a24';
-  g.fillRect(0, h - 44, w, 44);
+  g.fillRect(0, h - strip, w, strip);
   g.fillStyle = '#4cc2ff';
-  g.font = '22px system-ui, sans-serif';
-  g.fillText('› ' + composing.text, 18, h - 15);
+  g.font = s.font(TYPE.body);
+  g.fillText('› ' + composing.text, s.px(0.7), h - s.px(0.5));
   s.texture.needsUpdate = true;
 }
 

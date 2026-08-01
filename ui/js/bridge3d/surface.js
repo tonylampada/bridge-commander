@@ -11,14 +11,18 @@
 // business of whoever made it.
 
 import * as THREE from '../../vendor/three/three.module.min.js';
+import { arcDeg, texelsPerMetre, TYPE, HIT } from './room.js';
+import { face } from './faces.js';
 
 export const FONT = 'ui-monospace, "DejaVu Sans Mono", "Courier New", monospace';
 export const UI = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
-// Canvas pixels per world metre. Everything else is expressed in metres and
-// multiplied by this, so a surface is authored once and stays sharp when the
-// captain grows it — the canvas is re-cut, not stretched.
-export const PPM = 1100;
+// A canvas has pixels and the eye has degrees, and the conversion between them
+// runs through the distance the panel stands at — so a Surface is told that
+// distance and everything painted on it is asked for in degrees. `px(deg)` is
+// the only way sizes get onto this canvas; a number of pixels chosen directly
+// is a number nobody has checked against an eye.
+const MAX_TEXELS = 2048;
 
 export const COL = {
   bg: '#0d1117',
@@ -50,10 +54,12 @@ export function wrap(ctx, text, maxWidth) {
 }
 
 export class Surface {
-  // widthM / heightM are world metres; the canvas follows at PPM.
-  constructor({ widthM = 1.0, heightM = 0.7, title = '', closable = true } = {}) {
+  // widthM / heightM are world metres; distanceM is how far from the eye it
+  // stands, and it is what turns every degree below into canvas pixels.
+  constructor({ widthM = 1.0, heightM = 0.7, distanceM = 1.5, title = '', closable = true } = {}) {
     this.widthM = widthM;
     this.heightM = heightM;
+    this.distanceM = distanceM;
     this.title = title;
     this.closable = closable;
     this.front = false;
@@ -79,6 +85,9 @@ export class Surface {
       new THREE.EdgesGeometry(new THREE.PlaneGeometry(1, 1)),
       new THREE.LineBasicMaterial({ color: new THREE.Color(COL.edge) }),
     );
+    // A millimetre off the plate: two coplanar surfaces shimmer against each
+    // other, and a shimmering border is felt as eyestrain rather than seen.
+    this.frame.position.z = 0.001;
 
     this.group = new THREE.Group();
     this.group.add(this.mesh, this.frame);
@@ -86,23 +95,35 @@ export class Surface {
     this._applySize();
   }
 
+  // The canvas is cut to the panel's own arc: enough texels for PPD of them per
+  // degree at the distance it stands, capped at what a texture can hold. When it
+  // is capped the arc of everything on it is unchanged — the sheet just gets
+  // softer, which is the failure you want of the two.
   _cut() {
-    this.canvas.width = Math.max(64, Math.round(this.widthM * PPM));
-    this.canvas.height = Math.max(64, Math.round(this.heightM * PPM));
+    const scale = Math.min(
+      texelsPerMetre(this.distanceM),
+      MAX_TEXELS / Math.max(this.widthM, this.heightM),
+    );
+    this.canvas.width = Math.max(64, Math.round(this.widthM * scale));
+    this.canvas.height = Math.max(64, Math.round(this.heightM * scale));
+    this.pxPerDeg = this.canvas.width / arcDeg(this.widthM, this.distanceM);
   }
+
+  // px(deg) — degrees of the captain's visual field, in canvas pixels.
+  px(deg) { return deg * this.pxPerDeg; }
+
+  // font(deg) — a font whose EM BOX is deg wide. Cap height is ~0.72 of that,
+  // which is the number the 0.7° floor is about. Regular and bold only: lighter
+  // strokes vibrate at this size and read as blur.
+  font(deg, weight) { return (weight ? weight + ' ' : '') + Math.round(this.px(deg)) + 'px ' + UI; }
+  line(deg) { return Math.round(this.px(deg) * 1.3); }
 
   _applySize() {
     this.mesh.scale.set(this.widthM, this.heightM, 1);
     this.frame.scale.set(this.widthM, this.heightM, 1);
   }
 
-  // resize(w, h) — re-cut the canvas rather than stretching the plane, so text
-  // is the same sharpness at every size the captain drags it to.
-  resize(widthM, heightM) {
-    this.widthM = Math.max(0.25, Math.min(4, widthM));
-    this.heightM = Math.max(0.2, Math.min(3, heightM));
-    this._cut();
-    this._applySize();
+  _retexture() {
     this.texture.dispose();
     this.texture = new THREE.CanvasTexture(this.canvas);
     this.texture.colorSpace = THREE.SRGBColorSpace;
@@ -113,6 +134,29 @@ export class Surface {
     this.mesh.material.needsUpdate = true;
     this.dirty = true;
   }
+
+  // resize(w, h) — re-cut the canvas rather than stretching the plane, so text
+  // is the same sharpness at every size the captain drags it to. The type keeps
+  // its arc: a bigger panel shows MORE, it does not show the same thing bigger.
+  resize(widthM, heightM) {
+    this.widthM = Math.max(0.25, Math.min(4, widthM));
+    this.heightM = Math.max(0.2, Math.min(3, heightM));
+    this._cut();
+    this._applySize();
+    this._retexture();
+  }
+
+  // setDistance(m) — he carried it nearer or further, so the type is re-derived
+  // at where it now stands. A panel that knows its own distance sizes its own
+  // text; that is the whole reason the distance is stored on it.
+  setDistance(distanceM) {
+    if (!(distanceM > 0) || Math.abs(distanceM - this.distanceM) < 0.02) return false;
+    this.distanceM = distanceM;
+    this._cut();
+    this._retexture();
+    return true;
+  }
+
 
   // Depth is the only thing that says which panel is being worked and which is
   // merely available: the front one is brighter and nearer, the rest fall back
@@ -142,7 +186,17 @@ export class Surface {
   // A rectangle on the canvas that means something when it is pointed at. The
   // panel declares these AS it paints, so what is clickable is whatever is
   // actually drawn — the two cannot drift apart.
-  region(x, y, w, h, action) { this.hits.push({ x, y, w, h, action }); }
+  //
+  // Pad the hit box, not the drawing: the mark may be smaller than 3° of his
+  // field, the thing that answers a ray may not be. Every region in the room
+  // grows about its own centre to that floor here, once, rather than each
+  // caller being trusted to remember it.
+  region(x, y, w, h, action) {
+    const min = this.px(HIT.min);
+    if (w < min) { x -= (min - w) / 2; w = min; }
+    if (h < min) { y -= (min - h) / 2; h = min; }
+    this.hits.push({ x, y, w, h, action });
+  }
 
   // uv comes off the raycast with its origin at the bottom left, which is why y
   // is flipped exactly here and nowhere else in the room.
@@ -160,36 +214,61 @@ export class Surface {
 
   // A titled panel's chrome: the bar across the top, and the close mark the
   // controller ray can hit. Returns the y the content starts at.
-  chrome(g, subtitle) {
+  //
+  // The bar is as tall as the close button has to be — 3° — because the close
+  // button IS the bar's height, and at 62 × 54 canvas pixels it used to be 2.07°
+  // of him: a target you aim at twice.
+  chrome(g, subtitle, who) {
     const w = this.canvas.width;
-    const barH = 54;
+    const pad = this.px(0.7);
+    const box = this.px(HIT.min);                 // the close target, 3° square
+    const barH = Math.max(box, this.px(TYPE.head) * 1.7);
     g.fillStyle = this.front ? '#1b2531' : '#131a23';
     g.fillRect(0, 0, w, barH);
+
+    // The title and its subtitle stop short of the close mark rather than
+    // running under it — the 1.6° between them has to stay empty to be a gap.
+    g.save();
+    g.beginPath();
+    g.rect(0, 0, w - box - this.px(HIT.gap), barH);
+    g.clip();
+    let x = pad;
+    // Who this conversation is with, where the 2D board puts it: the face first,
+    // then the name. A lieutenant without one keeps the coloured dot.
+    if (who) {
+      const r = barH * 0.34;
+      face(g, who.avatar, x + r, barH / 2, r, who.colour);
+      x += r * 2 + pad;
+    }
+    const mid = barH / 2 + this.px(TYPE.head) * 0.36;
     g.fillStyle = this.front ? COL.accent : COL.dim;
-    g.font = '600 26px ' + UI;
-    g.fillText(this.title, 20, 36);
+    g.font = this.font(TYPE.head, 600);
+    g.fillText(this.title, x, mid);
     // Measure the title in the TITLE's font, before switching to the smaller
     // one — measuring it in the subtitle's font puts the subtitle on top of it.
-    const after = 20 + g.measureText(this.title).width + 16;
+    const after = x + g.measureText(this.title).width + pad;
     if (subtitle) {
       g.fillStyle = COL.faint;
-      g.font = '22px ' + UI;
-      g.fillText(subtitle, after, 36);
+      g.font = this.font(TYPE.meta);
+      g.fillText(subtitle, after, mid);
     }
+    g.restore();
+
     if (this.closable) {
       g.strokeStyle = COL.faint;
-      g.lineWidth = 3;
-      const cx = w - 30, cy = barH / 2, r = 9;
+      g.lineWidth = Math.max(2, this.px(0.09));
+      const cx = w - box / 2, cy = barH / 2, r = this.px(0.5);
       g.beginPath();
       g.moveTo(cx - r, cy - r); g.lineTo(cx + r, cy + r);
       g.moveTo(cx + r, cy - r); g.lineTo(cx - r, cy + r);
       g.stroke();
-      this.region(w - 62, 0, 62, barH, { kind: 'close' });
+      this.region(w - box, 0, box, barH, { kind: 'close' });
     }
     // The bar itself is the handle: point anywhere along it and squeeze to move
     // the window, which is the one gesture every window manager already taught
-    // everybody.
-    this.region(0, 0, w - 64, barH, { kind: 'grab' });
+    // everybody. It ends a clear 1.6° before the close mark, so the gesture that
+    // moves the window is never the gesture that throws it away.
+    this.region(0, 0, w - box - this.px(HIT.gap), barH, { kind: 'grab' });
     return barH;
   }
 
