@@ -3,67 +3,131 @@
 // it WILL be edited wrongly. Every prompt in it becomes an agent launch, so a
 // mistake caught here costs nothing and the same mistake caught later costs a
 // worker's turn. What is pinned below is that the refusal happens, and that it
-// says WHERE — with three layers in play, an error without a filename is a
-// scavenger hunt.
+// says WHERE — an error without a filename is a scavenger hunt.
+//
+// It also pins the shape of the lookup itself: ONE folder, and reuse that is
+// written down (`extends: <name>`) instead of inferred from which directory a
+// file happens to sit in.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { resolve, merge, sourceOf, validate } = require('../pipeline/config.js');
+const { resolve, merge, sourceOf, validate, chain, available, pipelinesDir, MAX_CHAIN } = require('../pipeline/config.js');
+const { seed } = require('../pipeline/seed.js');
 const { render, refs } = require('../pipeline/template.js');
 
-const REPO = path.join(__dirname, '..');
-
-// A workspace/project layer on disk, so precedence is tested the way it runs.
-function layerDir(root, kind, name, body) {
-  const dir = kind === 'workspace'
-    ? path.join(root, 'ws', '.bridge-commander', 'pipelines')
-    : path.join(root, 'proj', '.bridge-commander', 'pipelines');
+// A workspace on disk, so resolution is tested the way it runs.
+function write(ws, name, body) {
+  const dir = pipelinesDir(ws);
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, name + '.yaml'), body);
-  return dir;
 }
-function withRoot(fn) {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-pipe-cfg-'));
-  try { return fn(root); } finally { fs.rmSync(root, { recursive: true, force: true }); }
-}
-function resolveIn(root, name = 'validated-pr') {
-  return resolve({
-    repoRoot: REPO, workspace: path.join(root, 'ws'), projectPath: path.join(root, 'proj'), name,
-  });
+function withWorkspace(fn, { seeded = true } = {}) {
+  const ws = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-pipe-cfg-'));
+  try {
+    if (seeded) seed(ws);
+    return fn(ws);
+  } finally {
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
 }
 
-test('the factory pipeline validates as shipped', () => {
-  const r = resolveIn(path.join(os.tmpdir(), 'no-such-root'));
-  assert.deepStrictEqual(r.errors, []);
-  assert.strictEqual(r.pipeline.name, 'validated-pr');
-  assert.strictEqual(r.pipeline.max_rounds, 3);
-  assert.ok(r.pipeline.working.prompt.includes('{{done}}'), 'the implementer is told how to report');
-  assert.ok(r.pipeline.validating.run.length, 'validation runs something before it judges');
+test('a seeded workspace validates as shipped', () => {
+  withWorkspace((ws) => {
+    const r = resolve({ workspace: ws, name: 'validated-pr' });
+    assert.deepStrictEqual(r.errors, []);
+    assert.strictEqual(r.pipeline.name, 'validated-pr');
+    assert.strictEqual(r.pipeline.max_rounds, 3);
+    assert.ok(r.pipeline.working.prompt.includes('{{done}}'), 'the implementer is told how to report');
+    assert.ok(r.pipeline.validating.run.length, 'validation runs something before it judges');
+  });
 });
 
-test('layers merge key by key: nested maps merge, lists replace, later wins', () => {
-  withRoot((root) => {
-    layerDir(root, 'workspace', 'validated-pr', 'max_rounds: 5\nvalidating:\n  run:\n    - echo ws\n');
-    layerDir(root, 'project', 'validated-pr', 'working:\n  prompt: |\n    just do it, {{card.id}}\n');
-    const r = resolveIn(root);
+test('seeding is a copy into the workspace, and it never clobbers your edits', () => {
+  withWorkspace((ws) => {
+    const mine = path.join(pipelinesDir(ws), 'validated-pr.yaml');
+    assert.ok(fs.existsSync(mine), 'the first seed wrote it');
+
+    fs.writeFileSync(mine, 'max_rounds: 9\nworking:\n  prompt: mine\nvalidating: none\n');
+    const again = seed(ws);
+    assert.deepStrictEqual(again.written, [], 'nothing was written the second time');
+    assert.ok(again.kept.includes('validated-pr.yaml'), 'and it says what it kept');
+    assert.strictEqual(resolve({ workspace: ws, name: 'validated-pr' }).pipeline.max_rounds, 9,
+      'the edited file survived — that is the whole point of the folder');
+  });
+});
+
+test('extends merges base first: nested maps merge, lists replace, the extender wins', () => {
+  withWorkspace((ws) => {
+    write(ws, 'ours', 'extends: validated-pr\nmax_rounds: 5\nvalidating:\n  run:\n    - node --test\n');
+    const r = resolve({ workspace: ws, name: 'ours' });
     assert.deepStrictEqual(r.errors, []);
-    assert.strictEqual(r.pipeline.max_rounds, 5, 'the workspace layer won');
-    assert.strictEqual(r.pipeline.working.prompt.trim(), 'just do it, {{card.id}}', 'the project layer won');
-    assert.deepStrictEqual(r.pipeline.validating.run, ['echo ws'], 'a list replaces, it does not append');
+    assert.strictEqual(r.pipeline.max_rounds, 5, 'the extending file won');
+    assert.deepStrictEqual(r.pipeline.validating.run, ['node --test'], 'a list replaces, it does not append');
     assert.ok(r.pipeline.validating.prompt.includes('{{run.output}}'),
-      'the untouched half of the overridden stage still comes from the factory');
+      'the untouched half of the overridden stage still comes from the base');
     assert.ok(r.pipeline.preamble.includes('Ground rules'), 'and so does everything nobody overrode');
+    assert.strictEqual(r.pipeline.extends, undefined, 'extends did its job during the walk; it is not a runtime key');
+    assert.deepStrictEqual(r.layers.map((l) => path.basename(l.file)),
+      ['validated-pr.yaml', 'ours.yaml'], 'layers come back base first, in merge order');
+  });
+});
+
+test('a chain of three resolves, and depth is bounded', () => {
+  withWorkspace((ws) => {
+    write(ws, 'mid', 'extends: validated-pr\nmax_rounds: 7\n');
+    write(ws, 'top', 'extends: mid\nname: top\n');
+    const r = resolve({ workspace: ws, name: 'top' });
+    assert.deepStrictEqual(r.errors, []);
+    assert.strictEqual(r.pipeline.max_rounds, 7, 'inherited through the middle file');
+    assert.strictEqual(r.pipeline.name, 'top');
+    assert.ok(r.pipeline.working.prompt.includes('{{done}}'), 'and the root is still in there');
+
+    for (let i = 0; i < MAX_CHAIN + 2; i++) write(ws, 'deep' + i, `extends: deep${i + 1}\n`);
+    const deep = resolve({ workspace: ws, name: 'deep0' });
+    assert.match(deep.errors[0], new RegExp(`more than ${MAX_CHAIN} files deep`));
+  });
+});
+
+test('a loop is refused by name, not by running out of stack', () => {
+  withWorkspace((ws) => {
+    write(ws, 'a', 'extends: b\n');
+    write(ws, 'b', 'extends: a\n');
+    const r = resolve({ workspace: ws, name: 'a' });
+    assert.strictEqual(r.pipeline, null);
+    assert.match(r.errors[0], /extends — loops back to "a"/);
+    assert.match(r.errors[0], /a → b → a/);
+  });
+});
+
+test('extending something that is not there names the file that asked for it', () => {
+  withWorkspace((ws) => {
+    write(ws, 'ours', 'extends: no-such-base\n');
+    const r = resolve({ workspace: ws, name: 'ours' });
+    assert.match(r.errors[0], /ours\.yaml: extends — no pipeline named "no-such-base"/);
+    assert.match(r.errors[0], /it holds: .*validated-pr/, 'and it lists what you could have meant');
+  });
+});
+
+test('extends must be a name in the folder — never a path', () => {
+  withWorkspace((ws) => {
+    write(ws, 'ours', 'extends: 4\n');
+    assert.match(resolve({ workspace: ws, name: 'ours' }).errors[0], /extends — must be the name of another pipeline/);
+
+    write(ws, 'pathy', 'extends: "../../elsewhere/validated-pr"\n');
+    const r = resolve({ workspace: ws, name: 'pathy' });
+    assert.ok(r.errors.length, 'a path does not resolve to a pipeline');
+    assert.match(r.errors[0], /no pipeline named/);
   });
 });
 
 test('an error names the file the key actually came from', () => {
-  withRoot((root) => {
-    layerDir(root, 'workspace', 'validated-pr', 'max_rounds: 0\n');
-    const r = resolveIn(root);
+  withWorkspace((ws) => {
+    write(ws, 'ours', 'extends: validated-pr\nmax_rounds: 0\n');
+    const r = resolve({ workspace: ws, name: 'ours' });
     assert.strictEqual(r.errors.length, 1, r.errors.join('\n'));
-    assert.match(r.errors[0], /ws\/\.bridge-commander\/pipelines\/validated-pr\.yaml: max_rounds/);
+    assert.match(r.errors[0], /pipelines\/ours\.yaml: max_rounds/);
     assert.match(r.errors[0], /1 or more/);
   });
 });
@@ -75,6 +139,7 @@ test('refusals: unknown keys, malformed stages, and a stage that cannot report',
   let e = errs({ max_rounds: 3, rounds: 4, working: { prompt: 'x' }, validating: 'none' });
   assert.strictEqual(e.length, 1);
   assert.match(e[0], /rounds — unknown key/);
+  assert.match(e[0], /known: name, extends/, 'and extends is listed as a thing you may write');
 
   e = errs({ max_rounds: 3, working: { prompt: 'x', retry: true }, validating: 'none' });
   assert.match(e[0], /working\.retry — unknown stage key/);
@@ -118,30 +183,48 @@ test('a misspelled variable is an error, because a rendered typo is invisible', 
 });
 
 test('broken YAML is refused with the line, not a stack trace', () => {
-  withRoot((root) => {
-    layerDir(root, 'workspace', 'validated-pr', 'max_rounds: 3\nworking:\n  prompt: [unclosed\n');
-    const r = resolveIn(root);
-    assert.match(r.errors[0], /validated-pr\.yaml:\d+ — not valid YAML/);
+  withWorkspace((ws) => {
+    write(ws, 'ours', 'max_rounds: 3\nworking:\n  prompt: [unclosed\n');
+    const r = resolve({ workspace: ws, name: 'ours' });
+    assert.match(r.errors[0], /ours\.yaml:\d+ — not valid YAML/);
   });
 });
 
-test('a pipeline nobody wrote is a refusal that lists where it looked', () => {
-  withRoot((root) => {
-    const r = resolveIn(root, 'no-such-pipeline');
+test('a pipeline nobody wrote is a refusal that names the one folder', () => {
+  withWorkspace((ws) => {
+    const r = resolve({ workspace: ws, name: 'no-such-pipeline' });
     assert.strictEqual(r.pipeline, null);
     assert.match(r.errors[0], /no pipeline named "no-such-pipeline"/);
-    assert.match(r.errors[0], /pipeline\/pipelines\/no-such-pipeline\.yaml/);
+    assert.match(r.errors[0], /pipelines has no no-such-pipeline\.yaml/);
+    assert.match(r.errors[0], /it holds: .*validated-pr/);
+  });
+});
+
+test('an unseeded workspace says so instead of pointing at a file nobody has', () => {
+  withWorkspace((ws) => {
+    assert.deepStrictEqual(available(ws), [], 'nothing seeded');
+    const r = resolve({ workspace: ws, name: 'validated-pr' });
+    assert.match(r.errors[0], /the folder is empty — seed it with pipeline\/seed\.js/);
+  }, { seeded: false });
+});
+
+test('the chain is the only place a pipeline is read from', () => {
+  withWorkspace((ws) => {
+    const { files } = chain(ws, 'validated-pr');
+    assert.strictEqual(files.length, 1);
+    assert.strictEqual(files[0], path.join(ws, '.bridge-commander', 'pipelines', 'validated-pr.yaml'),
+      'one folder, one file — no repo layer, no project layer');
   });
 });
 
 test('sourceOf points at the LAST layer that set the key', () => {
   const layers = [
-    { file: 'factory.yaml', data: { max_rounds: 3, working: { prompt: 'a', run: ['x'] } } },
-    { file: 'ws.yaml', data: { working: { prompt: 'b' } } },
+    { file: 'base.yaml', data: { max_rounds: 3, working: { prompt: 'a', run: ['x'] } } },
+    { file: 'ours.yaml', data: { working: { prompt: 'b' } } },
   ];
-  assert.strictEqual(sourceOf(layers, 'max_rounds'), 'factory.yaml');
-  assert.strictEqual(sourceOf(layers, 'working.prompt'), 'ws.yaml');
-  assert.strictEqual(sourceOf(layers, 'working.run'), 'factory.yaml');
+  assert.strictEqual(sourceOf(layers, 'max_rounds'), 'base.yaml');
+  assert.strictEqual(sourceOf(layers, 'working.prompt'), 'ours.yaml');
+  assert.strictEqual(sourceOf(layers, 'working.run'), 'base.yaml');
   assert.deepStrictEqual(merge(layers).working, { prompt: 'b', run: ['x'] });
 });
 

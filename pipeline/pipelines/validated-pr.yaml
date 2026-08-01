@@ -1,14 +1,25 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# pipeline: validated-pr   (factory default)
+# pipeline: validated-pr   (the seed copy)
 #
 # This file IS the pipeline's behaviour, and also the whole worker brief for
 # both of its stages. Edit here: no code change, no restart.
 #
-# Precedence, per key (nested maps merge, lists replace):
-#   1. this file                                          ships with the executor
-#   2. <workspace>/.bridge-commander/pipelines/validated-pr.yaml
-#   3. <project>/.bridge-commander/pipelines/validated-pr.yaml
-# Delete your copy and the factory one you are reading comes back.
+# You are reading one of two things. In the executor's own `pipeline/pipelines/`
+# it is a seed, copied into a workspace once by `pipeline/seed.js`. In
+# `<workspace>/.bridge-commander/pipelines/` it is the live file — the only
+# place a pipeline is ever read from, and yours to edit.
+#
+# To reuse this rather than fork it, leave it alone and write a new file beside
+# it that names it (nested maps merge, lists replace):
+#
+#   # validated-pr-mine.yaml
+#   extends: validated-pr
+#   validating:
+#     run:
+#       - node --test
+#
+# Then start the card with `--pipeline validated-pr-mine`. Bases resolve by name
+# in this same folder — a path is not a name, and will not resolve.
 #
 # Check it before you spend anything on it:
 #   pipeline/run.js <card-id> --workspace <dir> --check

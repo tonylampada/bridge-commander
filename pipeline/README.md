@@ -38,7 +38,8 @@ prompts it would send. Nothing is spawned.
 ## What it does, in order
 
 1. Reads the card (`bc-axi card show --json`).
-2. Resolves the pipeline file: factory → workspace → project, key by key.
+2. Resolves the pipeline file in `<workspace>/.bridge-commander/pipelines/`, following
+   `extends: <name>` and merging the chain base-first, key by key.
 3. **Validates before spending a token.** Unknown key, misspelled variable, malformed
    stage, `{{run.output}}` where nothing runs — refused, naming the file and the key.
 4. Composes `preamble` + the stage's prompt, variables substituted.
@@ -127,13 +128,14 @@ implementer's work, quietly — `test/pipeline-run.test.js` pins that it does no
 | file | what |
 |---|---|
 | `run.js` | the entry and the loop: stages, rounds, escalation |
-| `config.js` | layer resolution, key-by-key merge, and the refusals |
+| `config.js` | the one folder, the `extends` chain, key-by-key merge, and the refusals |
 | `template.js` | `{{name}}` and `{{#name}}…{{/name}}`, and nothing else |
 | `stage.js` | run the commands, open the agent as a window, wait for the answer |
 | `state.js` | everything a restart needs to know, on disk |
 | `board.js` | the five things it may say to the board, through `bc-axi` |
 | `verdict.js` | `done` / `reject`, the stage agent's side |
-| `pipelines/validated-pr.yaml` | the factory default, and the document that explains it |
+| `seed.js` | copy the shipped pipelines into a workspace once, never overwriting |
+| `pipelines/validated-pr.yaml` | the seed copy, and the document that explains it |
 | `vendor/` | js-yaml, committed (the repo has no install step) |
 
 Tests live with the board's (`test/pipeline-*.test.js`) so the one suite command still

@@ -1,20 +1,29 @@
 'use strict';
-// config — find the pipeline file, merge the layers, and REFUSE a bad one
+// config — find the pipeline file, walk what it extends, and REFUSE a bad one
 // before a single token is spent.
 //
-// Three layers, each optional except the factory one, merged key by key
-// (later wins; nested maps merge, lists replace):
+// ONE folder holds every pipeline this board can run:
 //
-//   1. <repo>/pipeline/pipelines/<name>.yaml          ships here, the default
-//   2. <workspace>/.bridge-commander/pipelines/<name>.yaml   this board's taste
-//   3. <project>/.bridge-commander/pipelines/<name>.yaml     this repo's needs
+//   <workspace>/.bridge-commander/pipelines/<name>.yaml
+//
+// The files are seeded there at setup (`pipeline/seed.js`) from the ones that
+// ship with the executor, and from then on they belong to the board. There is
+// no second place to look, so "which file is this?" always has one answer.
+//
+// Reuse is written down, never positional. A file that wants another as its
+// base says so by name, on a line you can read:
+//
+//   extends: validated-pr
+//
+// The chain is merged base-first, key by key (nested maps merge, lists
+// replace), so an extending file restates only what it changes. Bases resolve
+// by NAME inside the folder — never by path, because a path is how a second
+// place to look gets in.
 //
 // The file is meant to be edited by hand, which means it will be edited
 // wrongly. Validation is not politeness: every prompt in it becomes an agent
 // launch, so a typo caught here costs nothing and the same typo caught later
-// costs a worker's turn. Every error names the FILE and the KEY it came from —
-// with three layers in play, "max_rounds must be a positive integer" without a
-// filename is a scavenger hunt.
+// costs a worker's turn. Every error names the FILE and the KEY it came from.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -30,57 +39,118 @@ const VARIABLES = [
   'bc', 'done', 'reject',
 ];
 
-const TOP_KEYS = ['name', 'worktree', 'max_rounds', 'preamble', 'working', 'validating'];
+const TOP_KEYS = ['name', 'extends', 'worktree', 'max_rounds', 'preamble', 'working', 'validating'];
 const STAGE_KEYS = ['prompt', 'run'];
 const STAGES = ['working', 'validating'];
+
+// How deep an extends chain may go before we call it a mistake. Nobody needs
+// eight levels of pipeline inheritance; a number this size only ever appears
+// by accident.
+const MAX_CHAIN = 8;
 
 function isPlainObject(v) {
   return !!v && typeof v === 'object' && !Array.isArray(v);
 }
 
-// layerFiles(opts) -> [path] — factory first, most specific last.
-function layerFiles({ repoRoot, workspace, projectPath, name }) {
-  const files = [path.join(repoRoot, 'pipeline', 'pipelines', name + '.yaml')];
-  if (workspace) files.push(path.join(workspace, '.bridge-commander', 'pipelines', name + '.yaml'));
-  if (projectPath) files.push(path.join(projectPath, '.bridge-commander', 'pipelines', name + '.yaml'));
-  return files;
+// pipelinesDir(workspace) -> the one folder. Exported because the seeder and
+// the error messages both need to name it, and they must never disagree.
+function pipelinesDir(workspace) {
+  return path.join(workspace, '.bridge-commander', 'pipelines');
+}
+function pipelineFile(workspace, name) {
+  return path.join(pipelinesDir(workspace), name + '.yaml');
 }
 
-// loadLayers(files) -> { layers: [{file, data}], errors: [] }
-// A file that is not there is not an error (layers 2 and 3 are opt-in); a file
-// that is there and unparseable is, with the line js-yaml points at.
-function loadLayers(files) {
-  const layers = [];
-  const errors = [];
-  for (const file of files) {
-    let text;
-    try {
-      text = fs.readFileSync(file, 'utf8');
-    } catch {
-      continue;
-    }
-    let data;
-    try {
-      data = yaml.load(text, { filename: file });
-    } catch (e) {
-      const line = e && e.mark && Number.isInteger(e.mark.line) ? e.mark.line + 1 : null;
-      errors.push(`${file}${line ? ':' + line : ''} — not valid YAML: ${String(e.reason || e.message).split('\n')[0]}`);
-      continue;
-    }
-    if (data === null || data === undefined) continue; // an empty override file overrides nothing
-    if (!isPlainObject(data)) {
-      errors.push(`${file} — a pipeline file must be a map of keys, got ${Array.isArray(data) ? 'a list' : typeof data}`);
-      continue;
-    }
-    layers.push({ file, data });
+// available(workspace) -> [name] — what is actually in the folder. A refusal
+// that lists the real alternatives beats one that only says "not found".
+function available(workspace) {
+  try {
+    return fs.readdirSync(pipelinesDir(workspace))
+      .filter((f) => f.endsWith('.yaml'))
+      .map((f) => f.slice(0, -'.yaml'.length))
+      .sort();
+  } catch {
+    return [];
   }
-  return { layers, errors };
+}
+
+// readOne(file) -> { data } | { error }
+function readOne(file) {
+  let text;
+  try {
+    text = fs.readFileSync(file, 'utf8');
+  } catch {
+    return { missing: true };
+  }
+  let data;
+  try {
+    data = yaml.load(text, { filename: file });
+  } catch (e) {
+    const line = e && e.mark && Number.isInteger(e.mark.line) ? e.mark.line + 1 : null;
+    return { error: `${file}${line ? ':' + line : ''} — not valid YAML: ${String(e.reason || e.message).split('\n')[0]}` };
+  }
+  if (data === null || data === undefined) return { data: {} }; // an empty file adds nothing
+  if (!isPlainObject(data)) {
+    return { error: `${file} — a pipeline file must be a map of keys, got ${Array.isArray(data) ? 'a list' : typeof data}` };
+  }
+  return { data };
+}
+
+// chain(workspace, name) -> { layers, files, errors }
+// Layers come back BASE FIRST, so merging them in order lets the file the
+// caller actually asked for win. `extends` is followed by name in the same
+// folder; a loop, a missing base or a silly depth is refused by name.
+function chain(workspace, name) {
+  const layers = [];
+  const files = [];
+  const seen = [];
+  let current = name;
+
+  while (current) {
+    const file = pipelineFile(workspace, current);
+    files.push(file);
+
+    if (seen.includes(current)) {
+      return {
+        layers: [], files,
+        errors: [`${file}: extends — loops back to "${current}" (${seen.concat(current).join(' → ')})`],
+      };
+    }
+    seen.push(current);
+
+    if (seen.length > MAX_CHAIN) {
+      return { layers: [], files, errors: [`${file}: extends — chain is more than ${MAX_CHAIN} files deep (${seen.join(' → ')})`] };
+    }
+
+    const r = readOne(file);
+    if (r.error) return { layers: [], files, errors: [r.error] };
+    if (r.missing) {
+      const known = available(workspace);
+      const where = layers.length
+        ? `${files[files.length - 2]}: extends — no pipeline named "${current}" in ${pipelinesDir(workspace)}`
+        : `no pipeline named "${current}" — ${pipelinesDir(workspace)} has no ${current}.yaml`;
+      return {
+        layers: [], files,
+        errors: [where + (known.length ? `\n  it holds: ${known.join(', ')}` : '\n  the folder is empty — seed it with pipeline/seed.js')],
+      };
+    }
+
+    const base = r.data.extends;
+    if (base !== undefined && (typeof base !== 'string' || !base.trim())) {
+      return { layers: [], files, errors: [`${file}: extends — must be the name of another pipeline in ${pipelinesDir(workspace)}`] };
+    }
+
+    layers.unshift({ file, data: r.data }); // base first
+    current = base ? base.trim() : '';
+  }
+
+  return { layers, files, errors: [] };
 }
 
 // merge(layers) — key by key, later layers winning. Nested maps merge so an
-// override can change one stage's prompt without restating the other stage;
-// lists (a stage's `run`) replace wholesale, because appending to someone
-// else's command list is never what you meant.
+// extending file can change one stage's prompt without restating the other
+// stage; lists (a stage's `run`) replace wholesale, because appending to
+// someone else's command list is never what you meant.
 function merge(layers) {
   const out = {};
   for (const { data } of layers) mergeInto(out, data);
@@ -180,22 +250,21 @@ function validate(pipeline, layers) {
   return errors;
 }
 
-// resolve(opts) -> { pipeline, layers, files, errors }
+// resolve({ workspace, name }) -> { pipeline, layers, files, errors }
 // errors non-empty = refuse. The caller reports them and stops; nothing is
 // spawned, nothing is spent.
-function resolve(opts) {
-  const files = layerFiles(opts);
-  const { layers, errors: loadErrors } = loadLayers(files);
-  if (!layers.length) {
-    return {
-      pipeline: null, layers, files,
-      errors: loadErrors.length ? loadErrors
-        : [`no pipeline named "${opts.name}" — looked in:\n  ` + files.join('\n  ')],
-    };
-  }
+function resolve({ workspace, name }) {
+  const { layers, files, errors: chainErrors } = chain(workspace, name);
+  if (chainErrors.length) return { pipeline: null, layers, files, errors: chainErrors };
+
   const pipeline = merge(layers);
-  const errors = loadErrors.concat(validate(pipeline, layers));
-  return { pipeline, layers, files, errors };
+  // `extends` did its job during the walk; it is not a runtime key, and leaving
+  // it in would put a name nothing reads into the thing agents are launched from.
+  delete pipeline.extends;
+  return { pipeline, layers, files, errors: validate(pipeline, layers) };
 }
 
-module.exports = { VARIABLES, TOP_KEYS, STAGE_KEYS, STAGES, layerFiles, loadLayers, merge, sourceOf, validate, resolve };
+module.exports = {
+  VARIABLES, TOP_KEYS, STAGE_KEYS, STAGES, MAX_CHAIN,
+  pipelinesDir, pipelineFile, available, chain, merge, sourceOf, validate, resolve,
+};

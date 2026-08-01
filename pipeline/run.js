@@ -294,9 +294,7 @@ async function main(argv) {
   if (!project) throw new Error(`card ${card.id} has no registered project (repo attribute: ${repo || 'unset'})`);
 
   const pipelineName = opts.pipeline || project.pipeline || DEFAULT_PIPELINE;
-  const r = resolve({
-    repoRoot: REPO_ROOT, workspace: opts.workspace, projectPath: project.path, name: pipelineName,
-  });
+  const r = resolve({ workspace: opts.workspace, name: pipelineName });
 
   const runDir = path.join(opts.workspace, '.bridge-commander', 'pipeline', card.id);
   if (r.errors.length) {
@@ -372,7 +370,9 @@ async function main(argv) {
   }
 
   if (opts.check) {
-    process.stdout.write(`pipeline ${pipelineName} is valid (layers: ${r.layers.map((l) => l.file).join(', ')})\n`);
+    // Base first, in merge order: the last file named is the one that wins a
+    // conflict, which is the question anybody reading this line actually has.
+    process.stdout.write(`pipeline ${pipelineName} is valid (${r.layers.map((l) => l.file).join('\n  merged into ')})\n`);
     for (const name of ['working', 'validating']) {
       if (skipped(r.pipeline[name])) { process.stdout.write(`\n=== ${name}: skipped ===\n`); continue; }
       process.stdout.write(`\n=== ${name} (round ${state.round}) ===\n` + compose(ctx, name, state.round, '<run output>') + '\n');

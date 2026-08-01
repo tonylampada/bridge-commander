@@ -53,6 +53,20 @@ detached, registers YOUR tmux session as the founding lieutenant, installs the t
 at startup), scaffolds `AGENTS.md`, `captain.md`, `learnings/`, and prints the board URL.
 Give the user that URL — the board is the captain's cockpit.
 
+## 3b. Seed the workspace's pipelines (idempotent)
+
+```sh
+<checkout>/pipeline/seed.js --workspace "$(pwd)"
+```
+
+Copies the pipeline files that ship with the tool into
+`<workspace>/.bridge-commander/pipelines/`. From then on that folder is the only place a
+pipeline is read from, and the copies are the workspace's to edit. It never overwrites an
+existing file, so re-running is safe and tells you what it kept.
+
+This copies files and starts nothing. Cards still run through a pipeline only when a
+lieutenant asks for one by name.
+
 ## 4. Load your operating knowledge, in this order
 
 1. `DOCTRINE.md` (checkout root, per step 0) — how a lieutenant behaves. It is your job description.
