@@ -492,12 +492,15 @@ async function openArtifact(uri) {
     return;
   }
   if (HTML_EXT.test(name)) {
-    // A rendered .html/.htm page (teach-me, report): show it live in a sandboxed
-    // iframe (allow-scripts, no same-origin) fed by the raw serve, which sends a
-    // matching CSP. These pages want room — open expanded by default.
+    // A rendered .html/.htm page (teach-me, report): show it live in an iframe fed
+    // by the *directory* serve, not the raw query — a page needs a folder for its
+    // relative references to sit in, so `./audio.wav` beside it loads instead of
+    // asking the board for /api/audio.wav. These pages want room — open expanded.
+    const f = uri.replace(/^file:\/\//, ''), cut = f.lastIndexOf('/');
     avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
     avBody.hidden = true; avImgWrap.hidden = true;
-    avFrame.hidden = false; avFrame.src = rawUrl;
+    avFrame.hidden = false;
+    avFrame.src = '/artifacts/' + encodeURIComponent(f.slice(0, cut)) + '/' + encodeURIComponent(f.slice(cut + 1));
     avModal.classList.add('expanded');
     return;
   }

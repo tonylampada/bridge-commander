@@ -150,7 +150,7 @@ test('raw=1 rejects a traversal file:// uri and a non-file:// uri', async () => 
   }
 });
 
-test('raw=1 for a listed .html → 200, text/html inline, sandbox allow-scripts CSP', async () => {
+test('raw=1 for a listed .html → 200, text/html inline, no sandbox CSP', async () => {
   const s = await startServerWithLieutenant();
   try {
     const page = path.join(s.dir, 'teach-me.html');
@@ -161,9 +161,9 @@ test('raw=1 for a listed .html → 200, text/html inline, sandbox allow-scripts 
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.headers.get('content-type'), 'text/html; charset=utf-8');
     assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
-    const csp = res.headers.get('content-security-policy') || '';
-    assert.match(csp, /sandbox/);
-    assert.match(csp, /allow-scripts/);
+    // The sandbox is gone: a curated .html artifact is the captain's own
+    // deliverable, and the board it would be sandboxed against has no auth.
+    assert.strictEqual(res.headers.get('content-security-policy'), null);
     assert.match(res.headers.get('content-disposition') || '', /^inline/);
     assert.match(await res.text(), /teach|Diff|doctype/i);
   } finally {

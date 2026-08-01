@@ -1,0 +1,25 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>sibling files demo</title>
+<style>
+  body { font: 15px/1.5 system-ui, sans-serif; background: #10141a; color: #d7e0ea; margin: 24px; }
+  h1 { font-size: 17px; margin: 0 0 4px; }
+  p { color: #8fa3b8; margin: 0 0 18px; }
+  img { border-radius: 6px; display: block; }
+  code { color: #e89244; }
+</style>
+
+<h1>An artifact page that reads the files next to it</h1>
+<p>No base64 anywhere in this file — both assets are plain relative references.</p>
+
+<p><code>&lt;img src="./checker.png"&gt;</code></p>
+<img src="./checker.png" alt="teal and orange checkerboard">
+
+<p style="margin-top:18px"><code>&lt;audio src="./beep.wav"&gt;</code></p>
+<audio src="./beep.wav" controls></audio>
+
+<p id="where" style="margin-top:18px"></p>
+<script>
+  // Also proves scripts still run now that the sandbox is gone.
+  where.textContent = './checker.png resolves to ' + new URL('./checker.png', location.href).pathname;
+</script>

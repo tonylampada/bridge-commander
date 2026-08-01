@@ -129,6 +129,11 @@ const ARTIFACT_MIME = {
   '.mp4': 'video/mp4', '.m4v': 'video/mp4', '.mov': 'video/quicktime', '.webm': 'video/webm',
   '.mp3': 'audio/mpeg', '.m4a': 'audio/mp4', '.aac': 'audio/aac', '.wav': 'audio/wav',
   '.ogg': 'audio/ogg', '.oga': 'audio/ogg', '.opus': 'audio/ogg', '.flac': 'audio/flac',
+  // A rendered page and the things it pulls in beside itself.
+  '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
+  '.json': 'application/json', '.txt': 'text/plain; charset=utf-8',
+  '.woff2': 'font/woff2', '.woff': 'font/woff', '.ttf': 'font/ttf',
 };
 
 const DEFAULT_PORT = 4780;
@@ -2365,6 +2370,41 @@ const server = http.createServer(async (req, res) => {
       const items = notificationItems(url.searchParams.get('user'));
       return sendJson(res, 200, { items, unread: items.filter((e) => !e.read).length });
     }
+    // Artifact directory serve. `/api/artifact?uri=…` is not a path: a page at
+    // that address resolving `./audio.wav` asks the board for `/api/audio.wav`,
+    // so there is no directory for a relative path to sit in — which is why
+    // artifact pages had to inline their assets as base64. `/artifacts/<dir>/<rel>`
+    // gives the page a folder, and its siblings load the way every relative path
+    // on the web does. Scoped to the artifact's own directory: <dir> must be the
+    // directory of a listed artifact, and the resolved file must stay inside it —
+    // not as a security claim, but because "this URL means this folder" is what
+    // makes a relative path mean anything.
+    const adir = /^\/artifacts\/([^/]+)\/(.+)$/.exec(p);
+    if (adir && req.method === 'GET') {
+      let dir, rel;
+      try { dir = decodeURIComponent(adir[1]); rel = decodeURIComponent(adir[2]); }
+      catch (e) { return sendJson(res, 400, { error: 'bad artifact path' }); }
+      const listed = dir && path.resolve(dir) === dir &&
+        board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
+          c.attributes.artifacts.some((a) => a && typeof a.uri === 'string' && a.uri.startsWith('file://') &&
+            path.dirname(a.uri.slice('file://'.length)) === dir));
+      if (!listed) return sendJson(res, 404, { error: 'unknown artifact directory' });
+      const file = path.resolve(dir, rel);
+      if (!file.startsWith(dir + path.sep)) return sendJson(res, 403, { error: 'outside the artifact directory' });
+      let st;
+      try { st = fs.statSync(file); }
+      catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+      if (!st.isFile()) return sendJson(res, 404, { error: 'not a file' });
+      if (st.size > ARTIFACT_MAX_BYTES) return sendJson(res, 413, { error: 'artifact too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
+      // No sandbox CSP: the board has no auth and binds to the tailnet, so anyone
+      // who reaches it can already ask a lieutenant to run anything. Hardening
+      // this page against that board defends nothing.
+      return sendBytes(req, res, fs.readFileSync(file), {
+        'Content-Type': ARTIFACT_MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+        'Cache-Control': 'no-store',
+        'X-Content-Type-Options': 'nosniff',
+      });
+    }
     // Artifact serve, for the UI's popup viewer. Only a uri listed verbatim in
     // some live card's attributes.artifacts is servable — never an arbitrary
     // file read. Default (no raw): TEXT content of the file. raw=1: the raw
@@ -2403,22 +2443,20 @@ const server = http.createServer(async (req, res) => {
         if (st.size > ARTIFACT_MAX_BYTES) return sendJson(res, 413, { error: 'artifact too large (max ' + ARTIFACT_MAX_BYTES + ' bytes)' });
         const ext = path.extname(name).toLowerCase();
         // A curated .html/.htm artifact (teach-me page, report) is a self-contained
-        // document meant to be *rendered*: serve it as text/html inline so the
-        // viewer iframe shows the page, not its source. It runs under a stricter-
-        // than-default CSP — `sandbox allow-scripts` gives it a unique origin (no
-        // same-origin access to the board, no top navigation, no forms) while its
-        // own inline JS/CSS still work. Scoped to plain file artifacts, not
+        // document meant to be *rendered*: serve it as text/html inline so a page
+        // opened here shows, not its source. Scoped to plain file artifacts, not
         // attachments (an uploaded .html keeps its neutralized download behavior).
         const isHtml = !am && (ext === '.html' || ext === '.htm');
         const ctype = isHtml ? 'text/html; charset=utf-8'
           : am ? (attMime || 'application/octet-stream')
           : (ARTIFACT_MIME[ext] || 'application/octet-stream');
         // Images, video, audio, pdf, and rendered html show inline in the browser;
-        // other binaries download. Same hardening as the attachments serve: nosniff
-        // pins the Content-Type; the sandbox CSP neutralizes an uploaded SVG/HTML if it
-        // is navigated to as a document (inline <img>/<video> subresources unaffected).
+        // other binaries download. nosniff pins the Content-Type; the sandbox CSP
+        // neutralizes an uploaded SVG/HTML if it is navigated to as a document
+        // (inline <img>/<video> subresources unaffected). A curated .html artifact
+        // is exempt — it is the captain's own deliverable, and sandboxing it against
+        // a board anyone on the tailnet can drive defends nothing.
         const inline = isHtml || /^(image|video|audio)\//.test(ctype) || ctype === 'application/pdf';
-        const csp = isHtml ? 'sandbox allow-scripts' : 'sandbox';
         let data;
         try { data = fs.readFileSync(file); }
         catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
@@ -2426,7 +2464,7 @@ const server = http.createServer(async (req, res) => {
           'Content-Type': ctype,
           'Cache-Control': 'private, max-age=31536000, immutable',
           'X-Content-Type-Options': 'nosniff',
-          'Content-Security-Policy': csp,
+          ...(isHtml ? {} : { 'Content-Security-Policy': 'sandbox' }),
           'Content-Disposition': (inline ? 'inline' : 'attachment') + '; filename="' + name.replace(/["\\\r\n]/g, '_') + '"',
         });
       }
