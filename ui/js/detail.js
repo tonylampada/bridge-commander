@@ -291,6 +291,14 @@ function avEditableText(uri, name, markdown, content) {
   avEditable = { uri, name, markdown, content };
   avEditBtn.hidden = false;
 }
+// Put text in the viewer body — markdown rendered (with the ⇄ toggle) or plain.
+// Both the first open and a live update below go through here.
+function avShowText(markdown, text) {
+  if (markdown) return showMarkdown(text);
+  avBody.className = '';
+  avBody.textContent = text;
+  avCopyable(text);
+}
 // Hand a file to the file screen — the ✎ route and the drawing route both come
 // through here. `extra` carries what differs (markdown / draw, and the text).
 function toFileScreen(uri, name, extra) {
@@ -420,10 +428,27 @@ async function saveSvg(uri, svg, cardId) {
 export async function artifactWritten(ev) {
   const uri = ev && ev.uri;
   if (!uri || (ev.by && ev.by === api.clientId)) return; // our own save coming back
-  if (fileKey() !== uri) return; // nothing of ours is open on it; a later open re-reads anyway
+  // Two screens can be on this file: the file screen (editing) and the viewer
+  // popup (a glance). They are never both on it — ✎ closes the popup on its way
+  // to the screen — so whichever one is showing it is the one that follows.
+  const onFileScreen = fileKey() === uri;
+  const inViewer = () => artifactOpen() && avEditable && avEditable.uri === uri;
+  if (!onFileScreen && !inViewer()) return; // nothing of ours is open on it; a later open re-reads anyway
   if (versions.get(uri) === ev.version) return;
   let r;
   try { r = await api.artifact(uri); } catch (e) { return; } // gone or unreadable — the save will say so
+  if (!onFileScreen) {
+    // The popup is read-only, so there is nothing of his to lose and nothing to
+    // ask — unless a draft is open on this file (typed on the file screen, still
+    // unsaved, and what the popup is showing). Then it is left alone, version and
+    // all, so saving that draft is still the 409 it should be.
+    if (inViewer() && !drafts.has(uri)) {
+      versions.set(uri, r.version);
+      avEditable.content = r.content;
+      avShowText(avEditable.markdown, r.content);
+    }
+    return;
+  }
   if (fileKey() !== uri) return; // he left the screen while we were fetching
   const take = (note) => {
     versions.set(uri, r.version);
@@ -449,7 +474,7 @@ export async function artifactWritten(ev) {
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
 // wins; the extension regex is the fallback.
 const isMdArtifact = (art, name) => (art && art.type) === 'markdown' || MD_EXT.test(name);
-async function openArtifact(uri) {
+export async function openArtifact(uri) { // exported for the test; the UI reaches it by click
   const name = uriBasename(uri) || uri;
   if (DRAW_EXT.test(name)) return openDrawing(uri, name); // a drawing opens as a canvas, not as its JSON
   avReset(name, uri);
@@ -517,13 +542,7 @@ async function openArtifact(uri) {
     // underneath it is still a 409 when he finally saves.
     if (!drafts.has(uri)) versions.set(uri, r.version || '');
     const text = drafts.has(uri) ? drafts.get(uri) : r.content;
-    if (markdown) {
-      showMarkdown(text); // rendered via md.js, with the ⇄ source toggle
-    } else {
-      avBody.className = '';
-      avBody.textContent = text; // non-markdown: plain preformatted text
-      avCopyable(text);
-    }
+    avShowText(markdown, text);
     avEditableText(uri, name, markdown, r.content); // ✎ turns the preview into an editor
   } catch (e) {
     offerDownload('⚠ no preview — ' + e.message + ' (use ⬇ to download)'); // binary / too large / unreadable
