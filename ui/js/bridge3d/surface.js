@@ -11,7 +11,7 @@
 // business of whoever made it.
 
 import * as THREE from '../../vendor/three/three.module.min.js';
-import { arcDeg, texelsPerMetre, TYPE, HIT } from './room.js';
+import { arcDeg, texelsPerMetre, TYPE, BUILD } from './room.js';
 import { face } from './faces.js';
 
 export const FONT = 'ui-monospace, "DejaVu Sans Mono", "Courier New", monospace';
@@ -109,8 +109,54 @@ export class Surface {
     this.pxPerDeg = this.canvas.width / arcDeg(this.widthM, this.distanceM);
   }
 
-  // px(deg) — degrees of the captain's visual field, in canvas pixels.
+  // px(deg) — degrees of the captain's visual field, in canvas pixels, using the
+  // panel's AVERAGE density. Good enough for type, which is never at the floor:
+  // body text comes out 1.10° of cap in the middle and 0.85° in the far corner,
+  // both clear of 0.7°. Not good enough for a target, which is measured against
+  // the floor exactly — those use the pair below.
   px(deg) { return deg * this.pxPerDeg; }
+
+  // ---- degrees where the thing actually sits -------------------------------
+  //
+  // A flat panel does not spread its pixels evenly across the eye. At a lateral
+  // offset u from its centre, a metre of canvas is worth d/(d² + u²) radians
+  // instead of 1/d, so a degree in the corner costs MORE pixels than a degree in
+  // the middle — and a fixed pixel count out there subtends less arc than it was
+  // asked for. That is not a rounding error at the edge of a wide panel: on a
+  // 1.5 m window at 1.37 m the corner runs 0.84 of the average, which is how a
+  // close button drawn at "3°" arrived at 2.58° of him.
+  //
+  // The close button is at the far edge BY CONSTRUCTION — chrome() pins it to the
+  // right-hand corner of every window there will ever be — so hit geometry is
+  // converted with atan at the position it occupies, in both axes, and no
+  // small-angle average is involved anywhere in it.
+
+  _u(x) { return (x / this.canvas.width - 0.5) * this.widthM; }      // m right of centre
+  _v(y) { return (0.5 - y / this.canvas.height) * this.heightM; }    // m above centre
+
+  // The true arc between two canvas coordinates.
+  degX(x1, x2) {
+    const d = this.distanceM;
+    return (Math.atan(this._u(x2) / d) - Math.atan(this._u(x1) / d)) * 180 / Math.PI;
+  }
+  degY(y1, y2) {
+    const d = this.distanceM;
+    return (Math.atan(this._v(y1) / d) - Math.atan(this._v(y2) / d)) * 180 / Math.PI;
+  }
+
+  // The canvas coordinate exactly deg away from another — right/down for a
+  // positive deg, left/up for a negative one. This is how a 3° box gets built
+  // from the corner it is pinned to rather than from an average of the panel.
+  atDegX(x, deg) {
+    const d = this.distanceM;
+    const u = d * Math.tan(Math.atan(this._u(x) / d) + deg * Math.PI / 180);
+    return (u / this.widthM + 0.5) * this.canvas.width;
+  }
+  atDegY(y, deg) {
+    const d = this.distanceM;
+    const v = d * Math.tan(Math.atan(this._v(y) / d) - deg * Math.PI / 180);
+    return (0.5 - v / this.heightM) * this.canvas.height;
+  }
 
   // font(deg) — a font whose EM BOX is deg wide. Cap height is ~0.72 of that,
   // which is the number the 0.7° floor is about. Regular and bold only: lighter
@@ -190,11 +236,20 @@ export class Surface {
   // Pad the hit box, not the drawing: the mark may be smaller than 3° of his
   // field, the thing that answers a ray may not be. Every region in the room
   // grows about its own centre to that floor here, once, rather than each
-  // caller being trusted to remember it.
+  // caller being trusted to remember it — and it is measured in true arc where
+  // it sits, so a region near an edge grows by more pixels than one in the
+  // middle to reach the same 3°.
   region(x, y, w, h, action) {
-    const min = this.px(HIT.min);
-    if (w < min) { x -= (min - w) / 2; w = min; }
-    if (h < min) { y -= (min - h) / 2; h = min; }
+    if (this.degX(x, x + w) < BUILD.min) {
+      const mid = x + w / 2;
+      x = this.atDegX(mid, -BUILD.min / 2);
+      w = this.atDegX(mid, BUILD.min / 2) - x;
+    }
+    if (this.degY(y, y + h) < BUILD.min) {
+      const mid = y + h / 2;
+      y = this.atDegY(mid, -BUILD.min / 2);
+      h = this.atDegY(mid, BUILD.min / 2) - y;
+    }
     this.hits.push({ x, y, w, h, action });
   }
 
@@ -221,8 +276,12 @@ export class Surface {
   chrome(g, subtitle, who) {
     const w = this.canvas.width;
     const pad = this.px(0.7);
-    const box = this.px(HIT.min);                 // the close target, 3° square
-    const barH = Math.max(box, this.px(TYPE.head) * 1.7);
+    // Both of these are built by walking BACK from the right-hand edge in true
+    // arc, because that corner is where they live and where a degree is dearest.
+    const boxL = this.atDegX(w, -BUILD.min);      // left edge of the 3° close box
+    const grabR = this.atDegX(boxL, -BUILD.gap);  // and 1.6° of clear air before it
+    const box = w - boxL;
+    const barH = Math.max(this.atDegY(0, BUILD.min), this.px(TYPE.head) * 1.7);
     g.fillStyle = this.front ? '#1b2531' : '#131a23';
     g.fillRect(0, 0, w, barH);
 
@@ -230,7 +289,7 @@ export class Surface {
     // running under it — the 1.6° between them has to stay empty to be a gap.
     g.save();
     g.beginPath();
-    g.rect(0, 0, w - box - this.px(HIT.gap), barH);
+    g.rect(0, 0, grabR, barH);
     g.clip();
     let x = pad;
     // Who this conversation is with, where the 2D board puts it: the face first,
@@ -262,13 +321,13 @@ export class Surface {
       g.moveTo(cx - r, cy - r); g.lineTo(cx + r, cy + r);
       g.moveTo(cx + r, cy - r); g.lineTo(cx - r, cy + r);
       g.stroke();
-      this.region(w - box, 0, box, barH, { kind: 'close' });
+      this.region(boxL, 0, box, barH, { kind: 'close' });
     }
     // The bar itself is the handle: point anywhere along it and squeeze to move
     // the window, which is the one gesture every window manager already taught
     // everybody. It ends a clear 1.6° before the close mark, so the gesture that
     // moves the window is never the gesture that throws it away.
-    this.region(0, 0, w - box - this.px(HIT.gap), barH, { kind: 'grab' });
+    this.region(0, 0, grabR, barH, { kind: 'grab' });
     return barH;
   }
 

@@ -22,7 +22,7 @@
 
 import { Surface, wrap, COL } from './surface.js';
 import { face } from './faces.js';
-import { PANEL, TYPE, HIT, BAR, FRONT, eyeDistance, placeWindow } from './room.js';
+import { PANEL, TYPE, BUILD, BAR, FRONT, eyeDistance, placeWindow } from './room.js';
 
 const WINDOW_D = eyeDistance(placeWindow(0, 1));   // where a window first lands
 
@@ -51,22 +51,26 @@ export class LieutenantBar extends Surface {
     const cell = w / Math.max(1, lts.length);
     // ponytail: past ~11 lieutenants a cell is under the 3° + 1.6° a hand can
     // land on. Page the bar when that is a real number of lieutenants.
-    const gap = this.px(HIT.gap);
     const r = Math.min(this.px(1.7), h * 0.28);
     lts.forEach((l, i) => {
       const x = i * cell;
       const owed = !!l.chatOwed;
+      // The plate's edges are walked in true arc from the cell's, so the air
+      // between two lieutenants is 1.6° at the end of the bar as well as in the
+      // middle of it — a cell out at the edge is worth fewer degrees per pixel.
+      const left = this.atDegX(x, BUILD.gap / 2);
+      const plate = this.atDegX(x + cell, -BUILD.gap / 2) - left;
       g.save();
       g.beginPath();
       g.rect(x, 0, cell, h);
       g.clip();                       // a long name stays in its own cell
       g.fillStyle = owed ? '#1d2836' : '#111823';
-      g.fillRect(x + gap / 2, this.px(0.2), cell - gap, h - this.px(0.4));
+      g.fillRect(left, this.px(0.2), plate, h - this.px(0.4));
       // A lieutenant waiting on the captain is the only thing in this room that
       // is allowed to shout, because it is the only thing that is his move.
       if (owed) {
         g.fillStyle = COL.accent;
-        g.fillRect(x + gap / 2, this.px(0.2), this.px(0.22), h - this.px(0.4));
+        g.fillRect(left, this.px(0.2), this.px(0.22), h - this.px(0.4));
       }
       face(g, l.avatar, x + cell / 2, h * 0.38, r, l.color || COL.accent);
       g.fillStyle = owed ? COL.text : COL.dim;
@@ -77,7 +81,7 @@ export class LieutenantBar extends Surface {
       g.restore();
       // The plate is what he aims at, and the 1.6° between two plates is what
       // keeps the wrong lieutenant from answering.
-      this.region(x + gap / 2, 0, cell - gap, h, { kind: 'lieutenant', id: l.id });
+      this.region(left, 0, plate, h, { kind: 'lieutenant', id: l.id });
     });
     this.end();
   }
@@ -94,7 +98,7 @@ export class BoardPanel extends Surface {
     const g = this.begin();
     const top = this.chrome(g, doc.title || '');
     const w = this.canvas.width, h = this.canvas.height;
-    const pad = this.px(0.8), gap = this.px(HIT.gap), floor = this.px(HIT.min);
+    const pad = this.px(0.8);
     const lh = this.line(TYPE.body);
     const cols = (doc.columns || []).filter((c) => c.id !== 'peer');
     const cw = w / Math.max(1, cols.length);
@@ -102,6 +106,11 @@ export class BoardPanel extends Surface {
 
     cols.forEach((col, ci) => {
       const x = ci * cw;
+      // A card in this column and the card beside it in the next one are two
+      // targets, so the column edges owe each other 1.6° the same way two
+      // lieutenants do — half of it from each side.
+      const boxL = this.atDegX(x, BUILD.gap / 2);
+      const boxW = this.atDegX(x + cw, -BUILD.gap / 2) - boxL;
       const mine = (doc.cards || []).filter((c) => c.column === col.id);
       g.fillStyle = COL.faint;
       g.font = this.font(TYPE.meta, 600);
@@ -117,25 +126,26 @@ export class BoardPanel extends Surface {
         g.font = this.font(TYPE.body);
         const lines = wrap(g, c.title || c.id, cw - pad * 2 - this.px(0.8)).slice(0, 2);
         // A card is a target before it is a label: never shorter than 3°, even
-        // when its title is one line.
-        const boxH = Math.max(floor, lines.length * lh + this.px(0.6));
-        if (y + boxH > h - gap) {
+        // when its title is one line — and 3° low down the board is more pixels
+        // than 3° at the top, so the floor is taken from where this box sits.
+        const boxH = Math.max(this.atDegY(y, BUILD.min) - y, lines.length * lh + this.px(0.6));
+        if (y + boxH > h - this.px(BUILD.gap)) {
           g.fillStyle = COL.faint;
           g.font = this.font(TYPE.meta);
           g.fillText('+' + (mine.length - mine.indexOf(c)) + ' more', x + pad, y + this.px(1.2));
           break;
         }
         g.fillStyle = owed ? '#18222e' : '#101720';
-        g.fillRect(x + pad * 0.5, y, cw - pad, boxH);
+        g.fillRect(boxL, y, boxW, boxH);
         g.fillStyle = ltColour.get(c.owner) || COL.dim;
-        g.fillRect(x + pad * 0.5, y, this.px(0.18), boxH);
+        g.fillRect(boxL, y, this.px(0.18), boxH);
         const dot = this.px(0.22);
         if (working) { g.fillStyle = COL.good; g.beginPath(); g.arc(x + cw - pad, y + this.px(0.7), dot, 0, Math.PI * 2); g.fill(); }
         if (owed) { g.fillStyle = COL.accent; g.beginPath(); g.arc(x + cw - pad, y + this.px(0.7), dot, 0, Math.PI * 2); g.fill(); }
         g.fillStyle = owed ? COL.text : COL.dim;
         lines.forEach((ln, i) => g.fillText(ln, x + pad, y + this.px(0.3) + lh * (i + 0.78)));
-        this.region(x + pad * 0.5, y, cw - pad, boxH, { kind: 'card', id: c.id });
-        y += boxH + gap;
+        this.region(boxL, y, boxW, boxH, { kind: 'card', id: c.id });
+        y = this.atDegY(y + boxH, BUILD.gap);      // 1.6° of air, measured there
       }
     });
     this.end();

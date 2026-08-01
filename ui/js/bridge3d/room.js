@@ -34,8 +34,15 @@ export const CAP = 0.72;            // cap height as a fraction of the em box
 export const TYPE = { head: 2.0, body: 1.4, meta: 1.15 };
 
 // A target under 3° is a target you stab at; two of them closer than 1.6° apart
-// are one target that sometimes does the other thing.
+// are one target that sometimes does the other thing. These are the FLOORS —
+// what a measurement is held against.
 export const HIT = { min: 3.0, gap: 1.6 };
+
+// And this is what the room BUILDS to. A box constructed to land exactly on
+// 3.000° lands a rounding error under it about half the time, and
+// fractionally-below is not met — so every target is cut a hair over its floor
+// and the floor stays the floor.
+export const BUILD = { min: HIT.min + 0.06, gap: HIT.gap + 0.06 };
 
 // Nothing readable comes nearer than NEAR — discomfort rises exponentially as
 // content approaches the face — and past FAR the eyes are working at a depth
@@ -98,11 +105,16 @@ export const BAR = { x: 0, y: EYE - 0.62, z: -1.00 };
 //
 // Rows step back and down together, and by little: the far row still has to land
 // inside FAR, or the windows he is not working on become the unreadable ones.
+// Which is also why there is a LAST row — a fourth would have landed at 2.20 m
+// with its bottom edge under the floor. Past it the windows crowd into the row
+// he already has rather than going further away, which is what "they stack"
+// meant all along.
 export function placeWindow(index, count) {
-  const perRow = 3;
-  const row = Math.floor(index / perRow);
-  const col = index % perRow;
-  const inRow = Math.min(perRow, count - row * perRow);
+  const perRow = 3, rows = 3;
+  const row = Math.min(rows - 1, Math.floor(index / perRow));
+  const col = index - row * perRow;
+  const left = count - row * perRow;
+  const inRow = Math.max(1, row === rows - 1 ? left : Math.min(perRow, left));
   const spread = 60;                                    // degrees across a row
   const step = inRow > 1 ? spread / (inRow - 1) : 0;
   const a = ((inRow > 1 ? -spread / 2 + col * step : 0)) * Math.PI / 180;

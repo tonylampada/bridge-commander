@@ -1,10 +1,15 @@
-// The room's policy — where a window stands, and what standing in front means.
-// Everything else in bridge3d needs a WebGL context and a head, and is checked
-// by wearing it.
+// The room's policy — where a window stands, and what standing in front means —
+// and, at the bottom, what the panels actually PAINT, measured in arc.
 //
 // The rules under test are the captain's, stated by him: the lieutenants are
 // always in front, the board is where he decides what to look at next, the
 // windows are the work, and nothing is ever put behind his head.
+//
+// A room only needs a head for the parts that are a head: the renderer and the
+// session. The painting is a 2D canvas, and a 2D canvas can be faked, which is
+// how the region arithmetic gets checked here rather than by wearing it. A test
+// that only asserts the CONSTANTS say 3° cannot fail when the box drawn from
+// them arrives at 2.58°, and that is exactly what shipped once.
 
 const test = require('node:test');
 const assert = require('node:assert');
@@ -15,7 +20,7 @@ const load = (f) => import(path.join(UI, f));
 
 test('every window stands in front of him — never behind, never inside him', async () => {
   const { placeWindow, EYE } = await load('room.js');
-  for (let count = 1; count <= 9; count++) {
+  for (let count = 1; count <= 12; count++) {
     for (let i = 0; i < count; i++) {
       const p = placeWindow(i, count);
       assert.ok(p.z < -0.6, `window ${i}/${count} is not in front (z=${p.z})`);
@@ -32,13 +37,18 @@ test('every window stands in front of him — never behind, never inside him', a
 
 test('windows do not land on top of each other', async () => {
   const { placeWindow } = await load('room.js');
-  const seen = [];
-  for (let i = 0; i < 6; i++) {
-    const p = placeWindow(i, 6);
-    for (const q of seen) {
-      assert.ok(Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) > 0.25, 'two windows in the same place');
+  // Past nine they crowd into the last row rather than starting a fourth, so
+  // this walks well beyond the rows to catch the crowding turning into a pile.
+  for (let count = 1; count <= 12; count++) {
+    const seen = [];
+    for (let i = 0; i < count; i++) {
+      const p = placeWindow(i, count);
+      for (const q of seen) {
+        assert.ok(Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) > 0.25,
+          `two of ${count} windows in the same place`);
+      }
+      seen.push(p);
     }
-    seen.push(p);
   }
 });
 
@@ -110,7 +120,7 @@ async function places() {
     { name: 'board, in front', panel: PANEL.board, at: FRONT, primary: true },
     { name: 'board, pushed back', panel: PANEL.board, at: BACK },
   ];
-  for (let count = 1; count <= 9; count++) {
+  for (let count = 1; count <= 12; count++) {
     for (let i = 0; i < count; i++) {
       const at = placeWindow(i, count);
       out.push({ name: `card window ${i}/${count}`, panel: PANEL.card, at });
@@ -237,4 +247,134 @@ test('arc and metres convert both ways', async () => {
   }
   // The small-angle rule of thumb the skill quotes: 57.3 × size / distance.
   assert.ok(Math.abs(arcDeg(0.04, 1.5) - 57.3 * 0.04 / 1.5) < 0.01);
+});
+
+// ---- what the panels actually paint -----------------------------------------
+//
+// Everything above reasons about the room from its constants. This part builds
+// the real panels, paints them with a real board, and measures the regions they
+// declared — with atan, from the region's own edges, no average and no
+// small-angle shortcut. It is the only kind of check that can tell 3.0° asked
+// for from 2.58° delivered.
+
+// A 2D context with no pixels in it. The paint code only ever asks it to draw
+// and to measure text, and the regions come out of arithmetic, not out of paint.
+function fakeCanvas() {
+  const canvas = { width: 300, height: 150 };
+  const ctx = {
+    canvas, font: '10px x', textAlign: 'left', textBaseline: 'alphabetic',
+    fillStyle: '', strokeStyle: '', lineWidth: 1,
+    measureText(t) {
+      const m = /([\d.]+)px/.exec(ctx.font);
+      return { width: String(t).length * (m ? +m[1] : 10) * 0.52 };
+    },
+  };
+  for (const m of ['fillRect', 'clearRect', 'fillText', 'strokeText', 'beginPath', 'closePath',
+    'moveTo', 'lineTo', 'arc', 'rect', 'fill', 'stroke', 'clip', 'save', 'restore', 'drawImage']) ctx[m] = () => {};
+  canvas.getContext = () => ctx;
+  return canvas;
+}
+
+async function paintKit() {
+  globalThis.document = { createElement: () => fakeCanvas() };
+  globalThis.Image = class { };            // the sheet never lands: faces fall back to dots
+  const P = await load('panels.js');
+  const R = await load('room.js');
+  const lts = [
+    { id: 'monica', name: 'Monica', color: '#7c5cff', avatar: 12, chatOwed: true, chat: [{ author: 'user', text: 'status on the oauth card?', ts: new Date().toISOString() }, { author: 'monica', text: 'worker is mid-flight, PR up as a draft', ts: new Date().toISOString() }] },
+    { id: 'rex', name: 'Rex', color: '#2aa876', avatar: 33, chat: [] },
+    { id: 'ada', name: 'Ada', color: '#d8a03c', avatar: null, chat: [] },
+    { id: 'quill', name: 'Quill', color: '#e05c78', avatar: 21, chat: [] },
+  ];
+  const columns = [{ id: 'backlog', title: '📋 Backlog' }, { id: 'working', title: '🔨 Working' },
+    { id: 'review', title: '👀 Your review' }, { id: 'peer', title: '🤝 Peer review' }];
+  const cards = [];
+  for (let i = 0; i < 18; i++) {
+    cards.push({
+      id: 'c' + i, column: columns[i % 3].id, owner: lts[i % 4].id, type: 'implementation',
+      title: i % 3 ? 'a short one' : 'a card title long enough to wrap onto a second line and then some',
+      body: '# Repro\n1. sign in\n2. wait\n\n- [ ] a plan line', labels: ['infra'],
+      status: i % 2 ? { owed: true } : { worker: { state: 'live' } },
+      thread: [{ author: 'user', text: 'how is it going', ts: new Date().toISOString() }],
+    });
+  }
+  return { P, R, doc: { title: 'Fake Environment', columns, cards, lieutenants: lts } };
+}
+
+// The region's true arc, from its own edges. Deliberately re-derived here rather
+// than asked of the surface: a measurement taken with the code under test is not
+// a measurement.
+function trueArc(s, r) {
+  const D = 180 / Math.PI, d = s.distanceM;
+  const u = (x) => (x / s.canvas.width - 0.5) * s.widthM;
+  const v = (y) => (0.5 - y / s.canvas.height) * s.heightM;
+  return {
+    w: (Math.atan(u(r.x + r.w) / d) - Math.atan(u(r.x) / d)) * D,
+    h: (Math.atan(v(r.y) / d) - Math.atan(v(r.y + r.h) / d)) * D,
+  };
+}
+
+// Every panel the room can put in front of him, painted where it really stands.
+async function paintedPanels() {
+  const { P, R, doc } = await paintKit();
+  const out = [];
+  const bar = new P.LieutenantBar(); bar.paint(doc);
+  out.push({ name: 'lieutenant bar', s: bar });
+  for (const [where, at] of [['front', R.FRONT], ['pushed back', R.BACK]]) {
+    const board = new P.BoardPanel();
+    board.setDistance(R.eyeDistance({ x: 0, y: at.y, z: at.z }));
+    board.paint(doc);
+    out.push({ name: 'board, ' + where, s: board });
+  }
+  for (let count = 1; count <= 12; count++) {
+    for (let i = 0; i < count; i++) {
+      const d = R.eyeDistance(R.placeWindow(i, count));
+      const card = new P.CardWindow('c3');
+      card.setDistance(d); card.paint(doc);
+      out.push({ name: `card window ${i}/${count}`, s: card });
+      const chat = new P.ChatWindow('monica');
+      chat.setDistance(d); chat.paint(doc);
+      out.push({ name: `chat window ${i}/${count}`, s: chat });
+    }
+  }
+  return { out, R };
+}
+
+test('every painted region is a 3° target, measured in true arc where it sits', async () => {
+  const { out, R } = await paintedPanels();
+  let checked = 0;
+  for (const { name, s } of out) {
+    assert.ok(s.hits.length, `${name} painted nothing to point at`);
+    for (const r of s.hits) {
+      const a = trueArc(s, r);
+      checked++;
+      assert.ok(a.w >= R.HIT.min, `${name}: ${r.action.kind} is ${a.w.toFixed(2)}° wide, floor is ${R.HIT.min}°`);
+      assert.ok(a.h >= R.HIT.min, `${name}: ${r.action.kind} is ${a.h.toFixed(2)}° tall, floor is ${R.HIT.min}°`);
+    }
+  }
+  assert.ok(checked > 180, `only ${checked} regions measured — the walk is not covering the room`);
+});
+
+test('and no two of them are closer than 1.6°, nor on top of each other', async () => {
+  const { out, R } = await paintedPanels();
+  for (const { name, s } of out) {
+    const D = 180 / Math.PI, d = s.distanceM;
+    const u = (x) => Math.atan((x / s.canvas.width - 0.5) * s.widthM / d) * D;
+    const v = (y) => Math.atan((0.5 - y / s.canvas.height) * s.heightM / d) * D;
+    const box = (r) => ({ l: u(r.x), r: u(r.x + r.w), t: v(r.y), b: v(r.y + r.h), kind: r.action.kind });
+    const boxes = s.hits.map(box);
+    for (let i = 0; i < boxes.length; i++) {
+      for (let j = i + 1; j < boxes.length; j++) {
+        const a = boxes[i], b = boxes[j];
+        // Clear air between them on each axis; null where they overlap on it.
+        const gapX = a.r <= b.l ? b.l - a.r : (b.r <= a.l ? a.l - b.r : null);
+        const gapY = a.b >= b.t ? a.b - b.t : (b.b >= a.t ? b.b - a.t : null);
+        const apart = Math.max(gapX == null ? -Infinity : gapX, gapY == null ? -Infinity : gapY);
+        assert.ok(gapX != null || gapY != null,
+          `${name}: ${a.kind} and ${b.kind} are on top of each other`);
+        assert.ok(apart >= R.HIT.gap,
+          `${name}: ${a.kind} and ${b.kind} are ${apart.toFixed(2)}° apart, floor is ${R.HIT.gap}°`);
+      }
+    }
+  }
 });
