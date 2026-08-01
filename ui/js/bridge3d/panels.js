@@ -22,7 +22,7 @@
 
 import { Surface, wrap, COL } from './surface.js';
 import { face } from './faces.js';
-import { PANEL, TYPE, BUILD, BAR, FRONT, eyeDistance, placeWindow } from './room.js';
+import { PANEL, TYPE, BUILD, BAR, FRONT, barWidth, eyeDistance, placeWindow } from './room.js';
 
 const WINDOW_D = eyeDistance(placeWindow(0, 1));   // where a window first lands
 
@@ -45,25 +45,29 @@ export class LieutenantBar extends Surface {
   }
 
   paint(doc) {
+    const lts = doc.lieutenants || [];
+    // The bar is as wide as the lieutenants need. A fixed width would keep the
+    // plates at 3° by taking it out of the air between them, which is the same
+    // mis-hit by another route — so the bar grows and the floors both hold.
+    const want = barWidth(lts.length, this.distanceM);
+    if (Math.abs(want - this.widthM) > 0.005) this.resize(want, this.heightM);
+
     const g = this.begin();
     const w = this.canvas.width, h = this.canvas.height;
-    const lts = doc.lieutenants || [];
-    const cell = w / Math.max(1, lts.length);
-    // ponytail: past ~11 lieutenants a cell is under the 3° + 1.6° a hand can
-    // land on. Page the bar when that is a real number of lieutenants.
-    const r = Math.min(this.px(1.7), h * 0.28);
+    // Cells are equal in DEGREES, not in pixels: an equal slice of canvas out at
+    // the end of the bar is a smaller slice of him, and every lieutenant is
+    // owed the same target.
+    const step = this.degX(0, w) / Math.max(1, lts.length);
     lts.forEach((l, i) => {
-      const x = i * cell;
       const owed = !!l.chatOwed;
-      // The plate's edges are walked in true arc from the cell's, so the air
-      // between two lieutenants is 1.6° at the end of the bar as well as in the
-      // middle of it — a cell out at the edge is worth fewer degrees per pixel.
-      const left = this.atDegX(x, BUILD.gap / 2);
-      const plate = this.atDegX(x + cell, -BUILD.gap / 2) - left;
+      const left = this.atDegX(0, i * step + BUILD.gap / 2);
+      const plate = this.atDegX(0, (i + 1) * step - BUILD.gap / 2) - left;
+      const mid = left + plate / 2;
+      const r = Math.min(this.px(1.7), h * 0.28, plate * 0.4);
       g.save();
       g.beginPath();
-      g.rect(x, 0, cell, h);
-      g.clip();                       // a long name stays in its own cell
+      g.rect(left, 0, plate, h);
+      g.clip();                       // a long name stays on its own plate
       g.fillStyle = owed ? '#1d2836' : '#111823';
       g.fillRect(left, this.px(0.2), plate, h - this.px(0.4));
       // A lieutenant waiting on the captain is the only thing in this room that
@@ -72,11 +76,11 @@ export class LieutenantBar extends Surface {
         g.fillStyle = COL.accent;
         g.fillRect(left, this.px(0.2), this.px(0.22), h - this.px(0.4));
       }
-      face(g, l.avatar, x + cell / 2, h * 0.38, r, l.color || COL.accent);
+      face(g, l.avatar, mid, h * 0.38, r, l.color || COL.accent);
       g.fillStyle = owed ? COL.text : COL.dim;
       g.font = this.font(TYPE.meta, 600);
       g.textAlign = 'center';
-      g.fillText(l.name || l.id, x + cell / 2, h - this.px(0.5));
+      g.fillText(l.name || l.id, mid, h - this.px(0.5));
       g.textAlign = 'left';
       g.restore();
       // The plate is what he aims at, and the 1.6° between two plates is what
@@ -108,13 +112,17 @@ export class BoardPanel extends Surface {
       const x = ci * cw;
       // A card in this column and the card beside it in the next one are two
       // targets, so the column edges owe each other 1.6° the same way two
-      // lieutenants do — half of it from each side.
+      // lieutenants do — half of it from each side. EVERYTHING a card paints is
+      // laid out from boxL/boxW below, never from the raw column: the plate is
+      // narrower than the column, so a title placed at the column's edge starts
+      // outside its own card and the owner's stripe runs through the first
+      // letter of it.
       const boxL = this.atDegX(x, BUILD.gap / 2);
       const boxW = this.atDegX(x + cw, -BUILD.gap / 2) - boxL;
       const mine = (doc.cards || []).filter((c) => c.column === col.id);
       g.fillStyle = COL.faint;
       g.font = this.font(TYPE.meta, 600);
-      g.fillText((col.title || col.id) + '  ' + mine.length, x + pad, top + this.px(1.6));
+      g.fillText((col.title || col.id) + '  ' + mine.length, boxL + pad, top + this.px(1.6));
       g.strokeStyle = COL.edge;
       g.lineWidth = Math.max(1, this.px(0.06));
       if (ci) { g.beginPath(); g.moveTo(x, top); g.lineTo(x, h); g.stroke(); }
@@ -124,7 +132,7 @@ export class BoardPanel extends Surface {
         const owed = c.status && (c.status.owed || c.status.unread);
         const working = c.status && c.status.worker && c.status.worker.state === 'live';
         g.font = this.font(TYPE.body);
-        const lines = wrap(g, c.title || c.id, cw - pad * 2 - this.px(0.8)).slice(0, 2);
+        const lines = wrap(g, c.title || c.id, boxW - pad * 2 - this.px(0.8)).slice(0, 2);
         // A card is a target before it is a label: never shorter than 3°, even
         // when its title is one line — and 3° low down the board is more pixels
         // than 3° at the top, so the floor is taken from where this box sits.
@@ -132,7 +140,7 @@ export class BoardPanel extends Surface {
         if (y + boxH > h - this.px(BUILD.gap)) {
           g.fillStyle = COL.faint;
           g.font = this.font(TYPE.meta);
-          g.fillText('+' + (mine.length - mine.indexOf(c)) + ' more', x + pad, y + this.px(1.2));
+          g.fillText('+' + (mine.length - mine.indexOf(c)) + ' more', boxL + pad, y + this.px(1.2));
           break;
         }
         g.fillStyle = owed ? '#18222e' : '#101720';
@@ -140,10 +148,11 @@ export class BoardPanel extends Surface {
         g.fillStyle = ltColour.get(c.owner) || COL.dim;
         g.fillRect(boxL, y, this.px(0.18), boxH);
         const dot = this.px(0.22);
-        if (working) { g.fillStyle = COL.good; g.beginPath(); g.arc(x + cw - pad, y + this.px(0.7), dot, 0, Math.PI * 2); g.fill(); }
-        if (owed) { g.fillStyle = COL.accent; g.beginPath(); g.arc(x + cw - pad, y + this.px(0.7), dot, 0, Math.PI * 2); g.fill(); }
+        const dotX = boxL + boxW - pad;
+        if (working) { g.fillStyle = COL.good; g.beginPath(); g.arc(dotX, y + this.px(0.7), dot, 0, Math.PI * 2); g.fill(); }
+        if (owed) { g.fillStyle = COL.accent; g.beginPath(); g.arc(dotX, y + this.px(0.7), dot, 0, Math.PI * 2); g.fill(); }
         g.fillStyle = owed ? COL.text : COL.dim;
-        lines.forEach((ln, i) => g.fillText(ln, x + pad, y + this.px(0.3) + lh * (i + 0.78)));
+        lines.forEach((ln, i) => g.fillText(ln, boxL + pad, y + this.px(0.3) + lh * (i + 0.78)));
         this.region(boxL, y, boxW, boxH, { kind: 'card', id: c.id });
         y = this.atDegY(y + boxH, BUILD.gap);      // 1.6° of air, measured there
       }

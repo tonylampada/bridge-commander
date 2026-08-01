@@ -240,16 +240,21 @@ export class Surface {
   // it sits, so a region near an edge grows by more pixels than one in the
   // middle to reach the same 3°.
   region(x, y, w, h, action) {
-    if (this.degX(x, x + w) < BUILD.min) {
+    const E = 1e-9;                    // already exactly at the floor is not under it
+    if (this.degX(x, x + w) < BUILD.min - E) {
       const mid = x + w / 2;
       x = this.atDegX(mid, -BUILD.min / 2);
       w = this.atDegX(mid, BUILD.min / 2) - x;
     }
-    if (this.degY(y, y + h) < BUILD.min) {
+    if (this.degY(y, y + h) < BUILD.min - E) {
       const mid = y + h / 2;
       y = this.atDegY(mid, -BUILD.min / 2);
       h = this.atDegY(mid, BUILD.min / 2) - y;
     }
+    // A region that grew off the edge of the canvas is a region whose last
+    // degree cannot be hit — the ray's uv stops at the panel. Slide it back on.
+    x = Math.max(0, Math.min(x, this.canvas.width - w));
+    y = Math.max(0, Math.min(y, this.canvas.height - h));
     this.hits.push({ x, y, w, h, action });
   }
 

@@ -117,6 +117,9 @@ async function places() {
   const { PANEL, BAR, FRONT, BACK, placeWindow, EYE } = R;
   const out = [
     { name: 'lieutenant bar', panel: PANEL.bar, at: BAR },
+    // The bar grows with the lieutenants; the widest it goes is a panel too.
+    { name: 'lieutenant bar, full', at: BAR,
+      panel: { widthM: R.barWidth(R.BAR_LIMIT, R.eyeDistance(BAR)), heightM: PANEL.bar.heightM } },
     { name: 'board, in front', panel: PANEL.board, at: FRONT, primary: true },
     { name: 'board, pushed back', panel: PANEL.board, at: BACK },
   ];
@@ -257,20 +260,48 @@ test('arc and metres convert both ways', async () => {
 // small-angle shortcut. It is the only kind of check that can tell 3.0° asked
 // for from 2.58° delivered.
 
-// A 2D context with no pixels in it. The paint code only ever asks it to draw
-// and to measure text, and the regions come out of arithmetic, not out of paint.
+// A 2D context with no pixels in it, which WRITES DOWN what it was asked to
+// draw. Regions come out of arithmetic and can be checked on their own; a
+// painted string cannot — the only record of where a glyph landed is the call
+// that put it there. So every mark is kept, clipped the way the real context
+// would clip it, and checked against the box it is supposed to be inside.
 function fakeCanvas() {
-  const canvas = { width: 300, height: 150 };
+  const canvas = { width: 300, height: 150, marks: [] };
+  const clipped = [];
+  let clip = null, pending = null, at = null;
+  const size = () => { const m = /([\d.]+)px/.exec(ctx.font); return m ? +m[1] : 10; };
+  const cut = (a, b) => {
+    if (!b) return a;
+    const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
+    const r = Math.min(a.x + a.w, b.x + b.w), t = Math.min(a.y + a.h, b.y + b.h);
+    return r <= x || t <= y ? null : { x, y, w: r - x, h: t - y, line: a.line, what: a.what };
+  };
+  const put = (what, x, y, w, h, line) => {
+    const m = cut({ x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h), line, what }, clip);
+    if (m) canvas.marks.push(m);
+  };
   const ctx = {
     canvas, font: '10px x', textAlign: 'left', textBaseline: 'alphabetic',
     fillStyle: '', strokeStyle: '', lineWidth: 1,
-    measureText(t) {
-      const m = /([\d.]+)px/.exec(ctx.font);
-      return { width: String(t).length * (m ? +m[1] : 10) * 0.52 };
+    measureText(t) { return { width: String(t).length * size() * 0.52 }; },
+    fillText(t, x, y) {
+      const s = size(), w = ctx.measureText(t).width;
+      if (!String(t).length) return;
+      const left = ctx.textAlign === 'center' ? x - w / 2 : (ctx.textAlign === 'right' ? x - w : x);
+      put(String(t), left, y - s * 0.75, w, s);           // baseline to em box
     },
+    fillRect: (x, y, w, h) => put('rect', x, y, w, h),
+    arc: (cx, cy, r) => put('arc', cx - r, cy - r, r * 2, r * 2),
+    drawImage: (img, sx, sy, sw, sh, dx, dy, dw, dh) => put('image', dx, dy, dw, dh),
+    moveTo: (x, y) => { at = [x, y]; },
+    lineTo(x, y) { if (at) put('line', at[0], at[1], x - at[0], y - at[1], true); at = [x, y]; },
+    rect: (x, y, w, h) => { pending = { x, y, w, h }; },
+    beginPath() { pending = null; at = null; },
+    clip() { if (pending) clip = cut(pending, clip); },
+    save() { clipped.push(clip); },
+    restore() { clip = clipped.length ? clipped.pop() : null; },
   };
-  for (const m of ['fillRect', 'clearRect', 'fillText', 'strokeText', 'beginPath', 'closePath',
-    'moveTo', 'lineTo', 'arc', 'rect', 'fill', 'stroke', 'clip', 'save', 'restore', 'drawImage']) ctx[m] = () => {};
+  for (const m of ['clearRect', 'strokeText', 'closePath', 'fill', 'stroke']) ctx[m] = () => {};
   canvas.getContext = () => ctx;
   return canvas;
 }
@@ -318,22 +349,35 @@ function trueArc(s, r) {
 async function paintedPanels() {
   const { P, R, doc } = await paintKit();
   const out = [];
-  const bar = new P.LieutenantBar(); bar.paint(doc);
+  // The bar, at every number of lieutenants it claims to hold. This is where a
+  // fixed-width bar used to keep its 3° plates by eating the air between them.
+  for (let n = 1; n <= R.BAR_LIMIT; n++) {
+    const many = Array.from({ length: n }, (_, i) => ({
+      id: 'lt' + i, color: '#7c5cff', avatar: i % 2 ? i : null, chatOwed: i % 4 === 0,
+      name: i % 3 ? 'Lt' + i : 'a rather long lieutenant name',
+    }));
+    const bar = new P.LieutenantBar();
+    bar.canvas.marks = [];
+    bar.paint({ ...doc, lieutenants: many });
+    out.push({ name: `lieutenant bar, ${n} of them`, s: bar });
+  }
+  const bar = new P.LieutenantBar(); bar.canvas.marks = []; bar.paint(doc);
   out.push({ name: 'lieutenant bar', s: bar });
   for (const [where, at] of [['front', R.FRONT], ['pushed back', R.BACK]]) {
     const board = new P.BoardPanel();
     board.setDistance(R.eyeDistance({ x: 0, y: at.y, z: at.z }));
+    board.canvas.marks = [];
     board.paint(doc);
-    out.push({ name: 'board, ' + where, s: board });
+    out.push({ name: 'board, ' + where, s: board, doc });
   }
   for (let count = 1; count <= 12; count++) {
     for (let i = 0; i < count; i++) {
       const d = R.eyeDistance(R.placeWindow(i, count));
       const card = new P.CardWindow('c3');
-      card.setDistance(d); card.paint(doc);
+      card.setDistance(d); card.canvas.marks = []; card.paint(doc);
       out.push({ name: `card window ${i}/${count}`, s: card });
       const chat = new P.ChatWindow('monica');
-      chat.setDistance(d); chat.paint(doc);
+      chat.setDistance(d); chat.canvas.marks = []; chat.paint(doc);
       out.push({ name: `chat window ${i}/${count}`, s: chat });
     }
   }
@@ -374,6 +418,45 @@ test('and no two of them are closer than 1.6°, nor on top of each other', async
           `${name}: ${a.kind} and ${b.kind} are on top of each other`);
         assert.ok(apart >= R.HIT.gap,
           `${name}: ${a.kind} and ${b.kind} are ${apart.toFixed(2)}° apart, floor is ${R.HIT.gap}°`);
+      }
+    }
+  }
+});
+
+// A mark and a region can relate three ways: the mark is inside the region, the
+// mark contains it (a panel background, the chrome bar), or they are strangers.
+// Anything else is a mark hanging half off the box it belongs to.
+const overlaps = (m, r) => m.x < r.x + r.w && r.x < m.x + m.w && m.y < r.y + r.h && r.y < m.y + m.h;
+const inside = (m, r, e = 0.5) => m.x >= r.x - e && m.y >= r.y - e
+  && m.x + m.w <= r.x + r.w + e && m.y + m.h <= r.y + r.h + e;
+
+test('nothing is painted half on and half off the box it belongs to', async () => {
+  const { out } = await paintedPanels();
+  for (const { name, s } of out) {
+    for (const m of s.canvas.marks) {
+      for (const r of s.hits) {
+        if (!overlaps(m, r) || inside(m, r) || inside(r, m)) continue;
+        assert.fail(`${name}: "${m.what}" at x ${m.x.toFixed(1)}–${(m.x + m.w).toFixed(1)} hangs off `
+          + `the ${r.action.kind} box at ${r.x.toFixed(1)}–${(r.x + r.w).toFixed(1)}`);
+      }
+    }
+  }
+});
+
+test('what a card paints lands on that card, not in the gutter beside it', async () => {
+  const { out, R } = await paintedPanels();
+  for (const { name, s } of out) {
+    const half = s.px(R.HIT.gap) / 2;
+    for (const r of s.hits) {
+      for (const m of s.canvas.marks) {
+        if (m.line || inside(r, m)) continue;          // lines and backgrounds are not content
+        const my = m.y + m.h / 2;
+        if (my < r.y || my > r.y + r.h) continue;      // not on this row at all
+        const near = m.x + m.w > r.x - half && m.x < r.x + r.w + half;
+        if (!near) continue;                           // somebody else's business
+        assert.ok(inside(m, r),
+          `${name}: "${m.what}" at x ${m.x.toFixed(1)}–${(m.x + m.w).toFixed(1)} is not on its own `
+          + `${r.action.kind} box at ${r.x.toFixed(1)}–${(r.x + r.w).toFixed(1)}`);
       }
     }
   }

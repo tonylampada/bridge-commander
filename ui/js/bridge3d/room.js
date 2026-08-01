@@ -98,6 +98,25 @@ export const BACK = { z: -1.90, y: EYE - 0.36, dim: 0.55 };
 // be sitting on top of the work.
 export const BAR = { x: 0, y: EYE - 0.62, z: -1.00 };
 
+// How wide the bar has to be to give every lieutenant a plate he can hit with
+// air beside it. A fixed-width bar keeps its 3° plates as the count climbs by
+// eating the gap instead — at twelve lieutenants the air between two of them
+// collapses to 1.06° and the wrong one answers — so the bar GROWS instead, out
+// to BAR_ARC. Past the count that fits in that, the shoulders are the limit
+// rather than the arithmetic.
+//
+// ponytail: BAR_LIMIT is the last count the bar holds to both floors with room
+// to spare. Past it the bar is full and the air between plates starts to go —
+// 1.32° at sixteen, 0.83° at eighteen. Page it when that is a real number of
+// lieutenants; today the captain has four.
+export const BAR_ARC = 70;                                   // degrees, edges at ±35
+export const BAR_LIMIT = Math.floor(BAR_ARC / (BUILD.min + BUILD.gap));
+
+export function barWidth(count, distM) {
+  const want = Math.min(BAR_ARC, Math.max(1, count) * (BUILD.min + BUILD.gap));
+  return Math.max(PANEL.bar.widthM, sizeForArc(want, distM));
+}
+
 // placeWindow(index, count) — where the n-th open window goes: an arc in front,
 // widening as more open, never wrapping past the shoulders. Beyond that the
 // captain is out of attention, which is his limit to set, not ours — so they
