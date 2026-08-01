@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, uriBasename, setHtmlIfChanged, isImageMime } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, uriBasename, setHtmlIfChanged, isImageMime } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -788,16 +788,7 @@ export function renderDetail() {
   // raw uri. http(s) uris open normally; anything else (file:// / local paths)
   // opens in the artifact viewer popup, served by GET /api/artifact.
   const artEl = document.getElementById('dt-artifacts');
-  const arts = cardArtifacts(c);
-  const artsChanged = setHtmlIfChanged(artEl, !arts.length ? '' :
-    '<div class="dt-arts-head">artifacts</div>' + arts.map((a) => {
-      const name = uriBasename(a.uri) || a.uri;
-      const label = '<span class="a-label">' + esc(a.label || name) + '</span>';
-      const uri = /^https?:\/\//.test(a.uri)
-        ? '<a class="a-uri" href="' + esc(a.uri) + '" target="_blank" rel="noopener" title="' + esc(a.uri) + '">' + esc(name) + '</a>'
-        : '<code class="a-uri" data-view="' + esc(a.uri) + '" title="' + esc(a.uri) + ' — click to view">' + esc(name) + '</code>';
-      return '<div class="art">' + label + uri + '</div>';
-    }).join(''));
+  const artsChanged = setHtmlIfChanged(artEl, artifactsHtml(cardArtifacts(c)));
   if (artsChanged) artEl.querySelectorAll('.a-uri[data-view]').forEach((n) => {
     n.onclick = () => openArtifact(n.dataset.view);
   });

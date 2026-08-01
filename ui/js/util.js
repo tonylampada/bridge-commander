@@ -93,6 +93,24 @@ export function uriBasename(uri) {
   return i >= 0 ? s.slice(i + 1) : s;
 }
 
+// The ARTIFACTS block: a two-column table (label | filename) so both columns
+// line up down the whole list, wrapped in a container that scrolls SIDEWAYS
+// when it does not fit. Filenames are never clipped to an ellipsis — the
+// captain has to be able to read which file an entry points at.
+// Lives here (not detail.js) because detail.js binds DOM at import time and
+// this is the piece worth rendering in a test.
+export function artifactsHtml(arts) {
+  if (!arts.length) return '';
+  return '<div class="dt-arts-head">artifacts</div><div class="arts-scroll"><table class="arts"><tbody>' +
+    arts.map((a) => {
+      const name = uriBasename(a.uri) || a.uri;
+      const uri = /^https?:\/\//.test(a.uri)
+        ? '<a class="a-uri" href="' + esc(a.uri) + '" target="_blank" rel="noopener" title="' + esc(a.uri) + '">' + esc(name) + '</a>'
+        : '<code class="a-uri" data-view="' + esc(a.uri) + '" title="' + esc(a.uri) + ' — click to view">' + esc(name) + '</code>';
+      return '<tr><td class="a-label">' + esc(a.label || name) + '</td><td>' + uri + '</td></tr>';
+    }).join('') + '</tbody></table></div>';
+}
+
 // Which lines of `next` the other hand touched, as 0-BASED line numbers: trim
 // the identical head and the identical tail, and what is left in the middle is
 // the change. Deliberately not a real diff — nothing here needs to know which

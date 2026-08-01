@@ -683,11 +683,14 @@ body.resizing { user-select: none; cursor: col-resize; }
   font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 1px;
   color: var(--faint); border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px;
 }
-.dt-artifacts .art { display: flex; align-items: baseline; gap: 8px; padding: 7px 0 0; min-width: 0; }
-.dt-artifacts .art:last-child { padding-bottom: 14px; }
-.dt-artifacts .a-label { flex: none; font-size: 13px; }
+/* Two aligned columns; the wrapper — not the page — scrolls sideways when the
+   filenames are wider than the pane, so nothing gets clipped. */
+.arts-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; padding-bottom: 14px; }
+.dt-artifacts .arts { border-collapse: collapse; }
+.dt-artifacts .arts td { padding: 7px 0 0; vertical-align: baseline; white-space: nowrap; }
+.dt-artifacts .a-label { font-size: 13px; padding-right: 8px; }
 .dt-artifacts .a-uri {
-  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  white-space: nowrap;
   font-family: var(--mono); font-size: 11.5px; color: var(--dim);
   background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px;
 }
