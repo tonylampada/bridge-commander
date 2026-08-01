@@ -55,7 +55,7 @@ prompts it would send. Nothing is spawned.
 
 `state.json` answers *where am I* and is overwritten on every move. The journal answers
 *what has ever happened* and is never overwritten: one JSON object per line, appended, at
-`<workspace>/.bridge-commander/pipeline/runs.jsonl`, across every run of every card.
+`<workspace>/.bridge-commander/pipeline_runs/runs.jsonl`, across every run of every card.
 
 Verdicts and prompts go in **whole**. A findings text folded into a summary is exactly the
 part worth reading a month later.
@@ -116,7 +116,7 @@ fix is the failure this pipeline exists to prevent, and it hides well.
 ## Resume
 
 The command harness's `resume` re-runs the command from the top, so "where was I" cannot
-live in memory. It lives in `<workspace>/.bridge-commander/pipeline/<card-id>/`: the
+live in memory. It lives in `<workspace>/.bridge-commander/pipeline_runs/<card-id>/`: the
 stage, the round, the last findings, the agent refs, one prompt file and one verdict file
 per stage per round, and the `run` output cached per round so a restart never pays for an
 expensive validation run twice. A restarted executor re-attaches to the agent it was

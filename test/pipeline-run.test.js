@@ -81,7 +81,7 @@ async function boot() {
   fs.mkdirSync(pipes, { recursive: true });
   fs.writeFileSync(path.join(pipes, 'tiny.yaml'), TINY);
 
-  const runDir = path.join(s.dir, '.bridge-commander', 'pipeline', 'demo');
+  const runDir = path.join(s.dir, '.bridge-commander', 'pipeline_runs', 'demo');
   return {
     s, root, fdir, runDir, wt,
     teardown: async () => { await s.stop(); fs.rmSync(root, { recursive: true, force: true }); },
@@ -366,7 +366,7 @@ test('the journal keeps every run, whole, and a second run appends instead of ov
       '--outcome', 'good — https://github.com/o/r/pull/7']);
     assert.strictEqual(await exited, 0, out.text);
 
-    const jfile = path.join(s.dir, '.bridge-commander', 'pipeline', 'runs.jsonl');
+    const jfile = path.join(s.dir, '.bridge-commander', 'pipeline_runs', 'runs.jsonl');
     const lines = () => fs.readFileSync(jfile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     const first = lines();
     assert.ok(first.length >= 8, 'every step is a line:\n' + first.map((r) => r.kind).join(', '));

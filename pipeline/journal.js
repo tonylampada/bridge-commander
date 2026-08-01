@@ -23,7 +23,7 @@ const path = require('node:path');
 const MAX_FIELD = 64 * 1024;
 
 function journalFile(workspace) {
-  return path.join(workspace, '.bridge-commander', 'pipeline', 'runs.jsonl');
+  return path.join(workspace, '.bridge-commander', 'pipeline_runs', 'runs.jsonl');
 }
 
 function clip(v) {

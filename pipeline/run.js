@@ -296,7 +296,7 @@ async function main(argv) {
   const pipelineName = opts.pipeline || project.pipeline || DEFAULT_PIPELINE;
   const r = resolve({ workspace: opts.workspace, name: pipelineName });
 
-  const runDir = path.join(opts.workspace, '.bridge-commander', 'pipeline', card.id);
+  const runDir = path.join(opts.workspace, '.bridge-commander', 'pipeline_runs', card.id);
   if (r.errors.length) {
     // Refused BEFORE a single token: this file is meant to be edited by hand,
     // and the point of the seatbelt is that a hand slip stays recoverable.
