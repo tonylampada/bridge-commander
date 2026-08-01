@@ -141,6 +141,8 @@ async function refresh() {
 
 const raycaster = new THREE.Raycaster();
 const tmpMat = new THREE.Matrix4();
+const tmpOrigin = new THREE.Vector3();
+const tmpDir = new THREE.Vector3();
 
 function pick(origin, direction) {
   raycaster.ray.origin.copy(origin);
@@ -171,6 +173,7 @@ function activate(hit) {
 
 // ---------- controllers: point, squeeze to carry, stick to size ----------
 
+const REACH = 2.5;                  // how far the ray goes when it hits nothing
 const controllers = [];
 const held = new Map();             // controller -> { surface, w, h }
 for (let i = 0; i < 2; i++) {
@@ -179,16 +182,32 @@ for (let i = 0; i < 2; i++) {
     new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
     new THREE.LineBasicMaterial({ color: 0x4cc2ff }),
   );
-  ray.scale.z = 2.5;
-  c.add(ray);
+  ray.scale.z = REACH;
+  // The dot rides on the controller, not on the ray: the ray is scaled in z to
+  // the hit distance, and a child of it would be stretched by the same amount.
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 10, 8),
+    new THREE.MeshBasicMaterial({ color: 0x4cc2ff }),
+  );
+  dot.visible = false;
+  c.add(ray, dot);
   scene.add(c);
   controllers.push(c);
 
   const aim = () => {
     tmpMat.identity().extractRotation(c.matrixWorld);
-    const o = new THREE.Vector3().setFromMatrixPosition(c.matrixWorld);
-    const d = new THREE.Vector3(0, 0, -1).applyMatrix4(tmpMat).normalize();
-    return pick(o, d);
+    tmpOrigin.setFromMatrixPosition(c.matrixWorld);
+    tmpDir.set(0, 0, -1).applyMatrix4(tmpMat).normalize();
+    return pick(tmpOrigin, tmpDir);
+  };
+  // A ray that goes through what it is pointing at reads as "nothing here", so
+  // every frame it is cut to the surface it lands on and the dot marks the spot.
+  c.userData.aim = () => {
+    const hit = aim();
+    const len = hit ? hit.distance : REACH;
+    ray.scale.z = len;
+    dot.position.z = -len;
+    dot.visible = !!hit;
   };
 
   c.addEventListener('selectstart', () => activate(aim()));
@@ -356,10 +375,11 @@ renderer.setAnimationLoop((t) => {
   const dt = last ? Math.min(0.1, (t - last) / 1000) : 0.016;
   last = t;
   readGamepads(dt);
+  if (renderer.xr.isPresenting) for (const c of controllers) c.userData.aim();
   renderer.render(scene, camera);
 });
 
-window.__bridge = { state, windows, board, bar, open, close, layout, get doc() { return doc; } };
+window.__bridge = { state, windows, board, bar, controllers, open, close, layout, get doc() { return doc; } };
 
 refresh().then(() => { layout(); document.getElementById('gate').classList.add('ready'); });
 setInterval(refresh, 5000);

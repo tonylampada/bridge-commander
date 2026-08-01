@@ -176,6 +176,12 @@ export class CardWindow extends Surface {
   // Painted from the bottom up: the newest line is the one he wants, and a chat
   // that scrolls off the top is normal where one that scrolls off the bottom is
   // a bug you notice every single time.
+  //
+  // Who is speaking is NOT written on every message. This is a conversation with
+  // exactly one other party, and the title bar already names them — a per-message
+  // name is the same word repeated down the whole column, and it is the copy that
+  // scrolls away while the title bar stays. What the board's own chat does is the
+  // same: the bubble's side carries the identity, the footer carries the time.
   _chat(g, msgs, x, top, width, h, colour) {
     let y = h - PAD;
     for (let i = msgs.length - 1; i >= 0 && y > top + 30; i--) {
@@ -190,12 +196,18 @@ export class CardWindow extends Surface {
       if (y < top + 6) break;
       g.fillStyle = mine ? '#16202c' : '#0f1620';
       g.fillRect(x - 8, y - 4, width + 16, blockH);
+      // The side bar is who: the captain's own accent against the lieutenant's
+      // own colour, the same mark the board puts on a card for its owner.
       g.fillStyle = mine ? COL.accent : (colour || COL.dim);
-      g.font = '600 19px ' + UI;
-      g.fillText((mine ? 'you' : m.author) + '  ' + ago(m.ts), x, y + 16);
+      g.fillRect(x - 8, y - 4, 4, blockH);
       g.fillStyle = COL.dim;
       g.font = '21px ' + UI;
-      lines.forEach((ln, k) => g.fillText(ln, x, y + 42 + k * 26));
+      lines.forEach((ln, k) => g.fillText(ln, x + 4, y + 18 + k * 26));
+      g.fillStyle = COL.faint;
+      g.font = '18px ' + UI;
+      g.textAlign = 'right';
+      g.fillText(ago(m.ts), x + width, y + blockH - 6);
+      g.textAlign = 'left';
       y -= 10;
     }
   }
