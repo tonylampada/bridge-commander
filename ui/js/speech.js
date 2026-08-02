@@ -90,16 +90,46 @@ function transport(on, title) {
 // is a node of the dead context and goes with it — openSink() then makes a fresh
 // one and hands the element its stream again, which is what re-arms the element
 // after the same interruption paused it.
-let ctxTime = 0, ctxWall = 0;
+// The window has to be SHORT and it has to be fresh. Sampling only inside
+// speak() makes the baseline "the previous message", and a dictation happens
+// exactly in that gap: the clock moved since the last message, so the verdict is
+// "alive" and the first message back is silent. A heartbeat owns the sample
+// instead, so the answer is never more than one beat old.
+// sound.js holds the same rule in needsRebuild(); the numbers and the shape are
+// deliberately identical, and the two have to be changed together. It is not
+// imported because this file is a copy of chatterbox_server's (see the header)
+// and must not grow a dependency on the board.
+const BEAT_MS = 500;
+let ctxTime = 0, ctxWall = 0, dead = false;
+function beat() {
+  if (!ctx) return;
+  const wall = performance.now();
+  dead = ctx.state === 'running' && wall - ctxWall >= 200 && ctx.currentTime - ctxTime <= 0;
+  ctxTime = ctx.currentTime; ctxWall = wall;
+}
+setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
+
 function audio() {
-  if (ctx && ctx.state === 'running' && ctx.currentTime - ctxTime <= 0 && performance.now() - ctxWall >= 200) {
+  if (ctx && dead) {
     try { ctx.close(); } catch {}
-    ctx = undefined; sink = undefined;
+    ctx = undefined; sink = undefined;   // the sink is a node of the dead context
   }
-  ctx ??= new (window.AudioContext || window.webkitAudioContext)();
-  ctxTime = ctx.currentTime; ctxWall = performance.now();
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    ctxTime = ctx.currentTime; ctxWall = performance.now(); dead = false;
+  }
   return ctx;
 }
+
+// A fresh context is born suspended and iOS wants an activation to start it, so
+// a gesture replaces the corpse too, not only speak(): a board message arrives
+// with no tap behind it and has to find a context that is already alive. Capture
+// phase and passive, the way sound.js primes its own; a no-op unless the last
+// beat found the context dead. Optional call so the module still imports where
+// there is no window to listen on.
+for (const ev of ['click', 'pointerdown', 'touchstart', 'keydown'])
+  window.addEventListener?.(ev, () => { if (ctx && dead) audio().resume().catch(() => {}); },
+    { capture: true, passive: true });
 
 // It renders nothing and has no controls of its own: the transport above is the
 // player people see. This one is the player the OS sees.

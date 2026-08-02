@@ -28,9 +28,16 @@ let theCtx = null;
 let resumes = 0, built = 0;
 class FakeCtx {
   constructor() {
-    this.state = 'running'; this.currentTime = 0; this.destination = {};
+    this.state = 'running'; this.destination = {};
+    this.t0 = performance.now(); this.stopped = null;
     this.refuse = false; this.onstatechange = null; theCtx = this; built++;
   }
+  // A real context's clock moves with the world, and a detector that cannot tell
+  // "the clock never moved" from "the clock moved and then stopped" is not a
+  // detector. freeze() is the corpse an interruption leaves: the clock stops
+  // where it was and the state field goes on saying 'running'.
+  get currentTime() { return (this.stopped === null ? performance.now() - this.t0 : this.stopped) / 1000; }
+  freeze() { this.stopped = performance.now() - this.t0; }
   resume() {
     resumes++;
     if (this.refuse) return Promise.reject(new Error('not allowed without a gesture'));
@@ -158,9 +165,8 @@ test('a healthy context is never replaced, however many gestures land on it', as
   await tick();
   const c = theCtx;
   built = 0;
-  for (let i = 0; i < 2; i++) {
-    await sleep(220);
-    c.currentTime += 0.22;               // a clock that runs is a clock that moves
+  for (let i = 0; i < 3; i++) {          // several heartbeats' worth of an idle page
+    await sleep(250);
     fire('window', 'click');
     await tick();
   }
@@ -173,11 +179,10 @@ test('a dead context is replaced by one with the whole graph and the volume on i
   await tick();
   setVolume(0.42);
   const corpse = theCtx;
+  await sleep(300);                      // the page is used; the clock runs
+  corpse.freeze();                       // the Shortcut takes the microphone
+  await sleep(1200);                     // long enough for the beat to see it stop
   built = 0;
-  // The interruption: real time passes, the clock does not move, and the state
-  // field goes on insisting everything is fine.
-  await sleep(220);
-  corpse.state = 'running';
   fire('window', 'click');               // the captain taps ▶ in settings
   await tick();
 
@@ -193,4 +198,35 @@ test('a dead context is replaced by one with the whole graph and the volume on i
   play('ding');
   await tick();
   assert.ok(played > 0, 'and the ▶ makes a sound');
+});
+
+// The captain's actual morning, and the one a stale baseline gets wrong: the
+// context is healthy and sampled, runs on for a moment, and only THEN dies. A
+// detector comparing against the last time anyone looked sees a clock that moved
+// and calls it alive. One tap is four events inside a tenth of a second, so
+// there is no second chance inside the tap either — the ▶ is simply silent.
+test('the tap after a dictation: the context RAN, then died', async () => {
+  fire('window', 'click');               // first gesture: the context is made
+  await tick();
+  const corpse = theCtx;
+
+  await sleep(300);                      // the board is used normally for a while
+  fire('window', 'click');
+  await tick();
+
+  corpse.freeze();                       // the Siri Shortcut takes the microphone
+  await sleep(1500);                     // the dictation
+
+  built = 0; played = 0;
+  // One tap: pointerdown, touchstart, click, and then the button's own play().
+  fire('window', 'pointerdown');
+  fire('window', 'touchstart');
+  await sleep(80);
+  fire('window', 'click');
+  play('ding');
+  await tick();
+
+  assert.equal(built, 1, 'the tap should have replaced the corpse');
+  assert.notEqual(theCtx, corpse, 'and played into the new context');
+  assert.ok(played > 0, 'so the ▶ was heard, on the FIRST tap');
 });

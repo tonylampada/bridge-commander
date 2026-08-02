@@ -23,7 +23,25 @@ const wake = (c) => { if (c && needsResume(c.state)) c.resume().catch(() => {});
 // and the only cure is the one a page reload performs: build a new one.
 export const needsRebuild = (state, ctxAdvance, realMs) =>
   state === 'running' && realMs >= 200 && ctxAdvance <= 0;
-let lastTime = 0, lastWall = 0;
+
+// "Across a SHORT wait" is the whole of it. Comparing against whenever this
+// module last happened to look answers a different question — "did the clock
+// move at any point since then" — and a context that ran for a moment and died
+// inside that window answers it "alive". That is exactly the dictation: the
+// last look is before the Shortcut takes the microphone, so the tone goes into
+// the corpse and the cure arrives one tap too late.
+// So nobody's call site owns the baseline: a heartbeat does, and it is never
+// more than one beat old. Beats only ever set the verdict — the replacement
+// itself waits for a gesture, because iOS wants one to start the new context.
+const BEAT_MS = 500;
+let lastTime = 0, lastWall = 0, dead = false;
+function beat() {
+  if (!ctx) return;
+  const wall = performance.now();
+  dead = needsRebuild(ctx.state, ctx.currentTime - lastTime, wall - lastWall);
+  lastTime = ctx.currentTime; lastWall = wall;
+}
+setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
 
 function ensureCtx() {
   if (ctx) return ctx;
@@ -38,25 +56,22 @@ function ensureCtx() {
     comp.threshold.value = -14; comp.knee.value = 26; comp.ratio.value = 3.2;
     comp.attack.value = 0.003; comp.release.value = 0.25;
     master.connect(comp); comp.connect(ctx.destination);
-    lastTime = ctx.currentTime; lastWall = performance.now();
+    lastTime = ctx.currentTime; lastWall = performance.now(); dead = false;
   } catch (e) { ctx = null; master = null; }
   return ctx;
 }
 
 // The context every caller should use: the live one, or a replacement for the
-// corpse. The rebuild goes back through ensureCtx() so the graph (master at the
-// current volume, the compressor, the wiring) can never drift from the original.
+// corpse the last heartbeat found. The rebuild goes back through ensureCtx() so
+// the graph (master at the current volume, the compressor, the wiring) can never
+// drift from the original. It takes no sample of its own — the window belongs to
+// the heartbeat, and a call landing just after a beat must not shrink it.
 function liveCtx() {
   const c = ensureCtx();
-  if (!c) return null;
-  const wall = performance.now();
-  if (needsRebuild(c.state, c.currentTime - lastTime, wall - lastWall)) {
-    try { c.close(); } catch (e) {}
-    ctx = master = comp = null;
-    return ensureCtx();
-  }
-  lastTime = c.currentTime; lastWall = wall;
-  return c;
+  if (!c || !dead) return c;
+  try { c.close(); } catch (e) {}
+  ctx = master = comp = null;
+  return ensureCtx();
 }
 export function setVolume(v) {
   volume = Math.max(0, Math.min(1, Number(v)));
@@ -134,4 +149,7 @@ for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.addEv
 
 // Re-resume proactively on refocus so the next notification after a
 // backgrounded tab (or a locked phone) isn't the one that eats the latency.
-document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx) wake(liveCtx()); });
+// The beat comes first: iOS throttles timers on a page it has put away, so the
+// sample waiting on return can be from before the interruption. Burning it here
+// means the verdict is one beat away instead of two.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx) { beat(); wake(liveCtx()); } });

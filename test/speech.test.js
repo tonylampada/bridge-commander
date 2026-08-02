@@ -74,8 +74,12 @@ const scheduled = [];
 const nodes = {};
 let theCtx = null, built = 0;
 class FakeCtx {
-  constructor() { this.state = 'running'; nodes.destination = this.destination = {}; theCtx = this; built++; }
-  get currentTime() { return 0; }
+  constructor() { this.state = 'running'; this.clock = 0; nodes.destination = this.destination = {}; theCtx = this; built++; }
+  // Settable, because "the clock never moved" and "the clock moved and then
+  // stopped" have to be two different fakes: only the second is the corpse an
+  // interruption leaves, and a detector that cannot tell them apart is not one.
+  // It stays put during a message so the seam assertions stay about the seams.
+  get currentTime() { return this.clock; }
   resume() { this.state = 'running'; return Promise.resolve(); }
   close() { this.state = 'closed'; return Promise.resolve(); }
   suspend() { this.state = 'suspended'; return Promise.resolve(); }
@@ -392,12 +396,18 @@ test('a new message aborts the one it supersedes', async () => {
 // 'running' with a clock that never moves again. No resume() revives that one,
 // and everything hanging off it — the sink, the stream the element holds — is
 // dead with it. The next message has to build all of it again.
-test('a context killed by an interruption is replaced, sink and element with it', async () => {
+//
+// The clock RUNS before it stops, which is the whole difficulty: this module
+// only ever looked at it inside speak(), so the baseline was "the previous
+// message" and a death in the gap between two messages read as "it moved, it is
+// alive". The first message after a dictation was deterministically silent.
+test('a message after a dictation replaces the context, sink and element with it', async () => {
   fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
   await speak({ ...ASK, input: 'first', title: 'Ana' });
   const corpse = theCtx, oldSink = nodes.msd;
+  corpse.clock = 5;                // it went on running healthily for a while…
+  await tick(1300);                // …and the Shortcut froze it here, still 'running'
   built = 0;
-  await tick(220);                 // real time passes; the fake's clock never moves
   scheduled.length = 0;
   Object.assign(sinkEl, { plays: 0, fed: 0 });
   await speak({ ...ASK, input: 'second', title: 'Ana' });
