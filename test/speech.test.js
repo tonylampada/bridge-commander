@@ -38,21 +38,6 @@ const bar = {
   querySelector() { return this.what; },
 };
 const styles = [];
-// The page's own listeners, kept by type so a test can be the captain: tap the
-// board, leave it for a dictation, come back. The module listens for those and
-// nothing else, so a page without them cannot be interrupted at all — which is
-// the one thing these tests have to be able to do to it.
-const listeners = { window: {}, document: {} };
-const add = (bag) => (ev, fn) => (bag[ev] = bag[ev] || []).push(fn);
-const fire = (bag, ev) => (listeners[bag][ev] || []).slice().forEach((f) => f());
-// Every interval the module has running: "is it still looking" is a claim about
-// a timer, and there is no way to ask it from the outside. The real one is handed
-// back, so the beats still happen — only the bookkeeping is ours.
-const intervals = new Set();
-const realSetInterval = global.setInterval, realClearInterval = global.clearInterval;
-global.setInterval = (fn, ms) => { const t = realSetInterval(fn, ms); intervals.add(t); return t; };
-global.clearInterval = (t) => { intervals.delete(t); return realClearInterval(t); };
-
 let session;
 function fakePage() {
   // Only what a new test needs fresh. The element itself is the module's, made
@@ -63,8 +48,6 @@ function fakePage() {
   bar.hidden = true;
   bar.what.textContent = '';
   global.document = {
-    hidden: false,
-    addEventListener: add(listeners.document),
     createElement(tag) {
       if (tag === 'audio') return sinkEl;
       if (tag === 'div') return bar;
@@ -96,10 +79,7 @@ class FakeCtx {
   // stopped" have to be two different fakes: only the second is the corpse an
   // interruption leaves, and a detector that cannot tell them apart is not one.
   // It stays put during a message so the seam assertions stay about the seams.
-  // run() is the third thing it has to be able to be: a clock keeping up with
-  // the world, which is what tells the watch there is nothing left to watch.
-  get currentTime() { return this.at === undefined ? this.clock : this.clock + (performance.now() - this.at) / 1000; }
-  run() { this.at = performance.now(); }
+  get currentTime() { return this.clock; }
   resume() { this.state = 'running'; return Promise.resolve(); }
   close() { this.state = 'closed'; return Promise.resolve(); }
   suspend() { this.state = 'suspended'; return Promise.resolve(); }
@@ -173,8 +153,7 @@ test.before(async () => {
   // `MediaMetadata` is guarded on window and then called bare, the way a browser
   // sees it — it is the same global in both places.
   global.MediaMetadata = function (m) { Object.assign(this, m); };
-  global.window = { AudioContext: FakeCtx, MediaMetadata: global.MediaMetadata,
-    addEventListener: add(listeners.window) };
+  global.window = { AudioContext: FakeCtx, MediaMetadata: global.MediaMetadata };
   fakePage();
   ({ speak, stop, pause, resume } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'speech.js')).href));
@@ -422,24 +401,15 @@ test('a new message aborts the one it supersedes', async () => {
 // only ever looked at it inside speak(), so the baseline was "the previous
 // message" and a death in the gap between two messages read as "it moved, it is
 // alive". The first message after a dictation was deterministically silent.
-//
-// The dictation is played out as the captain does it, because that is what says
-// WHEN to look: the Shortcut takes the screen along with the microphone, so the
-// board is put away, dictated over, and come back to. Nothing is watched while
-// it is away — the return is what closes the window on it.
 test('a message after a dictation replaces the context, sink and element with it', async () => {
   fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
   await speak({ ...ASK, input: 'first', title: 'Ana' });
   const corpse = theCtx, oldSink = nodes.msd;
   corpse.clock = 5;                // it went on running healthily for a while…
-  document.hidden = true;
-  fire('document', 'visibilitychange');
   await tick(1300);                // …and the Shortcut froze it here, still 'running'
   built = 0;
   scheduled.length = 0;
   Object.assign(sinkEl, { plays: 0, fed: 0 });
-  document.hidden = false;
-  fire('document', 'visibilitychange');   // back on the board
   await speak({ ...ASK, input: 'second', title: 'Ana' });
 
   assert.equal(built, 1, 'one replacement — not a fresh context per message');
@@ -450,39 +420,6 @@ test('a message after a dictation replaces the context, sink and element with it
   assert.ok(sinkEl.plays >= 1, 'and played again — the interruption paused it too');
   assert.ok(scheduled.length, 'the second message was heard');
   for (const s of scheduled) assert.equal(s.to, nodes.msd, 'through the new sink');
-});
-
-// ── the watch ─────────────────────────────────────────────────────────────
-// Looking is the only way to find a corpse — a dead context fires no event, that
-// is what makes it dead — but nothing takes the audio session from a page that is
-// sitting still. So the watch is armed by the moments that could have taken it
-// and lets go the moment it has seen the clock keeping up with the world.
-test('the watch winds down on a healthy clock, and re-arms for every interruption', async () => {
-  fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
-  await speak({ ...ASK, input: 'olá', title: 'Ana' });
-  await tick(10);
-  const c = theCtx;
-  assert.equal(intervals.size, 1, 'a context nobody has seen run yet is watched');
-
-  c.run();                           // it is a healthy context, and the beat sees it
-  await tick(700);
-  assert.equal(intervals.size, 0, 'the watch let go');
-  await tick(700);
-  assert.equal(intervals.size, 0, 'and stays let go — an idle page runs no timer at all');
-
-  fire('window', 'click');           // a tap: the session could have moved under it
-  assert.equal(intervals.size, 1, 'looking again');
-  await tick(700);
-  assert.equal(intervals.size, 0, 'and satisfied again');
-
-  document.hidden = true;            // the board is put away…
-  fire('document', 'visibilitychange');
-  assert.equal(intervals.size, 0, 'nothing to watch while the page is away');
-  await tick(300);
-  document.hidden = false;           // …and picked back up
-  fire('document', 'visibilitychange');
-  assert.equal(intervals.size, 1, 'the return is exactly when to look');
-  assert.equal(theCtx, c, 'and a healthy context is never replaced by any of it');
 });
 
 // LAST, deliberately: a refusal is remembered for the life of the page, so every

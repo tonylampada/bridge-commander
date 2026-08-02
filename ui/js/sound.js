@@ -19,78 +19,29 @@ const wake = (c) => { if (c && needsResume(c.state)) c.resume().catch(() => {});
 // Siri Shortcut taking the microphone, a call) can leave the context PERMANENTLY
 // dead: resume() resolves, state reads 'running', and not one sample ever comes
 // out of it again. So do not ask the state field, it lies — ask the clock. A
-// running context whose currentTime did not keep up with real time is a corpse,
+// running context whose currentTime did not move across real time is a corpse,
 // and the only cure is the one a page reload performs: build a new one.
-//
-// KEPT UP, not merely moved. currentTime IS real time for a running context —
-// that is what it means — so a clock holding less than half of the window it was
-// measured across stopped somewhere inside that window, and the shortfall says so
-// however long the window is. "Did it move at all" only answers for a window
-// short enough that moving and keeping up are the same question, and that is a
-// window somebody has to be awake to take. Measuring the shortfall is what lets
-// the watch sleep: the first look after a long quiet page is still a real answer.
 export const needsRebuild = (state, ctxAdvance, realMs) =>
-  state === 'running' && realMs >= 200 && ctxAdvance * 1000 <= realMs / 2;
+  state === 'running' && realMs >= 200 && ctxAdvance <= 0;
 
-// And nobody's CALL SITE owns the baseline. Round 1 let each caller compare
-// against whenever it last happened to look, which asks "did the clock move at
-// any point since then" — a context that ran for a moment and died inside that
-// window answers "alive". That is exactly the dictation: the last look is before
-// the Shortcut takes the microphone, so the tone goes into the corpse and the
-// cure arrives one tap too late. Here the window belongs to the beat, and the
-// beat only ever sets the verdict — the replacement itself waits for a gesture,
-// because iOS wants one to start the new context.
+// "Across a SHORT wait" is the whole of it. Comparing against whenever this
+// module last happened to look answers a different question — "did the clock
+// move at any point since then" — and a context that ran for a moment and died
+// inside that window answers it "alive". That is exactly the dictation: the
+// last look is before the Shortcut takes the microphone, so the tone goes into
+// the corpse and the cure arrives one tap too late.
+// So nobody's call site owns the baseline: a heartbeat does, and it is never
+// more than one beat old. Beats only ever set the verdict — the replacement
+// itself waits for a gesture, because iOS wants one to start the new context.
 const BEAT_MS = 500;
 let lastTime = 0, lastWall = 0, dead = false;
-
-// One look: how far the clock moved against how far the world did. The verdict
-// is STICKY, because nothing cures a corpse but a new context — ensureCtx() is
-// the only place that clears it. Returns whether the window just closed is proof
-// of life, which is what lets the watch stop.
 function beat() {
-  if (!ctx) return false;
-  const wall = performance.now(), advance = ctx.currentTime - lastTime;
-  if (needsRebuild(ctx.state, advance, wall - lastWall)) dead = true;
+  if (!ctx) return;
+  const wall = performance.now();
+  dead = needsRebuild(ctx.state, ctx.currentTime - lastTime, wall - lastWall);
   lastTime = ctx.currentTime; lastWall = wall;
-  return !dead && advance > 0;
 }
-
-// The looking is unavoidable — a dead context fires no event, that is what makes
-// it dead — but the looking FOREVER is not. Nothing takes the audio session
-// while the page sits still, so the watch is armed by the moments something
-// could have (a gesture, a statechange, the page coming back) and lets go the
-// instant it has seen the clock keeping up. An idle page with healthy audio runs
-// no timer at all.
-let watch = null;
-function disarm() { if (watch) clearInterval(watch); watch = null; }
-function look() { if (beat() || dead || !ctx) disarm(); }
-function watching() { if (!watch) { watch = setInterval(look, BEAT_MS); watch?.unref?.(); } }
-
-// Arming closes the window since the last look, however long it has been — the
-// shortfall answers for a long window too, which is the whole reason the watch
-// gets to sleep between the moments that could take the session. The answer is
-// ready in the same tick as the gesture, so it is ready before the ▶ that armed
-// it plays. And "alive" still leaves the watch running: a clock can always stop
-// a moment after being looked at, and only a later beat can catch that.
-function arm() {
-  if (!ctx) return;
-  beat();
-  if (dead) disarm(); else watching();
-}
-// Start a window over, judging nothing. Some stops are legitimate — Chrome
-// suspends a backgrounded context, iOS interrupts one on a locked screen, and
-// their clocks are SUPPOSED to be frozen for as long as that lasts. A window
-// containing one of those says nothing about the context, so it is thrown away
-// rather than answered: every statechange rebases, and so does the page leaving.
-function rebase() {
-  if (!ctx) return;
-  lastTime = ctx.currentTime; lastWall = performance.now();
-}
-// Nothing to watch while the page is away (iOS throttles the timer there
-// anyway), and the baseline belongs to the moment of leaving — so that coming
-// back measures the clock across exactly the interruption that could have taken
-// the audio session.
-function leaving() { rebase(); disarm(); }
+setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
 
 function ensureCtx() {
   if (ctx) return ctx;
@@ -99,17 +50,13 @@ function ensureCtx() {
   try {
     ctx = new AC();
     // Recover the moment iOS allows it, instead of finding out at the next tone.
-    // A statechange is also the audio session moving under the page: the window
-    // it lands in is unjudgeable (a legitimate suspension freezes the clock too),
-    // so throw that window away and watch the next one instead.
-    ctx.onstatechange = () => { rebase(); watching(); wake(ctx); };
+    ctx.onstatechange = () => wake(ctx);
     master = ctx.createGain(); master.gain.value = volume;
     comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14; comp.knee.value = 26; comp.ratio.value = 3.2;
     comp.attack.value = 0.003; comp.release.value = 0.25;
     master.connect(comp); comp.connect(ctx.destination);
     lastTime = ctx.currentTime; lastWall = performance.now(); dead = false;
-    watching();   // a newborn context is unproven; the first beat that sees it run lets go
   } catch (e) { ctx = null; master = null; }
   return ctx;
 }
@@ -197,19 +144,12 @@ export function play(name) {
 // A fresh context is born suspended and iOS wants a gesture to start it, so the
 // primer is also where a corpse gets replaced: capture phase means this runs
 // BEFORE the handler of the ▶ that was tapped, and that play() gets the new one.
-// It arms the watch BEFORE it asks for the context, so the verdict the tap acts
-// on is the one that includes the wait it just ended, not the one from before it.
-function primeOnGesture() { arm(); wake(liveCtx()); }
+function primeOnGesture() { wake(liveCtx()); }
 for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.addEventListener(ev, primeOnGesture, { capture: true, passive: true });
 
 // Re-resume proactively on refocus so the next notification after a
 // backgrounded tab (or a locked phone) isn't the one that eats the latency.
-// This is also the pair of moments the watch is built around: the page going
-// away is where the baseline is taken, and the page coming back is where that
-// window is closed — and the window the page was away for is precisely the one
-// a Siri Shortcut takes the microphone in.
-document.addEventListener('visibilitychange', () => {
-  if (!ctx) return;                       // nothing built yet: leave that to a gesture
-  if (document.hidden) return leaving();
-  arm(); wake(liveCtx());
-});
+// The beat comes first: iOS throttles timers on a page it has put away, so the
+// sample waiting on return can be from before the interruption. Burning it here
+// means the verdict is one beat away instead of two.
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx) { beat(); wake(liveCtx()); } });

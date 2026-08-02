@@ -86,48 +86,28 @@ function transport(on, title) {
 // by a Siri Shortcut, a call — can leave it PERMANENTLY dead: resume() resolves,
 // state reads 'running', and nothing is ever heard from it again. The state
 // field lies, so ask the clock instead: a running context whose currentTime did
-// not keep up with real time is a corpse, and only a new one cures it. The sink
+// not move across real time is a corpse, and only a new one cures it. The sink
 // is a node of the dead context and goes with it — openSink() then makes a fresh
 // one and hands the element its stream again, which is what re-arms the element
 // after the same interruption paused it.
-// KEPT UP, not merely moved: currentTime is real time for a running context, so
-// a clock holding less than half of the window it was measured across stopped
-// somewhere inside it, however long that window was. Sampling only inside speak()
-// makes the window "since the previous message" and asks the weaker question, and
-// a dictation happens exactly in that gap: the clock moved since the last
-// message, verdict "alive", and the first message back is silent.
-// The beating is ARMED, not eternal: nothing takes the audio session while the
-// page sits still, so the moments that could have taken it (a gesture, the page
-// coming back) start the watch, and the first beat that sees the clock keeping up
-// stops it. An idle page runs no timer.
-// sound.js holds the same rule in needsRebuild() and the same watch around it;
-// the numbers and the shape are deliberately identical, and the two have to be
-// changed together. It is not imported because this file is a copy of
-// chatterbox_server's (see the header) and must not grow a dependency on the board.
+// The window has to be SHORT and it has to be fresh. Sampling only inside
+// speak() makes the baseline "the previous message", and a dictation happens
+// exactly in that gap: the clock moved since the last message, so the verdict is
+// "alive" and the first message back is silent. A heartbeat owns the sample
+// instead, so the answer is never more than one beat old.
+// sound.js holds the same rule in needsRebuild(); the numbers and the shape are
+// deliberately identical, and the two have to be changed together. It is not
+// imported because this file is a copy of chatterbox_server's (see the header)
+// and must not grow a dependency on the board.
 const BEAT_MS = 500;
-let ctxTime = 0, ctxWall = 0, dead = false, watch = null;
-// The verdict is sticky — only a new context cures a corpse, so only audio()
-// clears it. The return is "this window is proof of life", which stops the watch.
+let ctxTime = 0, ctxWall = 0, dead = false;
 function beat() {
-  if (!ctx) return false;
-  const wall = performance.now(), advance = ctx.currentTime - ctxTime, real = wall - ctxWall;
-  if (ctx.state === 'running' && real >= 200 && advance * 1000 <= real / 2) dead = true;
+  if (!ctx) return;
+  const wall = performance.now();
+  dead = ctx.state === 'running' && wall - ctxWall >= 200 && ctx.currentTime - ctxTime <= 0;
   ctxTime = ctx.currentTime; ctxWall = wall;
-  return !dead && advance > 0;
 }
-// Start a window over, judging nothing: pause() suspends the context on purpose
-// and a suspended clock is SUPPOSED to be frozen, so a window containing one of
-// those says nothing about anything and is thrown away rather than answered.
-function rebase() { if (ctx) { ctxTime = ctx.currentTime; ctxWall = performance.now(); } }
-function disarm() { if (watch) clearInterval(watch); watch = null; }
-function look() { if (beat() || dead || !ctx) disarm(); }
-// a timer is no reason to hold a process open
-function watching() { if (!watch) { watch = setInterval(look, BEAT_MS); watch?.unref?.(); } }
-// Arming closes the window since the last look, however long it has been: the
-// shortfall answers for a long window too, which is what lets the watch sleep
-// between the moments that could take the session. If it comes back "alive" the
-// watch still runs on — a clock can always stop a moment after being looked at.
-function arm() { if (!ctx) return; beat(); if (dead) disarm(); else watching(); }
+setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
 
 function audio() {
   if (ctx && dead) {
@@ -137,7 +117,6 @@ function audio() {
   if (!ctx) {
     ctx = new (window.AudioContext || window.webkitAudioContext)();
     ctxTime = ctx.currentTime; ctxWall = performance.now(); dead = false;
-    watching();      // a newborn context is unproven until a beat has seen it run
   }
   return ctx;
 }
@@ -145,24 +124,12 @@ function audio() {
 // A fresh context is born suspended and iOS wants an activation to start it, so
 // a gesture replaces the corpse too, not only speak(): a board message arrives
 // with no tap behind it and has to find a context that is already alive. Capture
-// phase and passive, the way sound.js primes its own. It arms the watch first,
-// so the verdict this tap acts on covers the wait the tap just ended. Optional
-// call so the module still imports where there is no window to listen on.
+// phase and passive, the way sound.js primes its own; a no-op unless the last
+// beat found the context dead. Optional call so the module still imports where
+// there is no window to listen on.
 for (const ev of ['click', 'pointerdown', 'touchstart', 'keydown'])
-  window.addEventListener?.(ev, () => { arm(); if (ctx && dead) audio().resume().catch(() => {}); },
+  window.addEventListener?.(ev, () => { if (ctx && dead) audio().resume().catch(() => {}); },
     { capture: true, passive: true });
-
-// The page leaving and coming back are the other pair: the baseline is taken at
-// the moment of leaving, so returning measures the clock across exactly the
-// interruption — a Shortcut taking the microphone happens in that window and
-// nowhere else. Nothing is watched while the page is away; the timer would be
-// throttled there anyway.
-document.addEventListener?.('visibilitychange', () => {
-  if (!ctx) return;
-  if (document.hidden) { rebase(); disarm(); return; }
-  arm();
-  if (dead) audio().resume().catch(() => {});
-});
 
 // It renders nothing and has no controls of its own: the transport above is the
 // player people see. This one is the player the OS sees.
@@ -234,12 +201,9 @@ export function pause() {
   playbackState('paused');
 }
 
-// Back in the same order, inside out: the clock first, then the element. The
-// pause the clock just came out of is not evidence of anything, so the window it
-// sat in goes with it.
+// Back in the same order, inside out: the clock first, then the element.
 export function resume() {
   ctx?.resume();
-  rebase();
   if (sink) element().play().catch(() => {});
   playbackState('playing');
 }
@@ -251,7 +215,7 @@ export function stop() {
   const s = live;
   live = null;
   s.ac.abort();
-  ctx?.resume(); rebase();       // stopped while paused: no frozen clock left behind
+  ctx?.resume();                 // stopped while paused: no frozen clock left behind
   for (const src of s.srcs) { src.onended = null; try { src.stop(); } catch {} }
   s.srcs = [];
   closeSink();
@@ -309,9 +273,8 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
   transport(true, title);
   const s = live = {ac: new AbortController(), srcs: [], pending: 0, over: false};
   // Anything but 'running' needs the resume: iOS parks it in 'interrupted'
-  // (not 'suspended') when the screen locks, and that is silence too. Whatever
-  // it was parked in froze the clock legitimately, so the window ends there.
-  if (ctx.state !== 'running') { await ctx.resume().catch(() => {}); rebase(); }
+  // (not 'suspended') when the screen locks, and that is silence too.
+  if (ctx.state !== 'running') await ctx.resume().catch(() => {});
 
   const t0 = performance.now();
   const chunks = [];
