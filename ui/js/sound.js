@@ -43,6 +43,20 @@ function beat() {
 }
 setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
 
+// KNOWN HACK, kept on purpose. This beats for the life of the page, on a page
+// that is nearly always fine, and on a phone that costs battery. The obvious
+// cure — arm the watch on the moments that could take the audio session, disarm
+// it once the clock is seen keeping up — was built and REVERTED: it dropped the
+// hidden media element around the moment the screen locks, and that element is
+// the only reason iOS keeps this page alive with the screen off. Speech stopped
+// mid-sentence on lock and resumed on unlock, which is a far worse bug than a
+// timer. See the revert of cb2622e for what was tried.
+//
+// The likely real answer is not a cleverer watch but a switch: the captain turns
+// the corpse watch ON when he is working from his phone, and it does not run at
+// all otherwise. Whoever picks that up: the property that must not break is that
+// speech survives a locked screen. Everything else is negotiable.
+
 function ensureCtx() {
   if (ctx) return ctx;
   const AC = window.AudioContext || window.webkitAudioContext;
