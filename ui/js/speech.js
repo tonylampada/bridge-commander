@@ -214,6 +214,14 @@ function closeSink() {
    battery and keeps a player on the lock screen for as long as it runs. */
 const HUM_HZ = 30;         // under the low end of any phone speaker
 const HUM_GAIN = 0.0008;   // and far under its floor in level: samples, no sound
+// A diagnostic, not a feature. "Is the tone still playing after the screen
+// locks" is the question the whole design rests on, and inaudible by design
+// means it can only be answered by inference. ?hum=loud makes it a hum a person
+// can hear in a headphone, so the answer is heard instead of argued.
+const LOUD = (() => { try { return new URLSearchParams(location.search).get('hum') === 'loud'; }
+                      catch { return false; } })();
+const humHz = () => LOUD ? 220 : HUM_HZ;
+const humGain = () => LOUD ? 0.02 : HUM_GAIN;
 let held = false;          // the switch
 let hum = null;            // {osc, gain} while the tone is holding the session
 let owned = false;         // true from speak() until closeSink(): speech has the element
@@ -224,8 +232,8 @@ function humOn() {
   if (!c.createMediaStreamDestination) return;
   if (!sink) sink = c.createMediaStreamDestination();
   const osc = c.createOscillator(), gain = c.createGain();
-  osc.frequency.value = HUM_HZ;
-  gain.gain.value = HUM_GAIN;
+  osc.frequency.value = humHz();
+  gain.gain.value = humGain();
   osc.connect(gain); gain.connect(sink);
   osc.start();
   const mine = hum = { osc, gain };
