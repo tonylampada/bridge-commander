@@ -34,28 +34,43 @@ export const needsRebuild = (state, ctxAdvance, realMs) =>
 // more than one beat old. Beats only ever set the verdict — the replacement
 // itself waits for a gesture, because iOS wants one to start the new context.
 const BEAT_MS = 500;
-let lastTime = 0, lastWall = 0, dead = false;
+let lastTime = 0, lastWall = 0, dead = false, watch = null;
 function beat() {
-  if (!ctx) return;
+  if (!ctx || !watch) return;
   const wall = performance.now();
   dead = needsRebuild(ctx.state, ctx.currentTime - lastTime, wall - lastWall);
   lastTime = ctx.currentTime; lastWall = wall;
 }
-setInterval(beat, BEAT_MS)?.unref?.();   // a timer is no reason to hold a process open
 
-// KNOWN HACK, kept on purpose. This beats for the life of the page, on a page
-// that is nearly always fine, and on a phone that costs battery. The obvious
-// cure — arm the watch on the moments that could take the audio session, disarm
-// it once the clock is seen keeping up — was built and REVERTED: it dropped the
-// hidden media element around the moment the screen locks, and that element is
-// the only reason iOS keeps this page alive with the screen off. Speech stopped
-// mid-sentence on lock and resumed on unlock, which is a far worse bug than a
-// timer. See the revert of cb2622e for what was tried.
+// The switch this watch was always waiting for. It used to beat for the life of
+// every page, on a page that is nearly always fine and on a phone where it costs
+// battery — the KNOWN HACK that stood here. The cure that was tried first (arm
+// the watch around the moments that could take the audio session, disarm it once
+// the clock keeps up) was built and REVERTED: it dropped the hidden media
+// element around the moment the screen locks, and that element is the only
+// reason iOS keeps this page alive with the screen off. Speech stopped
+// mid-sentence on lock. See the revert of cb2622e for what was tried.
 //
-// The likely real answer is not a cleverer watch but a switch: the captain turns
-// the corpse watch ON when he is working from his phone, and it does not run at
-// all otherwise. Whoever picks that up: the property that must not break is that
-// speech survives a locked screen. Everything else is negotiable.
+// So it is not a cleverer watch, it is the captain's switch — the same one that
+// holds the audio session open from his pocket (keepalive.js). ON: the corpse
+// left by a Siri Shortcut is found within a beat and the next gesture replaces
+// it. OFF: nothing beats, and a page behaves exactly as it did before any of
+// this existed — which is the right trade for a desktop tab, where no Shortcut
+// ever takes the audio session away.
+export function setCorpseWatch(on) {
+  if (!!on === !!watch) return;
+  if (on) {
+    // A fresh baseline: a sample from before the watch was off answers a
+    // question about a window nobody was watching.
+    lastTime = ctx ? ctx.currentTime : 0; lastWall = performance.now();
+    dead = false;
+    watch = setInterval(beat, BEAT_MS);
+    watch?.unref?.();                  // a timer is no reason to hold a process open
+  } else {
+    clearInterval(watch); watch = null;
+    dead = false;                      // no verdict outlives the watch that made it
+  }
+}
 
 function ensureCtx() {
   if (ctx) return ctx;

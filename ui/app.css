@@ -532,6 +532,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 #voice-test { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 8px; font-size: 12px; }
 #voice-select:hover, #voice-test:hover { border-color: var(--accent2); color: var(--accent); }
+#ka-btn { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 9px; font-size: 13px; }
+#ka-btn.on { color: var(--accent); border-color: var(--accent2); }
 #ns-body { display: flex; flex-direction: column; gap: 8px; transition: opacity .2s; }
 #ns-body.dim { opacity: .5; }
 #ns-master-btn { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 9px; font-size: 13px; }

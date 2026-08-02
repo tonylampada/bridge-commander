@@ -20,6 +20,7 @@ import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
 import './resize.js'; // draggable side-panel widths
+import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 
 chatOnOpenCard(openDetail);
 // a notification is about a conversation — clicking it lands IN the chat,

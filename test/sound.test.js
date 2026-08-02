@@ -11,7 +11,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let play, needsResume, needsRebuild, setVolume;
+let play, needsResume, needsRebuild, setVolume, setCorpseWatch;
 
 // The page's listeners, kept by type so a test can fire a gesture by hand.
 const listeners = { window: {}, document: {} };
@@ -70,9 +70,12 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 test.before(async () => {
   global.window = { AudioContext: FakeCtx, addEventListener: add(listeners.window), removeEventListener: remove(listeners.window) };
   global.document = { hidden: false, addEventListener: add(listeners.document) };
-  ({ play, needsResume, needsRebuild, setVolume } = await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'sound.js')).href));
+  ({ play, needsResume, needsRebuild, setVolume, setCorpseWatch } = await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'sound.js')).href));
 });
-test.beforeEach(() => { resumes = 0; played = 0; if (theCtx) { theCtx.refuse = false; theCtx.state = 'running'; } });
+// The corpse watch is OFF unless the captain's pocket switch turns it on (see
+// keepalive.js), so every test starts from the state a desktop tab is in and
+// the ones about the corpse arm it themselves.
+test.beforeEach(() => { resumes = 0; played = 0; setCorpseWatch(false); if (theCtx) { theCtx.refuse = false; theCtx.state = 'running'; } });
 
 // ── the decision ──────────────────────────────────────────────────────────
 test('the recovery decision covers every state a context can be in', () => {
@@ -175,6 +178,7 @@ test('a healthy context is never replaced, however many gestures land on it', as
 });
 
 test('a dead context is replaced by one with the whole graph and the volume on it', async () => {
+  setCorpseWatch(true);                  // the captain is working from his pocket
   fire('window', 'click');
   await tick();
   setVolume(0.42);
@@ -206,6 +210,7 @@ test('a dead context is replaced by one with the whole graph and the volume on i
 // and calls it alive. One tap is four events inside a tenth of a second, so
 // there is no second chance inside the tap either — the ▶ is simply silent.
 test('the tap after a dictation: the context RAN, then died', async () => {
+  setCorpseWatch(true);                  // the switch is on: this is the phone
   fire('window', 'click');               // first gesture: the context is made
   await tick();
   const corpse = theCtx;
@@ -229,4 +234,73 @@ test('the tap after a dictation: the context RAN, then died', async () => {
   assert.equal(built, 1, 'the tap should have replaced the corpse');
   assert.notEqual(theCtx, corpse, 'and played into the new context');
   assert.ok(played > 0, 'so the ▶ was heard, on the FIRST tap');
+});
+
+// ── the switch ────────────────────────────────────────────────────────────
+// The watch beat for the life of every page — a timer on a page that is nearly
+// always fine, and battery on a phone. It is the captain's switch now (see
+// keepalive.js): on when he is working from his pocket, off everywhere else.
+test('with the switch off nothing beats, and the page behaves as it always did', async () => {
+  setCorpseWatch(false);
+  fire('window', 'click');
+  await tick();
+  const c = theCtx;
+  await sleep(300);
+  c.freeze();                            // a corpse nobody is watching for
+  await sleep(1200);                     // several beats' worth, if any were beating
+  built = 0; played = 0;
+  fire('window', 'click');
+  play('ding');
+  await tick();
+  assert.equal(built, 0, 'no verdict was reached, so no context was replaced');
+  assert.equal(theCtx, c, 'the same context a page without any of this would have');
+
+  // Everything the switch does NOT gate is still there: a screen lock parks the
+  // context in 'interrupted', and the next gesture still wakes it.
+  theCtx.state = 'interrupted'; resumes = 0;
+  fire('window', 'click');
+  await tick();
+  assert.equal(resumes, 1, 'the gesture path is untouched');
+  assert.equal(theCtx.state, 'running');
+});
+
+// Turning it on mid-page must not convict the context of a death that happened
+// while nobody was watching: the first verdict has to come from a window the
+// watch was actually awake for.
+test('turning the switch on starts a fresh window, not a verdict about the past', async () => {
+  setCorpseWatch(false);
+  fire('window', 'click');
+  await tick();
+  const c = theCtx;
+  await sleep(400);                      // time passes unwatched
+  setCorpseWatch(true);
+  built = 0;
+  fire('window', 'click');               // the very next gesture
+  await tick();
+  assert.equal(built, 0, 'a living context is not replaced on the strength of a gap');
+  assert.equal(theCtx, c);
+
+  c.freeze();                            // and now it really dies
+  await sleep(1200);
+  fire('window', 'click');
+  await tick();
+  assert.equal(built, 1, 'which the watch, now awake, does catch');
+  setCorpseWatch(false);
+});
+
+// Off has to mean OFF: not a paused timer, not a verdict left standing from
+// when it was on. Otherwise turning it off leaves residue behind it.
+test('turning the switch off drops the verdict it was holding', async () => {
+  setCorpseWatch(true);
+  fire('window', 'click');
+  await tick();
+  const c = theCtx;
+  c.freeze();
+  await sleep(1200);                     // the watch has decided: this one is dead
+  setCorpseWatch(false);                 // …and the captain turns it off
+  built = 0;
+  fire('window', 'click');
+  await tick();
+  assert.equal(built, 0, 'no timer beating and no corpse verdict left behind');
+  assert.equal(theCtx, c);
 });

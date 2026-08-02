@@ -6,6 +6,10 @@
    ponytail: `ui/js/speech.js` is a hand-copy of chatterbox_server's
    console/speech.js. Two copies drift. If a third consumer ever appears, that is
    the moment to publish it properly instead of copying again.
+   ponytail: hold() — the keep-alive at the bottom — was written HERE first,
+   against the captain's phone, and the copy upstream does not have it yet. It
+   belongs in the original for the same reason the rest of this file does: it is
+   about the audio session, not about the board. Carry it over there.
 
    speech.js — the speech path: one message, spoken out loud, on a phone whose
    screen is off. Import it, call speak(), and the three verbs work everywhere
@@ -127,9 +131,16 @@ function audio() {
 // phase and passive, the way sound.js primes its own; a no-op unless the last
 // beat found the context dead. Optional call so the module still imports where
 // there is no window to listen on.
+// A held session is rebuilt here too: the tone's nodes belonged to the corpse
+// and went with it, so the gesture that replaces the context is also what puts
+// the tone back on the new one. humOn() is a no-op unless the switch is on.
 for (const ev of ['click', 'pointerdown', 'touchstart', 'keydown'])
-  window.addEventListener?.(ev, () => { if (ctx && dead) audio().resume().catch(() => {}); },
-    { capture: true, passive: true });
+  window.addEventListener?.(ev, () => {
+    if (!ctx || !dead) return;
+    humLost();
+    audio().resume().catch(() => {});
+    humOn();
+  }, { capture: true, passive: true });
 
 // It renders nothing and has no controls of its own: the transport above is the
 // player people see. This one is the player the OS sees.
@@ -169,12 +180,92 @@ function openSink() {
 // Let the element go. Pausing alone is not enough in either direction: it leaves
 // the lock screen showing a player for speech that is over, and it leaves the
 // element holding a stream it will never play again (see openSink).
+// Unless the session is being HELD (see below) — then not letting go is the
+// whole point, and the keep-alive tone takes the element back instead.
 function closeSink() {
-  element().pause();
-  element().srcObject = null;
+  owned = false;
   transport(false);
   playbackState('none');
+  if (held) { humOn(); return; }
+  element().pause();
+  element().srcObject = null;
 }
+
+/* ── holding the session open ────────────────────────────────────────────
+   A session that is PRODUCING sound survives what an idle one does not. The
+   Siri Shortcut that takes the microphone from a locked phone leaves an
+   AudioContext that reads 'running' and never makes another sample, and iOS
+   only accepts a gesture as the repair — which a locked screen cannot give.
+   The one session observed to come through it was the one already speaking
+   when the Shortcut arrived. So: while the switch is on, never be idle.
+
+   Something, not nothing. A paused element is not playback to the OS, a muted
+   one is not either, and an all-zero stream is a session iOS is free to take
+   back. So it is a real tone through the SAME element the speech leaves
+   through — the one property that must not break is that the page reads as a
+   music player — at a frequency and a level no phone can reproduce.
+
+   It yields the instant there is something to say: speak() silences it before
+   the first buffer is queued and closeSink() brings it back when the last one
+   has been heard, so nothing is ever mixed into the speech and nothing races
+   it for the element. The speech path above is untouched.
+
+   The switch is somebody else's (a settings toggle, off by default): this costs
+   battery and keeps a player on the lock screen for as long as it runs. */
+const HUM_HZ = 30;         // under the low end of any phone speaker
+const HUM_GAIN = 0.0008;   // and far under its floor in level: samples, no sound
+let held = false;          // the switch
+let hum = null;            // {osc, gain} while the tone is holding the session
+let owned = false;         // true from speak() until closeSink(): speech has the element
+
+function humOn() {
+  if (hum || !held || owned || sink === null) return;   // refused once, refused for good
+  const c = audio();
+  if (!c.createMediaStreamDestination) return;
+  if (!sink) sink = c.createMediaStreamDestination();
+  const osc = c.createOscillator(), gain = c.createGain();
+  osc.frequency.value = HUM_HZ;
+  gain.gain.value = HUM_GAIN;
+  osc.connect(gain); gain.connect(sink);
+  osc.start();
+  const mine = hum = { osc, gain };
+  if (c.state !== 'running') c.resume().catch(() => {});
+  // It arms the element itself instead of calling openSink(), for the sake of
+  // what happens when the browser says no. A refusal HERE is only a keep-alive
+  // that could not start — the switch comes back on at page load with no
+  // gesture behind it, and iOS wants one — so it lets the tone go and the next
+  // gesture (see keepalivesettings.js) tries again. openSink()'s refusal means
+  // something else entirely and must never be reached from here: it condemns
+  // the page to the bare speakers, and with them to silence on a locked screen.
+  // Letting go matters: a tone into an element that is not playing holds
+  // nothing open, and a `hum` left standing would make every retry a no-op.
+  element().srcObject = sink.stream;
+  element().play().catch(() => { if (hum === mine) humOff(); });
+}
+
+// Silence the tone and leave the element alone: whoever calls this either takes
+// the element over (speak) or lets it go itself (hold(false)).
+function humOff() {
+  if (!hum) return;
+  try { hum.osc.stop(); } catch {}
+  try { hum.osc.disconnect(); hum.gain.disconnect(); } catch {}
+  hum = null;
+}
+
+// The nodes belonged to a context that has been closed; there is nothing left
+// to stop, only to forget.
+function humLost() { hum = null; }
+
+/* The switch itself. On: the element plays for as long as it is on, through
+   speech and around it. Off: nothing is left behind — no tone, no element
+   playing, no stream held, no context kept open on its account. */
+export function hold(on) {
+  const was = held;
+  held = !!on;
+  if (held) humOn();
+  else { humOff(); if (was && !owned) closeSink(); }
+}
+export function holding() { return held; }
 
 /* ── the lock screen ─────────────────────────────────────────────────── */
 function announce(title, artist) {
@@ -267,6 +358,8 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
   if (!url) throw new Error('speak() needs the engine url — there is no default');
   if (!voice) throw new Error('speak() needs a voice — there is no default');
   stop();                     // one voice at a time
+  owned = true;               // the element is the speech's now…
+  humOff();                   // …and the keep-alive tone is out of its way
   audio();                    // a corpse from an interruption is replaced here
   openSink();                 // before any await: iOS only allows play() inside the tap
   announce(title, artist);

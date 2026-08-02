@@ -13,7 +13,7 @@ const assert = require('node:assert');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-let speak, stop, pause, resume;
+let speak, stop, pause, resume, hold, holding;
 
 const tick = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -72,6 +72,8 @@ function fakePage() {
 // `scheduled` is emptied between tests rather than the context being rebuilt.
 const scheduled = [];
 const nodes = {};
+const oscs = [];                                   // every keep-alive source ever started
+const humming = () => oscs.filter((o) => o.started && !o.stopped);
 let theCtx = null, built = 0;
 class FakeCtx {
   constructor() { this.state = 'running'; this.clock = 0; nodes.destination = this.destination = {}; theCtx = this; built++; }
@@ -84,6 +86,18 @@ class FakeCtx {
   close() { this.state = 'closed'; return Promise.resolve(); }
   suspend() { this.state = 'suspended'; return Promise.resolve(); }
   createMediaStreamDestination() { return (nodes.msd = { stream: { id: 'live' } }); }
+  // The keep-alive's two nodes. They record enough to answer the only questions
+  // asked of them: is something actually RUNNING (a stopped source holds no
+  // session), at what level (a muted one holds none either), and into what.
+  createOscillator() {
+    const o = { frequency: { value: 0 }, connect(n) { o.to = n; }, disconnect() { o.to = null; },
+      start() { o.started = true; oscs.push(o); }, stop() { o.stopped = true; } };
+    return o;
+  }
+  createGain() {
+    const g = { gain: { value: 1 }, connect(n) { g.to = n; }, disconnect() { g.to = null; } };
+    return g;
+  }
   createBuffer(ch, len, rate) {
     const data = new Float32Array(len);
     return { length: len, duration: len / rate, getChannelData: () => data };
@@ -155,7 +169,7 @@ test.before(async () => {
   global.MediaMetadata = function (m) { Object.assign(this, m); };
   global.window = { AudioContext: FakeCtx, MediaMetadata: global.MediaMetadata };
   fakePage();
-  ({ speak, stop, pause, resume } =
+  ({ speak, stop, pause, resume, hold, holding } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'speech.js')).href));
 });
 test.beforeEach(() => { scheduled.length = 0; fakePage(); });
@@ -420,6 +434,112 @@ test('a message after a dictation replaces the context, sink and element with it
   assert.ok(sinkEl.plays >= 1, 'and played again — the interruption paused it too');
   assert.ok(scheduled.length, 'the second message was heard');
   for (const s of scheduled) assert.equal(s.to, nodes.msd, 'through the new sink');
+});
+
+// ── holding the session open ──────────────────────────────────────────────
+// The Shortcut takes the audio session from a locked phone and hands back a
+// context that never makes another sample; iOS wants a gesture to repair it and
+// a locked screen has none. The session that survived was the one already
+// PLAYING when the Shortcut arrived, so hold() keeps this element playing — the
+// same element, never a second one competing with it, because that element is
+// the only reason the page is alive with the screen off at all.
+test('holding plays: the same element, a live stream, and a source actually running', async () => {
+  await tick(10);                      // let the previous test's last buffer finish
+  oscs.length = 0;
+  hold(true);
+  assert.equal(holding(), true);
+  assert.equal(sinkEl.srcObject, nodes.msd.stream, 'the element speech leaves through, fed the same way');
+  assert.ok(!sinkEl.paused, 'genuinely playing — a paused element is not playback to the OS');
+  const on = humming();
+  assert.equal(on.length, 1, 'exactly one source is holding the session');
+  assert.equal(on[0].to.to, nodes.msd, 'and it reaches the element’s stream, not the bare speakers');
+  assert.ok(on[0].to.gain.value > 0, 'at a level above zero — a muted source buys nothing');
+  assert.ok(on[0].to.gain.value < 0.01, 'and far below anything audible');
+  hold(false);
+});
+
+// The one property that is not negotiable: speech sounds exactly as it does
+// today. Nothing races it for the element, nothing is mixed under it, and the
+// element is never paused between the tone and the first word.
+test('speech takes the element back, and the keep-alive is silent for the whole message', async () => {
+  await tick(10);
+  oscs.length = 0;
+  hold(true);
+  const humBefore = humming()[0];
+  fakeFetch((b, sig) => openStream(sig));
+  const done = speak({ ...ASK, input: 'olá', title: 'Ana' });
+  await tick(10);
+  assert.ok(humBefore.stopped, 'the tone stopped before the first buffer was queued');
+  assert.equal(humming().length, 0, 'nothing of the keep-alive is left running under the speech');
+  assert.ok(!sinkEl.paused, 'and the element never paused in between — no gap, no clipped first word');
+  for (const s of scheduled) assert.equal(s.to, nodes.msd, 'every buffer still goes through the element');
+
+  stop();
+  await done;
+  assert.equal(bar.hidden, true, 'the transport goes away when the speech is over…');
+  assert.ok(!sinkEl.paused, '…but the element keeps playing: the session is still his');
+  assert.equal(humming().length, 1, 'and the tone is back holding it');
+  hold(false);
+});
+
+// Turning it off has to leave NOTHING behind: not a source still running, not an
+// element still playing, not a stream still held.
+test('turning it off leaves no residue', async () => {
+  await tick(10);
+  oscs.length = 0;
+  hold(true);
+  const on = humming()[0];
+  hold(false);
+  assert.equal(holding(), false);
+  assert.ok(on.stopped, 'the source was stopped');
+  assert.equal(on.to, null, 'and disconnected — not left hanging off the graph');
+  assert.equal(humming().length, 0);
+  assert.ok(sinkEl.paused, 'the element is not playing on its own account any more');
+  assert.equal(sinkEl.srcObject, null, 'and holds no stream');
+
+  // And the page is the page it always was: the next message re-arms the
+  // element and lets it go at the end, exactly as it does with the switch off.
+  fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
+  const fed = sinkEl.fed;
+  await speak({ ...ASK, input: 'olá', title: 'Ana' });
+  await tick(10);
+  assert.ok(sinkEl.fed > fed, 're-armed for the message');
+  assert.equal(sinkEl.srcObject, null, 'and let go of at the end, the way it always was');
+  assert.ok(sinkEl.paused);
+  assert.equal(humming().length, 0, 'nothing started itself back up');
+});
+
+// The switch comes back on at page load with no gesture behind it, and iOS
+// wants one. A refused start must leave nothing standing — a tone into an
+// element that is not playing holds nothing open, and a keep-alive that
+// believes it is running is one no later gesture would ever retry.
+test('a refused start lets go, so the next gesture can take it', async () => {
+  await tick(10);
+  oscs.length = 0;
+  sinkEl.refuse = true;                  // the page just loaded; nothing has been tapped
+  hold(true);
+  await tick(10);
+  assert.equal(humming().length, 0, 'it did not go on believing it holds the session');
+  assert.equal(holding(), true, 'but the switch is still on — it is armed, not off');
+
+  sinkEl.refuse = false;                 // the captain taps the board
+  hold(true);                            // (keepalivesettings.js re-calls it on any gesture)
+  assert.equal(humming().length, 1, 'and this time it took');
+  assert.ok(!sinkEl.paused);
+  hold(false);
+});
+
+// A page that never turns it on is the page that is on main today: every other
+// test in this file runs with the switch off, and this one says so out loud.
+test('a page that never asks for it never plays anything of its own', async () => {
+  await tick(10);
+  oscs.length = 0;
+  assert.equal(holding(), false, 'off by default — a desktop tab pays nothing');
+  fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
+  await speak({ ...ASK, input: 'olá', title: 'Ana' });
+  await tick(10);
+  assert.equal(oscs.length, 0, 'no keep-alive source was ever made');
+  assert.ok(sinkEl.paused, 'and the element is paused between messages, as it always has been');
 });
 
 // LAST, deliberately: a refusal is remembered for the life of the page, so every

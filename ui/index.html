@@ -72,6 +72,15 @@
       <button id="voice-test" title="test the selected voice">▶</button>
     </span>
   </div>
+  <!-- the phone-in-a-pocket switch: holds the audio session open (an inaudible
+       tone through the same element the speech leaves through) so a reply still
+       plays after a Siri Shortcut has taken the microphone from a locked
+       screen, and arms the corpse watch that catches the context it kills.
+       Off by default: it costs battery and a desktop tab needs none of it. -->
+  <div class="sp-title">pocket</div>
+  <div class="sp-row">
+    <button id="ka-btn" title="keep audio alive with the screen off — for talking to the board from a locked phone; costs battery">🎧 off</button>
+  </div>
   <div class="sp-title">notifications</div>
   <div id="ns-body">
     <div class="sp-row">
