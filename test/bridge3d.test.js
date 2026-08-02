@@ -13,6 +13,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const UI = path.join(__dirname, '..', 'ui', 'js', 'bridge3d');
@@ -460,4 +461,129 @@ test('what a card paints lands on that card, not in the gutter beside it', async
       }
     }
   }
+});
+
+// ---- the dev loop: the places the room gets photographed from ----------------
+//
+// The loop is what makes every card after this one verifiable instead of hoped
+// at — `node dev/room-shots.js` drives an emulated headset and writes a PNG per
+// viewpoint. But a photograph only ever proves the room did not go blank. What
+// a photograph CANNOT prove is measured here, in the same unit as everything
+// above: is the head being asked to turn somewhere a neck goes, is what the
+// shot is named after actually inside the shot, and has the table of viewpoints
+// quietly gone stale against the room it claims to photograph.
+
+// Every place room.js actually stands a panel — what a viewpoint is allowed to
+// be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
+async function panelPlaces() {
+  const R = await load('room.js');
+  const out = [{ x: 0, y: R.FRONT.y, z: R.FRONT.z }, { x: 0, y: R.BACK.y, z: R.BACK.z }, R.BAR];
+  for (let count = 1; count <= 12; count++) {
+    for (let i = 0; i < count; i++) out.push(R.placeWindow(i, count));
+  }
+  return out;
+}
+
+const nearly = (a, b) => Math.abs(a - b) < 1e-9;
+
+test('every viewpoint is aimed at something the room really stands there', async () => {
+  const { VIEWPOINTS } = await load('viewpoints.js');
+  const places = await panelPlaces();
+  assert.ok(VIEWPOINTS.length >= 4, 'a loop with two viewpoints is a loop with one blind side');
+  for (const v of VIEWPOINTS) {
+    const at = v.frames.at;
+    assert.ok(places.some((p) => nearly(p.x || 0, at.x || 0) && nearly(p.y, at.y) && nearly(p.z, at.z)),
+      `${v.name} frames (${at.x}, ${at.y}, ${at.z}) and no panel stands there`);
+    assert.ok(['empty', 'working'].includes(v.scene), `${v.name} wants an unknown scene`);
+  }
+});
+
+test('no viewpoint asks for a turn of the head the room does not', async () => {
+  const { VIEWPOINTS, aimAt, gazeDistance } = await load('viewpoints.js');
+  const R = await load('room.js');
+  for (const v of VIEWPOINTS) {
+    const a = aimAt(v.eye, v.look);
+    // Nothing lives past ±45°, so nothing is photographed from past it either.
+    assert.ok(Math.abs(a.yaw) <= 45, `${v.name} turns the head ${a.yaw.toFixed(1)}° off centre`);
+    // Looking UP is the sore neck; the room keeps everything below +10°, and a
+    // shot that needs a chin lift is a shot of a room he would not use.
+    assert.ok(a.pitch <= R.RISE, `${v.name} looks ${a.pitch.toFixed(1)}° up`);
+    assert.ok(a.pitch >= -45, `${v.name} looks ${a.pitch.toFixed(1)}° down — that is a neck, not a glance`);
+    // And it is looking at something inside the band it is meant to be read in.
+    const d = gazeDistance(v);
+    assert.ok(d >= R.NEAR && d <= R.FAR,
+      `${v.name} is looking ${d.toFixed(2)} m out, outside ${R.NEAR}–${R.FAR} m`);
+  }
+});
+
+test('what a shot is named after fits inside the shot, in arc', async () => {
+  const { VIEWPOINTS, aimAt, FOVY } = await load('viewpoints.js');
+  const R = await load('room.js');
+  const MARGIN = 5;                       // degrees of clear air at the frame edge
+  for (const v of VIEWPOINTS) {
+    const gaze = aimAt(v.eye, v.look);
+    const at = v.frames.at;
+    const centre = aimAt(v.eye, [at.x || 0, at.y, at.z]);
+    const d = R.eyeDistance(at);
+    // The panel is turned to face the eye, so it covers its centre's direction
+    // give or take half its own arc — offset by however far the gaze is from
+    // that centre. Both axes, because a panel can fall out of the top of a
+    // frame as easily as off the side.
+    const half = FOVY / 2 - MARGIN;
+    const across = Math.abs(gaze.yaw - centre.yaw) + R.arcDeg(v.frames.panel.widthM, d) / 2;
+    const down = Math.abs(gaze.pitch - centre.pitch) + R.arcDeg(v.frames.panel.heightM, d) / 2;
+    assert.ok(across <= half, `${v.name}: its panel runs ${across.toFixed(1)}° off centre, past the ${half}° edge`);
+    assert.ok(down <= half, `${v.name}: its panel runs ${down.toFixed(1)}° up/down, past the ${half}° edge`);
+  }
+});
+
+test('aiming the head at a point really does point it at that point', async () => {
+  const { aimAt } = await load('viewpoints.js');
+  const D = Math.PI / 180;
+  // The independent derivation: rebuild the forward vector from the yaw and
+  // pitch aimAt handed back — WebXR's own convention, forward at -Z, yaw about
+  // Y, pitch about X — and check it lands back on the target. A sign flip here
+  // is a whole run of screenshots pointed at the opposite wall, and it is the
+  // one bug a PNG cannot report because the PNG looks perfectly fine.
+  const cases = [
+    [[0, 1.45, 0], [0, 1.15, -1.55]],
+    [[0, 1.45, 0], [-0.68, 1.21, -1.17]],
+    [[0, 1.45, 0], [0.68, 1.21, -1.17]],
+    [[0, 1.45, 0], [0, 0.83, -1.0]],
+    [[0.2, 1.5, 0.3], [-1.0, 2.0, -2.0]],
+  ];
+  for (const [eye, target] of cases) {
+    const { yaw, pitch } = aimAt(eye, target);
+    const fwd = [
+      -Math.sin(yaw * D) * Math.cos(pitch * D),
+      Math.sin(pitch * D),
+      -Math.cos(yaw * D) * Math.cos(pitch * D),
+    ];
+    const to = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
+    const len = Math.hypot(...to);
+    for (let i = 0; i < 3; i++) {
+      assert.ok(Math.abs(fwd[i] - to[i] / len) < 1e-9,
+        `aimAt(${eye}, ${target}) points at ${fwd} and not at the target`);
+    }
+  }
+});
+
+test('the room the captain opens never loads the dev loop', async () => {
+  // The whole deal on this line of work is that the flags are OFF by default —
+  // and "off" has to mean not fetched, not merely not used. So nothing the
+  // normal page pulls in may name the emulated runtime at all: it is reachable
+  // only through a dynamic import behind the query parameter.
+  const normal = ['main.js', 'room.js', 'panels.js', 'surface.js', 'faces.js', 'viewpoints.js'];
+  for (const f of normal) {
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    for (const m of src.matchAll(/^\s*import\s[^;]*?from\s*['"]([^'"]+)['"]/gm)) {
+      assert.ok(!/devxr|iwer/i.test(m[1]),
+        `${f} imports ${m[1]} at the top level — the emulator has to stay behind the flag`);
+    }
+  }
+  // And the capturable drawing buffer is a flag, not a default: it costs
+  // performance in a headset, where the frame budget is 13.9 ms.
+  const main = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
+  assert.match(main, /preserveDrawingBuffer:\s*DEV\.has\(['"]capture['"]\)/,
+    'preserveDrawingBuffer should be on only when ?capture is');
 });

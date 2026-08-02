@@ -28,9 +28,16 @@ import { keyForEvent } from '../panekeys.js';
 
 const say = (m) => { const el = document.getElementById('status'); if (el) el.textContent = m; };
 
+// The dev loop's two switches, both off unless the URL asks — see README.md.
+// `?capture=1` keeps the drawing buffer so a screenshot of the room is not an
+// empty PNG; `?xr=emulate` puts a headset that is not there behind navigator.xr.
+// Neither costs the normal room anything: false IS WebGLRenderer's default for
+// preserveDrawingBuffer, and devxr.js is not so much as fetched without the flag.
+const DEV = new URLSearchParams(location.search);
+
 let renderer;
 try {
-  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+  renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false, preserveDrawingBuffer: DEV.has('capture') });
 } catch (e) {
   say('no WebGL in this browser — ' + ((e && e.message) || e));
   throw e;
@@ -363,7 +370,16 @@ window.addEventListener('pointerup', (e) => {
 const gate = document.getElementById('gate');
 const uibar = document.getElementById('bar');
 
+// The emulated headset installs itself over navigator.xr before anything asks
+// navigator.xr a question, which is why this is started here and awaited in
+// enter() rather than raced against the first click.
+const emulated = DEV.get('xr') === 'emulate'
+  ? import('./devxr.js').then((m) => m.install())
+    .catch((e) => { say('the emulated headset did not install: ' + ((e && e.message) || e)); })
+  : null;
+
 async function enter() {
+  if (emulated) await emulated;
   const flat = (why) => { say(why); gate.hidden = true; uibar.hidden = false; };
   if (!navigator.xr) return flat('no WebXR in this browser — flat view, drag to look, click to open');
   const ok = await navigator.xr.isSessionSupported('immersive-vr').catch(() => false);
