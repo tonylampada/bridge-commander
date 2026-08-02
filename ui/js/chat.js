@@ -11,6 +11,7 @@ import { openAttachment } from './detail.js';
 import { avatarHtml } from './avatars.js';
 import { isEchoOf, addPending, pendingFor } from './pending.js';
 import { fileContextBlock } from './filectx.js';
+import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -24,9 +25,36 @@ const inputEl = document.getElementById('chat-input');
 let detailOpener = null; // set by main.js to avoid a circular import
 export function onOpenCard(fn) { detailOpener = fn; }
 
+// ---------- the chat that was open last time ----------
+// Restored by assigning S.chatMode directly rather than going through
+// openLieutenantChat/openCardThread: coming back must not focus the composer,
+// flip the mobile tab, scroll the board or mark anything read — it just puts
+// the panel back where it was. A chat that no longer exists is dropped by
+// ensureChatMode() below, which rewrites the key on the next render.
+let chatMemo = null;
+try { chatMemo = localStorage.getItem(CHAT_KEY); } catch (e) {}
+const reopen = decodeChat(chatMemo, window.location.hash);
+if (reopen === 'closed') S.view = 'board'; // mobile: he closed the chat on purpose
+else if (reopen) S.chatMode = reopen;
+// Persist whatever the panel is showing now. Driven from currentTarget() (so
+// it runs after normalization, and after any way the mode can change), and
+// deduped against the last written value so a render loop is not a write loop.
+function rememberChat() {
+  // desktop keeps the chat pane open always — only the mobile tab can close it
+  const closed = window.innerWidth <= 760 && S.view !== 'chat';
+  const v = closed ? CLOSED : encodeChat(S.chatMode);
+  if (v === chatMemo) return;
+  chatMemo = v;
+  try {
+    if (v) localStorage.setItem(CHAT_KEY, v);
+    else localStorage.removeItem(CHAT_KEY);
+  } catch (e) {}
+}
+
 // The chat panel's lieutenant-or-thread mode, normalized: a stale card / dead
 // lieutenant falls back to the first lieutenant; no lieutenants = no target.
 function ensureChatMode() {
+  if (!S.doc) return; // no board yet — nothing to validate a restored chat against
   const lts = lieutenants();
   if (S.chatMode) {
     if (S.chatMode.mode === 'card' && card(S.chatMode.id)) return;
@@ -37,6 +65,7 @@ function ensureChatMode() {
 }
 export function currentTarget() {
   ensureChatMode();
+  rememberChat();
   if (!S.chatMode) return null;
   return S.chatMode.mode === 'card' ? 'card:' + S.chatMode.id : 'lieutenant:' + S.chatMode.id;
 }
