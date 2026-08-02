@@ -15,6 +15,16 @@ export const needsResume = (state) => state !== 'running' && state !== 'closed';
 // leave every recovery path armed for the next try.
 const wake = (c) => { if (c && needsResume(c.state)) c.resume().catch(() => {}); };
 
+// …and sometimes there is nothing to wake. An iOS audio-session interruption (a
+// Siri Shortcut taking the microphone, a call) can leave the context PERMANENTLY
+// dead: resume() resolves, state reads 'running', and not one sample ever comes
+// out of it again. So do not ask the state field, it lies — ask the clock. A
+// running context whose currentTime did not move across real time is a corpse,
+// and the only cure is the one a page reload performs: build a new one.
+export const needsRebuild = (state, ctxAdvance, realMs) =>
+  state === 'running' && realMs >= 200 && ctxAdvance <= 0;
+let lastTime = 0, lastWall = 0;
+
 function ensureCtx() {
   if (ctx) return ctx;
   const AC = window.AudioContext || window.webkitAudioContext;
@@ -28,8 +38,25 @@ function ensureCtx() {
     comp.threshold.value = -14; comp.knee.value = 26; comp.ratio.value = 3.2;
     comp.attack.value = 0.003; comp.release.value = 0.25;
     master.connect(comp); comp.connect(ctx.destination);
+    lastTime = ctx.currentTime; lastWall = performance.now();
   } catch (e) { ctx = null; master = null; }
   return ctx;
+}
+
+// The context every caller should use: the live one, or a replacement for the
+// corpse. The rebuild goes back through ensureCtx() so the graph (master at the
+// current volume, the compressor, the wiring) can never drift from the original.
+function liveCtx() {
+  const c = ensureCtx();
+  if (!c) return null;
+  const wall = performance.now();
+  if (needsRebuild(c.state, c.currentTime - lastTime, wall - lastWall)) {
+    try { c.close(); } catch (e) {}
+    ctx = master = comp = null;
+    return ensureCtx();
+  }
+  lastTime = c.currentTime; lastWall = wall;
+  return c;
 }
 export function setVolume(v) {
   volume = Math.max(0, Math.min(1, Number(v)));
@@ -83,7 +110,7 @@ export function play(name) {
   if (!name || name === 'none') return;
   const fn = PALETTE[name];
   if (!fn) return;
-  const c = ensureCtx();
+  const c = liveCtx();
   if (!c) return;
   const run = () => { try { fn(c.currentTime + 0.02); } catch (e) {} };
   if (needsResume(c.state)) { c.resume().then(run).catch(() => {}); }
@@ -99,9 +126,12 @@ export function play(name) {
 // It stays attached for the life of the page: the context can die again long
 // after the first gesture (screen lock), and a gesture must always be able to
 // unlock it. A no-op when the context is already running.
-function primeOnGesture() { wake(ensureCtx()); }
+// A fresh context is born suspended and iOS wants a gesture to start it, so the
+// primer is also where a corpse gets replaced: capture phase means this runs
+// BEFORE the handler of the ▶ that was tapped, and that play() gets the new one.
+function primeOnGesture() { wake(liveCtx()); }
 for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.addEventListener(ev, primeOnGesture, { capture: true, passive: true });
 
 // Re-resume proactively on refocus so the next notification after a
 // backgrounded tab (or a locked phone) isn't the one that eats the latency.
-document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(ctx); });
+document.addEventListener('visibilitychange', () => { if (!document.hidden && ctx) wake(liveCtx()); });

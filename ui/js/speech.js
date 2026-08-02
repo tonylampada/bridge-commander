@@ -34,7 +34,7 @@
    are arguments; neither has a default. When the engine refuses, the refusal is
    thrown to the caller — this module never quietly finds another way to speak. */
 
-let ctx;              // the AudioContext, made once and kept
+let ctx;              // the AudioContext, kept until it dies (see audio())
 let sink;             // MediaStreamAudioDestinationNode — null once the browser refuses
 let el;               // the <audio> the sound leaves through
 let live = null;      // the speech in flight, or null
@@ -81,6 +81,25 @@ function transport(on, title) {
 }
 
 /* ── the route to the speakers ───────────────────────────────────────── */
+
+// The context, alive. An iOS audio-session interruption — the microphone taken
+// by a Siri Shortcut, a call — can leave it PERMANENTLY dead: resume() resolves,
+// state reads 'running', and nothing is ever heard from it again. The state
+// field lies, so ask the clock instead: a running context whose currentTime did
+// not move across real time is a corpse, and only a new one cures it. The sink
+// is a node of the dead context and goes with it — openSink() then makes a fresh
+// one and hands the element its stream again, which is what re-arms the element
+// after the same interruption paused it.
+let ctxTime = 0, ctxWall = 0;
+function audio() {
+  if (ctx && ctx.state === 'running' && ctx.currentTime - ctxTime <= 0 && performance.now() - ctxWall >= 200) {
+    try { ctx.close(); } catch {}
+    ctx = undefined; sink = undefined;
+  }
+  ctx ??= new (window.AudioContext || window.webkitAudioContext)();
+  ctxTime = ctx.currentTime; ctxWall = performance.now();
+  return ctx;
+}
 
 // It renders nothing and has no controls of its own: the transport above is the
 // player people see. This one is the player the OS sees.
@@ -218,7 +237,7 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
   if (!url) throw new Error('speak() needs the engine url — there is no default');
   if (!voice) throw new Error('speak() needs a voice — there is no default');
   stop();                     // one voice at a time
-  ctx ??= new (window.AudioContext || window.webkitAudioContext)();
+  audio();                    // a corpse from an interruption is replaced here
   openSink();                 // before any await: iOS only allows play() inside the tap
   announce(title, artist);
   transport(true, title);

@@ -72,11 +72,12 @@ function fakePage() {
 // `scheduled` is emptied between tests rather than the context being rebuilt.
 const scheduled = [];
 const nodes = {};
-let theCtx = null;
+let theCtx = null, built = 0;
 class FakeCtx {
-  constructor() { this.state = 'running'; nodes.destination = this.destination = {}; theCtx = this; }
+  constructor() { this.state = 'running'; nodes.destination = this.destination = {}; theCtx = this; built++; }
   get currentTime() { return 0; }
   resume() { this.state = 'running'; return Promise.resolve(); }
+  close() { this.state = 'closed'; return Promise.resolve(); }
   suspend() { this.state = 'suspended'; return Promise.resolve(); }
   createMediaStreamDestination() { return (nodes.msd = { stream: { id: 'live' } }); }
   createBuffer(ch, len, rate) {
@@ -384,6 +385,31 @@ test('a new message aborts the one it supersedes', async () => {
   assert.equal(posts[1].signal.aborted, false);
   assert.ok(scheduled.length > before, 'and the new one actually played');
   assert.deepEqual(session.titles, ['Ana', 'Bea']);
+});
+
+// ── the interruption that kills the context ───────────────────────────────
+// A Siri Shortcut takes the microphone; coming back, the AudioContext can read
+// 'running' with a clock that never moves again. No resume() revives that one,
+// and everything hanging off it — the sink, the stream the element holds — is
+// dead with it. The next message has to build all of it again.
+test('a context killed by an interruption is replaced, sink and element with it', async () => {
+  fakeFetch(() => pcmResponse([0, 100, -100, 0], 4, 24000));
+  await speak({ ...ASK, input: 'first', title: 'Ana' });
+  const corpse = theCtx, oldSink = nodes.msd;
+  built = 0;
+  await tick(220);                 // real time passes; the fake's clock never moves
+  scheduled.length = 0;
+  Object.assign(sinkEl, { plays: 0, fed: 0 });
+  await speak({ ...ASK, input: 'second', title: 'Ana' });
+
+  assert.equal(built, 1, 'one replacement — not a fresh context per message');
+  assert.notEqual(theCtx, corpse, 'the dead one is gone');
+  assert.equal(corpse.state, 'closed', 'and was let go of');
+  assert.notEqual(nodes.msd, oldSink, 'the sink belonged to the corpse; a new one took over');
+  assert.equal(sinkEl.srcObject, nodes.msd.stream, 'the element was handed the new stream');
+  assert.ok(sinkEl.plays >= 1, 'and played again — the interruption paused it too');
+  assert.ok(scheduled.length, 'the second message was heard');
+  for (const s of scheduled) assert.equal(s.to, nodes.msd, 'through the new sink');
 });
 
 // LAST, deliberately: a refusal is remembered for the life of the page, so every
