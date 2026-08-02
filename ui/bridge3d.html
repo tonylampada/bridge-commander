@@ -1,11 +1,11 @@
 <!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>bridge — 3d prototype</title>
+<title>bridge — the room</title>
 <style>
   html, body { margin: 0; height: 100%; background: #05070b; color: #c8d2e0;
                font: 15px/1.5 ui-monospace, "DejaVu Sans Mono", monospace; overflow: hidden; }
-  canvas { display: block; }
+  canvas { display: block; touch-action: none; }
   #gate { position: fixed; inset: auto 0 0 0; padding: 18px 20px 22px;
           background: linear-gradient(transparent, rgba(5,7,11,.92) 40%); text-align: center; }
   #enter { font: 600 16px ui-monospace, monospace; color: #05070b; background: #4cc2ff;
@@ -15,31 +15,36 @@
   #keys { color: #5b6b82; margin-top: 6px; font-size: 12.5px; max-width: 760px;
           margin-left: auto; margin-right: auto; }
   #gate.ready #keys { display: block; }
-  /* The flat view has to be drivable with a thumb: a headset is not the only
-     place this gets looked at, and a phone has neither a keyboard nor a stick. */
-  #bar { position: fixed; top: 0; left: 0; right: 0; display: flex; flex-wrap: wrap; gap: 6px;
-         padding: 8px; background: rgba(5,7,11,.86); justify-content: center; }
-  #bar button { font: 13px ui-monospace, monospace; color: #8ea2c0; background: #10161f;
-                border: 1px solid #1d2a3d; border-radius: 6px; padding: 9px 14px; cursor: pointer; }
-  #bar button.on { color: #05070b; background: #4cc2ff; border-color: #4cc2ff; }
-  #bar .sep { width: 14px; }
 </style>
-
-<div id="bar" hidden>
-  <button id="b-swap">board ↔ front</button><button id="b-close">close the front window</button>
-</div>
 
 <div id="gate">
   <button id="enter">enter the bridge</button>
   <div id="status">loading…</div>
   <div id="keys">
-    the lieutenants are always in front · the board remembers what is in flight ·
-    click a card and it comes forward with its chat<br>
-    in the headset — trigger: click · squeeze: pick a window up · stick while holding: resize ·
-    stick otherwise: turn the room · A: board to the back and forward again · B: close the front one ·
-    keyboard types into whatever is in front, Enter sends<br>
-    at a desk — drag to look · click to open · b: swap the board
+    four shelves, one per column, with their names on the floor under them ·
+    a card is a slab standing in a slot · the lieutenants are the arc above ·
+    everything the ray lands on lights up<br>
+    in the headset — trigger: point at a thing · the plate on the floor ahead opens the flat list of every card<br>
+    at a desk — drag to look · click to point · l: the list
   </div>
 </div>
+
+<!-- Everything the room runs is served from this repo: no CDN, no bundler, no
+     build step. The map below is the whole integration — each bare specifier
+     resolves to an unmodified upstream build under ui/vendor/, catalogued in
+     ui/vendor/README.md. -->
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three/three.module.min.js",
+    "three/src/math/MathUtils.js": "./vendor/three/MathUtils.js",
+    "@preact/signals-core": "./vendor/signals-core/signals-core.js",
+    "@pmndrs/uikit-pub-sub": "./vendor/uikit-pub-sub/index.js",
+    "@pmndrs/msdfonts/inter": "./vendor/msdfonts/inter.js",
+    "yoga-layout/load": "./vendor/yoga-layout/src/load.js",
+    "zod": "./vendor/zod/index.js"
+  }
+}
+</script>
 
 <script type="module" src="./js/bridge3d/main.js"></script>

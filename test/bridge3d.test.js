@@ -1,539 +1,582 @@
-// The room's policy — where a window stands, and what standing in front means —
-// and, at the bottom, what the panels actually PAINT, measured in arc.
+// The room, measured. Not "the constants say 6°" — the constants saying 6° is
+// exactly what cannot fail when the box built from them arrives at 4.7°, and
+// that is what shipped once already.
 //
-// The rules under test are the captain's, stated by him: the lieutenants are
-// always in front, the board is where he decides what to look at next, the
-// windows are the work, and nothing is ever put behind his head.
+// So everything below builds the room's real geometry, puts the four corners of
+// every responsive region into world coordinates, and re-derives the arc from
+// the angle between direction vectors out of the eye — acos of a dot product,
+// which is a different formula from the atan construction under test. A
+// measurement taken with the code under test is not a measurement.
 //
-// A room only needs a head for the parts that are a head: the renderer and the
-// session. The painting is a 2D canvas, and a 2D canvas can be faked, which is
-// how the region arithmetic gets checked here rather than by wearing it. A test
-// that only asserts the CONSTANTS say 3° cannot fail when the box drawn from
-// them arrives at 2.58°, and that is exactly what shipped once.
+// The floors themselves live in the `vr-design` skill and are not restated here
+// beyond the names world.js gives them.
 
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const UI = path.join(__dirname, '..', 'ui', 'js', 'bridge3d');
+const ROOT = path.join(__dirname, '..');
+const UI = path.join(ROOT, 'ui', 'js', 'bridge3d');
 const load = (f) => import(path.join(UI, f));
 
-test('every window stands in front of him — never behind, never inside him', async () => {
-  const { placeWindow, EYE } = await load('room.js');
-  for (let count = 1; count <= 12; count++) {
-    for (let i = 0; i < count; i++) {
-      const p = placeWindow(i, count);
-      assert.ok(p.z < -0.6, `window ${i}/${count} is not in front (z=${p.z})`);
-      const d = Math.hypot(p.x, p.z);
-      assert.ok(d > 0.8 && d < 4, `window ${i}/${count} is at a silly distance (${d})`);
-      assert.ok(Math.abs(p.y - EYE) < 1.2, `window ${i}/${count} is off over the horizon`);
-      // Past the shoulders is a neck movement, and the whole point is that
-      // reaching a window costs a glance.
-      const deg = Math.abs(Math.atan2(p.x, -p.z) * 180 / Math.PI);
-      assert.ok(deg < 60, `window ${i}/${count} sits ${deg.toFixed(0)}° off centre`);
-    }
-  }
-});
+const DEG = 180 / Math.PI;
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const len = (a) => Math.hypot(a[0], a[1], a[2]);
+const between = (a, b) => Math.acos(Math.max(-1, Math.min(1, dot(a, b) / (len(a) * len(b))))) * DEG;
+const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2];
 
-test('windows do not land on top of each other', async () => {
-  const { placeWindow } = await load('room.js');
-  // Past nine they crowd into the last row rather than starting a fourth, so
-  // this walks well beyond the rows to catch the crowding turning into a pile.
-  for (let count = 1; count <= 12; count++) {
-    const seen = [];
-    for (let i = 0; i < count; i++) {
-      const p = placeWindow(i, count);
-      for (const q of seen) {
-        assert.ok(Math.hypot(p.x - q.x, p.y - q.y, p.z - q.z) > 0.25,
-          `two of ${count} windows in the same place`);
-      }
-      seen.push(p);
-    }
-  }
-});
-
-test('the background is further away, not over his shoulder', async () => {
-  const { FRONT, BACK } = await load('room.js');
-  assert.ok(BACK.z < FRONT.z, 'the back is further away');
-  assert.ok(BACK.z < 0, 'the back is still in front of him — swapping costs a button, not a neck');
-  assert.ok(BACK.dim < FRONT.dim, 'and it goes quiet');
-});
-
-test('opening a card takes the front; closing it hands the front back', async () => {
-  const { nextFront, openWindows } = await load('room.js');
-  let s = { open: [], front: 'board' };
-  s.open = openWindows(s.open, 'card:a');
-  s.front = nextFront(s, { kind: 'open', id: 'card:a' });
-  assert.strictEqual(s.front, 'card:a', 'opening it IS the decision to work on it');
-
-  s.open = openWindows(s.open, 'lt:monica');
-  s.front = nextFront(s, { kind: 'open', id: 'lt:monica' });
-  assert.strictEqual(s.front, 'lt:monica');
-
-  s.front = nextFront(s, { kind: 'close', id: 'lt:monica' });
-  s.open = s.open.filter((x) => x !== 'lt:monica');
-  assert.strictEqual(s.front, 'card:a', 'the front falls back to what is still open');
-
-  s.front = nextFront(s, { kind: 'close', id: 'card:a' });
-  assert.strictEqual(s.front, 'board', 'and never to nothing — the room is not left empty in his hands');
-});
-
-test('closing something that was not in front leaves the front alone', async () => {
-  const { nextFront } = await load('room.js');
-  const s = { open: ['card:a', 'card:b'], front: 'card:b' };
-  assert.strictEqual(nextFront(s, { kind: 'close', id: 'card:a' }), 'card:b');
-});
-
-test('the swap button goes both ways', async () => {
-  const { nextFront } = await load('room.js');
-  const s = { open: ['card:a'], front: 'board' };
-  const away = nextFront(s, { kind: 'swap' });
-  assert.strictEqual(away, 'card:a');
-  assert.strictEqual(nextFront({ open: ['card:a'], front: away }, { kind: 'swap' }), 'board');
-  // With nothing open there is nothing to swap to, and the board stays.
-  assert.strictEqual(nextFront({ open: [], front: 'board' }, { kind: 'swap' }), 'board');
-});
-
-test('the same card twice is one window, brought forward', async () => {
-  const { openWindows } = await load('room.js');
-  const once = openWindows([], 'card:a');
-  assert.deepStrictEqual(openWindows(once, 'card:a'), ['card:a']);
-  // But a lieutenant beside a card is two windows — he asked for several chats
-  // at once, with different agents or the same one twice.
-  assert.deepStrictEqual(openWindows(once, 'lt:monica'), ['card:a', 'lt:monica']);
-});
-
-// ---- arc: the floors every size in the room is measured against -------------
+// ---- the room, built ------------------------------------------------------
 //
-// The room's sizes used to be canvas pixels, and canvas pixels cannot tell 1.55 m
-// from 3.1 m — which is how the board came to paint 0.35° body text nobody could
-// read. Every size is now a number of DEGREES converted at the panel's own
-// distance, so these tests check the degrees and the distances, and the pixels
-// take care of themselves.
+// Every responsive region in the standing world, as four world-space corners
+// plus the eye it is seen from. `kind` is only for the failure message.
 
-// Everywhere a panel actually stands: name -> {size, placement}.
-async function places() {
-  const R = await load('room.js');
-  const { PANEL, BAR, FRONT, BACK, placeWindow, EYE } = R;
-  const out = [
-    { name: 'lieutenant bar', panel: PANEL.bar, at: BAR },
-    // The bar grows with the lieutenants; the widest it goes is a panel too.
-    { name: 'lieutenant bar, full', at: BAR,
-      panel: { widthM: R.barWidth(R.BAR_LIMIT, R.eyeDistance(BAR)), heightM: PANEL.bar.heightM } },
-    { name: 'board, in front', panel: PANEL.board, at: FRONT, primary: true },
-    { name: 'board, pushed back', panel: PANEL.board, at: BACK },
-  ];
-  for (let count = 1; count <= 12; count++) {
-    for (let i = 0; i < count; i++) {
-      const at = placeWindow(i, count);
-      out.push({ name: `card window ${i}/${count}`, panel: PANEL.card, at });
-      out.push({ name: `chat window ${i}/${count}`, panel: PANEL.chat, at });
+async function room() {
+  const W = await load('world.js');
+  const eye = [0, W.EYE, 0];
+  const out = [];
+
+  // The slots. A cell lies ON its shelf plane, so its corners come from the
+  // plane's own two axes rather than from a rectangle facing the eye.
+  for (let s = 0; s < W.SHELF.azimuths.length; s++) {
+    const plane = W.shelfPlane(s);
+    const o = [plane.centre.x, plane.centre.y, plane.centre.z];
+    const on = (u, v) => [
+      o[0] + u * plane.right[0] + v * plane.up[0],
+      o[1] + u * plane.right[1] + v * plane.up[1],
+      o[2] + u * plane.right[2] + v * plane.up[2],
+    ];
+    for (let row = 0; row < W.SLOT.rows; row++) {
+      for (let col = 0; col < W.SLOT.cols; col++) {
+        const r = W.slotRegion(s, col, row);
+        const f = W.cardFace(s, col, row);
+        out.push({
+          kind: `slot ${s}.${col}.${row}`, eye, hit: true,
+          corners: [on(r.u - r.w / 2, r.v + r.h / 2), on(r.u + r.w / 2, r.v + r.h / 2),
+            on(r.u - r.w / 2, r.v - r.h / 2), on(r.u + r.w / 2, r.v - r.h / 2)],
+          mark: [on(f.u - f.w / 2, f.v + f.h / 2), on(f.u + f.w / 2, f.v + f.h / 2),
+            on(f.u - f.w / 2, f.v - f.h / 2), on(f.u + f.w / 2, f.v - f.h / 2)],
+        });
+      }
     }
   }
-  return { R, EYE, out };
+
+  // The lieutenants. A sphere's region is a sphere: it subtends 2·asin(r/d) in
+  // every direction at once, so it is described by its own angular radius
+  // rather than by four corners that would only ever approximate one.
+  for (let i = 0; i < W.AGENT.slots; i++) {
+    const a = W.agentAt(i);
+    const c = [a.pos.x, a.pos.y, a.pos.z];
+    const d = len(sub(c, eye));
+    const half = (R) => 2 * Math.asin(R / d) * DEG;
+    out.push({
+      kind: `lieutenant ${i}`, eye, hit: true, sphere: true, centre: c, dist: d,
+      arc: half(W.sphereForArc(W.BUILD.hit, a.dist)),
+      markArc: half(W.AGENT.diaM / 2),
+    });
+  }
+
+  // The plate that opens the list, lying flat on the floor.
+  const p = W.plate();
+  const pc = [p.pos.x, p.pos.y, p.pos.z];
+  out.push({
+    kind: 'list plate', eye, hit: true, floor: true,
+    corners: [[pc[0] - p.widthM / 2, 0, pc[2] - p.depthM / 2], [pc[0] + p.widthM / 2, 0, pc[2] - p.depthM / 2],
+      [pc[0] - p.widthM / 2, 0, pc[2] + p.depthM / 2], [pc[0] + p.widthM / 2, 0, pc[2] + p.depthM / 2]],
+  });
+  return { W, eye, regions: out };
 }
 
-test('the smallest type in the room still clears the 0.7° cap-height floor', async () => {
-  const { TYPE, CAP } = await load('room.js');
-  for (const [name, em] of Object.entries(TYPE)) {
-    const cap = em * CAP;
-    assert.ok(cap >= 0.7, `${name} type is ${cap.toFixed(2)}° of cap height — under the floor`);
-  }
-  // Body text is not merely legible, it is read without leaning: 1.5° of em box
-  // is the aim and 1.4 is the nearest the dense board will carry.
-  assert.ok(TYPE.body >= 1.4, 'body text should be ~1.5° of em box');
-  assert.ok(TYPE.head > TYPE.body && TYPE.body > TYPE.meta, 'the ladder is head > body > meta');
-});
-
-test('a target is 3° and two of them are 1.6° apart', async () => {
-  const { HIT } = await load('room.js');
-  assert.ok(HIT.min >= 3.0, `hit boxes are ${HIT.min}° — a target you stab at`);
-  assert.ok(HIT.gap >= 1.6, `${HIT.gap}° between two targets is one target`);
-});
-
-test('everything he reads stands inside the comfort band', async () => {
-  const { R, out } = await places();
-  for (const p of out) {
-    const d = R.eyeDistance(p.at);
-    assert.ok(d >= R.NEAR, `${p.name} is ${d.toFixed(2)} m away — too near the face`);
-    assert.ok(d <= R.FAR, `${p.name} is ${d.toFixed(2)} m away — past the comfort band`);
-  }
-});
-
-test('nothing is over the horizon, and the board he reads sits a glance below it', async () => {
-  const { R, EYE, out } = await places();
-  const deg = (opp, adj) => Math.atan2(opp, adj) * 180 / Math.PI;
-  for (const p of out) {
-    const flat = Math.hypot(p.at.x || 0, p.at.z || 0);
-    const top = deg((p.at.y - EYE) + p.panel.heightM / 2, flat);
-    assert.ok(top <= R.RISE, `${p.name} reaches ${top.toFixed(1)}° up — looking up is a sore neck`);
-    if (!p.primary) continue;
-    const centre = -deg(p.at.y - EYE, flat);
-    assert.ok(centre >= R.DROP[0] && centre <= R.DROP[1],
-      `${p.name} is centred ${centre.toFixed(1)}° below the horizon, not ${R.DROP.join('–')}°`);
-  }
-});
-
-test('every panel is cut with enough texels for the arc it covers', async () => {
-  const { R, out } = await places();
-  const MAX = 2048;                              // what surface.js caps a sheet at
-  for (const p of out) {
-    const d = R.eyeDistance(p.at);
-    const scale = Math.min(R.texelsPerMetre(d), MAX / Math.max(p.panel.widthM, p.panel.heightM));
-    const perDeg = p.panel.widthM * scale / R.arcDeg(p.panel.widthM, d);
-    assert.ok(perDeg >= 20, `${p.name} paints ${perDeg.toFixed(0)} texels per degree — soft`);
-    assert.ok(p.panel.widthM * scale <= MAX && p.panel.heightM * scale <= MAX, `${p.name} overflows a texture`);
-  }
-});
-
-test('body text on every panel, in degrees, at the distance it really sits', async () => {
-  const { R, out } = await places();
-  for (const p of out) {
-    const d = R.eyeDistance(p.at);
-    // What panels.js paints: px = deg × (canvas width / panel arc). Rearranged,
-    // the arc of the type is the arc it was asked for, whatever the canvas — so
-    // the figure to check is the one the surface was told to draw.
-    const cap = R.TYPE.body * R.CAP;
-    assert.ok(cap >= 0.7, `body text on ${p.name} at ${d.toFixed(2)} m is ${cap.toFixed(2)}° of cap`);
-    // And the panel has to be able to hold a 3° target with 1.6° beside it.
-    assert.ok(R.arcDeg(p.panel.heightM, d) >= R.HIT.min + R.HIT.gap,
-      `${p.name} is too short to hold a target`);
-  }
-});
-
-// A panel is turned to face the eye, so what it covers is its centre's angle
-// give or take half its own arc — the figure that says whether two of them are
-// on top of each other.
-function span(R, EYE, p) {
-  const flat = Math.hypot(p.at.x || 0, p.at.z || 0);
-  const centre = Math.atan2(p.at.y - EYE, flat) * 180 / Math.PI;
-  const half = R.arcDeg(p.panel.heightM, R.eyeDistance(p.at)) / 2;
-  return { top: centre + half, bottom: centre - half };
+// The region's arc, from the angle between the directions to the midpoints of
+// its opposite edges — top-left/top-right/bottom-left/bottom-right order. This
+// is acos of a dot product, which is a different derivation from the atan
+// construction under test, which is the whole point of doing it here.
+function arcOf(r, which) {
+  if (r.sphere) { const a = which === 'mark' ? r.markArc : r.arc; return { w: a, h: a }; }
+  const [tl, tr, bl, br] = which === 'mark' ? r.mark : r.corners;
+  const l = sub(mid(tl, bl), r.eye), rt = sub(mid(tr, br), r.eye);
+  const t = sub(mid(tl, tr), r.eye), b = sub(mid(bl, br), r.eye);
+  return { w: between(l, rt), h: between(t, b) };
 }
 
-test('the bar sits clear underneath: the lieutenants never cover the work', async () => {
-  const { R, EYE, out } = await places();
-  const bar = span(R, EYE, out.find((p) => p.name === 'lieutenant bar'));
-  // The bar is the nearest thing in the room and it never moves, so anything it
-  // overlaps is content he simply cannot see. Front row and board only — a
-  // second row of windows is overflow, and he moves those himself.
-  const front = out.filter((p) => p.name.startsWith('board') || /\b0\/[123]$/.test(p.name));
-  for (const p of front) {
-    const s = span(R, EYE, p);
-    assert.ok(s.bottom >= bar.top,
-      `${p.name} runs down to ${s.bottom.toFixed(1)}° and the bar starts at ${bar.top.toFixed(1)}° — it is covered`);
+const hasMark = (r) => (r.sphere ? r.markArc != null : !!r.mark);
+
+// Where a region sits, as a box in azimuth and elevation, plus how far away it
+// is. Two targets have to be 1.6° of ARC apart, and a degree of azimuth is only
+// cos(elevation) of a degree of arc — so the horizontal gap is converted where
+// it is compared, further down.
+function extent(r) {
+  if (r.sphere) {
+    const v = sub(r.centre, r.eye);
+    const flat = Math.hypot(v[0], v[2]);
+    const el = Math.atan2(v[1], flat) * DEG;
+    const az = Math.atan2(v[0], -v[2]) * DEG;
+    const halfAz = r.arc / 2 / Math.cos(el * Math.PI / 180);
+    return {
+      l: az - halfAz, r: az + halfAz, b: el - r.arc / 2, t: el + r.arc / 2,
+      near: r.dist, far: r.dist, mid: r.dist, el,
+    };
+  }
+  const az = [], el = [], d = [];
+  for (const c of r.corners) {
+    const v = sub(c, r.eye);
+    const flat = Math.hypot(v[0], v[2]);
+    az.push(Math.atan2(v[0], -v[2]) * DEG);
+    el.push(Math.atan2(v[1], flat) * DEG);
+    d.push(len(v));
+  }
+  return {
+    l: Math.min(...az), r: Math.max(...az), b: Math.min(...el), t: Math.max(...el),
+    near: Math.min(...d), far: Math.max(...d), mid: (Math.min(...d) + Math.max(...d)) / 2,
+    el: (Math.min(...el) + Math.max(...el)) / 2,
+  };
+}
+
+// A region's boundary, as world points all the way round it — enough of them
+// that the smallest gap between two regions is found where it really is rather
+// than only at the four corners.
+const STEPS = 8;
+function outline(r) {
+  const out = [];
+  if (r.sphere) {
+    // A sphere's outline is its silhouette circle, drawn on the plane facing the
+    // eye at the radius that actually subtends its arc.
+    const v = sub(r.centre, r.eye);
+    const R = r.dist * Math.sin(r.arc / 2 * Math.PI / 180);
+    const right = [-v[2], 0, v[0]];
+    const rl = len(right);
+    const rn = [right[0] / rl, 0, right[2] / rl];
+    const up = [rn[1] * v[2] - rn[2] * v[1], rn[2] * v[0] - rn[0] * v[2], rn[0] * v[1] - rn[1] * v[0]];
+    const ul = len(up);
+    const un = [up[0] / ul, up[1] / ul, up[2] / ul];
+    for (let k = 0; k < 4 * STEPS; k++) {
+      const t = (k / (4 * STEPS)) * Math.PI * 2;
+      out.push([
+        r.centre[0] + R * (Math.cos(t) * rn[0] + Math.sin(t) * un[0]),
+        r.centre[1] + R * Math.sin(t) * un[1],
+        r.centre[2] + R * (Math.cos(t) * rn[2] + Math.sin(t) * un[2]),
+      ]);
+    }
+    return out;
+  }
+  const [tl, tr, bl, br] = r.corners;
+  const walk = (a, b) => {
+    for (let k = 0; k < STEPS; k++) {
+      const t = k / STEPS;
+      out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+    }
+  };
+  walk(tl, tr); walk(tr, br); walk(br, bl); walk(bl, tl);
+  return out;
+}
+
+// ---- the floors -----------------------------------------------------------
+
+test('every responsive region is 6° where it sits — the padded hit box, not the mark', async () => {
+  const { W, regions } = await room();
+  assert.ok(regions.length >= 40, `only ${regions.length} regions in the room`);
+  for (const r of regions) {
+    const a = arcOf(r, 'hit');
+    assert.ok(a.w >= W.HIT, `${r.kind}: ${a.w.toFixed(2)}° wide, floor is ${W.HIT}°`);
+    assert.ok(a.h >= W.HIT, `${r.kind}: ${a.h.toFixed(2)}° tall, floor is ${W.HIT}°`);
   }
 });
 
-test('type clears the floor at the far edge of a panel, not only in the middle', async () => {
-  const { R, out } = await places();
-  const MAX = 2048;
-  for (const p of out) {
-    const d = R.eyeDistance(p.at);
-    const scale = Math.min(R.texelsPerMetre(d), MAX / Math.max(p.panel.widthM, p.panel.heightM));
-    // A flat panel's pixels are not evenly spread across the eye: a degree at
-    // the far edge is worth more pixels than a degree at the centre, so text
-    // sized on the panel's average subtends LESS out there. That corner is
-    // where the floor is closest, and it still has to clear it.
-    const avg = p.panel.widthM * scale / R.arcDeg(p.panel.widthM, d);
-    const x = p.panel.widthM / 2;
-    const edge = scale * ((d * d + x * x) / d) * Math.PI / 180;
-    const cap = R.TYPE.body * R.CAP * (avg / edge);
-    assert.ok(cap >= 0.7, `body text in the corner of ${p.name} is ${cap.toFixed(2)}° of cap height`);
+test('and the mark drawn inside it still clears the 3° floor', async () => {
+  const { W, regions } = await room();
+  for (const r of regions) {
+    if (!hasMark(r)) continue;
+    const a = arcOf(r, 'mark');
+    assert.ok(a.w >= W.MARK, `${r.kind}: the drawn mark is ${a.w.toFixed(2)}° wide, floor is ${W.MARK}°`);
+    assert.ok(a.h >= W.MARK, `${r.kind}: the drawn mark is ${a.h.toFixed(2)}° tall, floor is ${W.MARK}°`);
+    // ...and the padding is real padding: the region has to be bigger than what
+    // it is padding, or "pad the hit box, not the drawing" has become a slogan.
+    const hit = arcOf(r, 'hit');
+    assert.ok(hit.w > a.w && hit.h > a.h, `${r.kind}: the region is not larger than the mark inside it`);
+  }
+});
+
+test('no two of them are closer than 1.6° of clear air', async () => {
+  const { W, regions } = await room();
+  // Measured as the smallest angle between the two OUTLINES, sampled all the way
+  // round each of them. Not between their bounding boxes: a cell lying on a
+  // plane tilted away from the eye is a keystone in the eye's own angles rather
+  // than a rectangle, two cells on one shelf lean the same way, and comparing
+  // the bottom corner of one against the top corner of the other measures a
+  // distance between two points that are nowhere near each other.
+  const outlines = regions.map((r) => ({ kind: r.kind, pts: outline(r) }));
+  for (let i = 0; i < outlines.length; i++) {
+    for (let j = i + 1; j < outlines.length; j++) {
+      const a = outlines[i], b = outlines[j];
+      let apart = Infinity;
+      for (const p of a.pts) for (const q of b.pts) {
+        const d = between(sub(p, regions[i].eye), sub(q, regions[j].eye));
+        if (d < apart) apart = d;
+      }
+      assert.ok(apart >= W.GAP,
+        `${a.kind} and ${b.kind} are ${apart.toFixed(2)}° apart, floor is ${W.GAP}°`);
+    }
+  }
+});
+
+test('nothing is over the horizon, behind him, or past the shoulders', async () => {
+  const { W, regions } = await room();
+  for (const r of regions) {
+    const e = extent(r);
+    assert.ok(e.t <= W.RISE, `${r.kind} reaches ${e.t.toFixed(1)}° up — looking up is a sore neck`);
+    assert.ok(Math.abs(e.l) <= 45 && Math.abs(e.r) <= 45,
+      `${r.kind} runs to ${Math.max(Math.abs(e.l), Math.abs(e.r)).toFixed(1)}° off centre, past the ±45° bound`);
+    // The floor is where floors are: a landmark lying on it cannot be raised into
+    // the reading band, and it is glanced at rather than read.
+    const floorOf = r.floor ? W.FLOOR_LOOK : W.SINK;
+    assert.ok(e.b >= -floorOf, `${r.kind} runs down to ${e.b.toFixed(1)}°, past −${floorOf}°`);
+  }
+});
+
+test('everything he stands in front of is inside the comfort band', async () => {
+  const { W, regions } = await room();
+  for (const r of regions) {
+    const e = extent(r);
+    assert.ok(e.near >= W.NEAR, `${r.kind} comes to ${e.near.toFixed(2)} m — too near the face`);
+    assert.ok(e.mid <= W.FAR + 1e-9, `${r.kind} stands at ${e.mid.toFixed(2)} m — past the comfort band`);
+  }
+});
+
+test('the shelves are centred where the eyes rest', async () => {
+  const W = await load('world.js');
+  const centre = -W.shelfCentreElev();
+  assert.ok(centre >= W.DROP[0] && centre <= W.DROP[1],
+    `the shelves are centred ${centre.toFixed(1)}° below the horizon, not ${W.DROP.join('–')}°`);
+});
+
+// ---- the type -------------------------------------------------------------
+
+test('the smallest type in the room clears the 0.7° cap-height floor everywhere it is used', async () => {
+  const W = await load('world.js');
+  for (const [name, em] of Object.entries(W.TYPE)) {
+    assert.ok(em * W.CAP >= 0.7, `${name} type is ${(em * W.CAP).toFixed(2)}° of cap height — under the floor`);
+  }
+  assert.ok(W.TYPE.body >= 1.4, 'body text should be ~1.5° of em box');
+  assert.ok(W.TYPE.head > W.TYPE.body && W.TYPE.body > W.TYPE.meta, 'the ladder is head > body > meta');
+});
+
+test('a font asked for in degrees comes out that many degrees at the distance it stands', async () => {
+  const K = await import(path.join(UI, 'kit.js')).catch(() => null);
+  // kit.js pulls three and uikit through the page's import map, which node has
+  // no business resolving — so the one pure function on it is re-derived here
+  // from its own source rather than imported.
+  void K;
+  const src = fs.readFileSync(path.join(UI, 'kit.js'), 'utf8');
+  assert.match(src, /export const PIXEL = 0\.01/, 'a uikit unit is a centimetre');
+  assert.match(src, /export function fontFor\(deg, distM\)/, 'type is authored in degrees at a distance');
+  const W = await load('world.js');
+  // fontFor(deg, d) is sizeForArc(deg, d) in centimetres; check the identity the
+  // room relies on rather than the spelling.
+  for (const d of [1.2, 1.75, 1.97, 2.0]) {
+    const cm = 2 * d * Math.tan(W.TYPE.body * Math.PI / 360) / 0.01;
+    assert.ok(Math.abs(cm - W.sizeForArc(W.TYPE.body, d) * 100) < 1e-9);
+    assert.ok(cm > 2.5, `body text at ${d} m would be ${cm.toFixed(1)} cm — check the unit`);
   }
 });
 
 test('arc and metres convert both ways', async () => {
-  const { arcDeg, sizeForArc } = await load('room.js');
-  for (const [size, dist] of [[0.04, 1.5], [1.9, 1.58], [0.16, 1.15]]) {
-    assert.ok(Math.abs(sizeForArc(arcDeg(size, dist), dist) - size) < 1e-9, 'round trip');
+  const { arcDeg, sizeForArc } = await load('world.js');
+  for (const [size, dist] of [[0.12, 1.75], [0.18, 2.0], [0.8, 1.2]]) {
+    assert.ok(Math.abs(sizeForArc(arcDeg(size, dist), dist) - size) < 1e-12, 'round trip');
   }
-  // The small-angle rule of thumb the skill quotes: 57.3 × size / distance.
-  assert.ok(Math.abs(arcDeg(0.04, 1.5) - 57.3 * 0.04 / 1.5) < 0.01);
+  assert.ok(Math.abs(arcDeg(0.12, 1.75) - 57.3 * 0.12 / 1.75) < 0.01, 'the small-angle rule of thumb');
 });
 
-// ---- what the panels actually paint -----------------------------------------
-//
-// Everything above reasons about the room from its constants. This part builds
-// the real panels, paints them with a real board, and measures the regions they
-// declared — with atan, from the region's own edges, no average and no
-// small-angle shortcut. It is the only kind of check that can tell 3.0° asked
-// for from 2.58° delivered.
+// ---- the discipline -------------------------------------------------------
 
-// A 2D context with no pixels in it, which WRITES DOWN what it was asked to
-// draw. Regions come out of arithmetic and can be checked on their own; a
-// painted string cannot — the only record of where a glyph landed is the call
-// that put it there. So every mark is kept, clipped the way the real context
-// would clip it, and checked against the box it is supposed to be inside.
-function fakeCanvas() {
-  const canvas = { width: 300, height: 150, marks: [] };
-  const clipped = [];
-  let clip = null, pending = null, at = null;
-  const size = () => { const m = /([\d.]+)px/.exec(ctx.font); return m ? +m[1] : 10; };
-  const cut = (a, b) => {
-    if (!b) return a;
-    const x = Math.max(a.x, b.x), y = Math.max(a.y, b.y);
-    const r = Math.min(a.x + a.w, b.x + b.w), t = Math.min(a.y + a.h, b.y + b.h);
-    return r <= x || t <= y ? null : { x, y, w: r - x, h: t - y, line: a.line, what: a.what };
+test('a shelf is a flat bounded plane, not a slice of a cylinder', async () => {
+  const W = await load('world.js');
+  const planes = W.SHELF.azimuths.map((_, i) => W.shelfPlane(i));
+  // Every slot on a shelf lies exactly on that shelf's plane — which is what
+  // makes it a surface objects are constrained to rather than a free volume.
+  for (let i = 0; i < planes.length; i++) {
+    const p = planes[i];
+    for (const s of W.slots(i)) {
+      const off = (s.pos.x - p.centre.x) * p.normal[0] + (s.pos.y - p.centre.y) * p.normal[1]
+        + (s.pos.z - p.centre.z) * p.normal[2];
+      assert.ok(Math.abs(off) < 1e-9, `slot ${i}.${s.col}.${s.row} is ${off.toFixed(4)} m off its own shelf`);
+    }
+    // Tilted 25° back from vertical: the normal rises by exactly that much.
+    const rise = Math.asin(p.normal[1]) * DEG;
+    assert.ok(Math.abs(rise - W.SHELF.tiltDeg) < 1e-9, `shelf ${i} is tilted ${rise.toFixed(2)}°, not ${W.SHELF.tiltDeg}°`);
+  }
+  // And they are four distinct planes with air between them, not one surface:
+  // adjacent shelves face measurably different directions.
+  for (let i = 1; i < planes.length; i++) {
+    const turn = between(planes[i - 1].normal, planes[i].normal);
+    assert.ok(turn > 15, `shelves ${i - 1} and ${i} face within ${turn.toFixed(1)}° of each other — that is a cylinder`);
+    const gap = (W.SHELF.azimuths[i] - W.SHELF.azimuths[i - 1])
+      - W.shelfHalfAngle(i - 1) - W.shelfHalfAngle(i);
+    assert.ok(gap > 1, `shelves ${i - 1} and ${i} have ${gap.toFixed(2)}° between their plates`);
+  }
+});
+
+test('depth into the shelf encodes nothing', async () => {
+  const W = await load('world.js');
+  const now = Date.UTC(2026, 7, 1);
+  const day = 86400000;
+  // Every card in a slot stands off its shelf by the same amount, whatever the
+  // card is: the third axis is deliberately left unspent, and the thickness that
+  // does vary grows forward from a common plane rather than sinking in.
+  assert.ok(W.CARD.standM > 0, 'a slab stands off the shelf');
+  const thin = W.slabThickness({ updated: new Date(now).toISOString() }, now);
+  const old = W.slabThickness({ updated: new Date(now - 90 * day).toISOString() }, now);
+  const mids = W.slabThickness({ updated: new Date(now - 7 * day).toISOString() }, now);
+  assert.ok(Math.abs(thin - W.CARD.thinM) < 1e-9, 'a brand new card is the thin end of the scale');
+  assert.ok(Math.abs(old - W.CARD.thickM) < 1e-9, 'and an ancient one is clamped to the thick end');
+  assert.ok(mids > thin && mids < old, 'age reads as thickness in between');
+});
+
+test('the lieutenants sit in fixed berths that never sort or reflow', async () => {
+  const W = await load('world.js');
+  const seen = new Set();
+  for (let i = 0; i < W.AGENT.slots; i++) {
+    const slot = W.agentSlotFor(i);
+    assert.ok(slot >= 0 && slot < W.AGENT.slots, `roster place ${i} has no berth`);
+    assert.ok(!seen.has(slot), `two lieutenants share berth ${slot}`);
+    seen.add(slot);
+  }
+  assert.strictEqual(W.agentSlotFor(W.AGENT.slots), -1, 'a ninth lieutenant has nowhere to stand, and says so');
+  // Adding one never moves one that is already there.
+  const before = [0, 1, 2, 3].map(W.agentSlotFor);
+  const after = [0, 1, 2, 3, 4].map(W.agentSlotFor).slice(0, 4);
+  assert.deepStrictEqual(after, before, 'a lieutenant joining reflowed the arc');
+  // And the half-crewed board is still centred rather than piled against a wall.
+  const az = before.map((s) => W.agentSlotAzimuth(s));
+  assert.ok(Math.abs(az.reduce((a, b) => a + b, 0)) < 1e-9, 'four lieutenants are not centred on the arc');
+});
+
+test('the arc of lieutenants is 8 × 18 cm at 2 m, 11.25° apart, and never above +5°', async () => {
+  const W = await load('world.js');
+  assert.strictEqual(W.AGENT.slots, 8);
+  assert.ok(Math.abs(W.AGENT.diaM - 0.18) < 1e-9);
+  assert.ok(Math.abs(W.AGENT.distM - 2.0) < 1e-9);
+  for (let i = 0; i < W.AGENT.slots; i++) {
+    const a = W.agentAt(i);
+    assert.ok(a.el >= 0 && a.el <= W.AGENT.riseDeg + 1e-9, `lieutenant ${i} sits at ${a.el.toFixed(2)}°`);
+    if (i) {
+      const step = a.az - W.agentAt(i - 1).az;
+      assert.ok(Math.abs(step - W.AGENT.pitchDeg) < 1e-9, `berths ${i - 1} and ${i} are ${step.toFixed(2)}° apart`);
+    }
+  }
+});
+
+test('full white is clamped, and colour never travels alone', async () => {
+  const W = await load('world.js');
+  assert.strictEqual(W.agentColour('#ffffff'), '#ebebeb');
+  assert.strictEqual(W.agentColour('#7c5cff'), '#7c5ceb');
+  assert.strictEqual(W.agentColour(null), '#8aa0bb');
+  // The second channel on a lieutenant is the name under it, and on a card it is
+  // the label glyphs beside the owner's band. Both are drawn, in agents.js and
+  // in shelves.js, and neither is optional.
+  assert.match(fs.readFileSync(path.join(UI, 'agents.js'), 'utf8'), /label\.setProperties\(\{ text: safe\(lt\.name/);
+  assert.deepStrictEqual(W.glyphsFor({ labels: ['infra', 'ui', 'perf', 'extra'] }), ['IN', 'UI', 'PE']);
+  assert.deepStrictEqual(W.glyphsFor({}), []);
+});
+
+test('a shelf shows the active work and the tail goes to the list, in the board’s own order', async () => {
+  const W = await load('world.js');
+  const cards = Array.from({ length: 13 }, (_, i) => ({ id: 'c' + i, column: 'working' }));
+  const doc = { cards: [...cards, { id: 'x', column: 'review' }] };
+  const { visible, overflow, total } = W.shelfCards(doc, 'working');
+  assert.strictEqual(visible.length, W.PER_SHELF);
+  assert.strictEqual(overflow, 13 - W.PER_SHELF);
+  assert.strictEqual(total, 13);
+  assert.deepStrictEqual(visible.map((c) => c.id), cards.slice(0, W.PER_SHELF).map((c) => c.id),
+    'the room re-sorted the shelf, which is the one thing it must never do');
+  assert.strictEqual(W.PER_SHELF, W.SLOT.cols * W.SLOT.rows);
+});
+
+test('the escape hatch exists, is flat, and stands where a panel is read', async () => {
+  const W = await load('world.js');
+  const p = W.listPanel();
+  assert.ok(p.distM >= 1.0 && p.distM <= W.FAR, `the list stands at ${p.distM} m`);
+  const centre = -p.centreElevDeg;
+  assert.ok(centre >= 10 && centre <= 20, `the list is centred ${centre}° below the horizon`);
+  assert.ok(p.heightDeg / 2 - centre <= W.RISE, 'the list runs up over the horizon');
+  // Its rows are read, not pressed — so the only thing on it held to the hit
+  // floor is its own controls, and those are sized from the distance it stands.
+  const row = W.listRow();
+  assert.ok(Math.abs(row.heightM - W.sizeForArc(W.BUILD.hit, p.distM)) < 1e-12);
+  const src = fs.readFileSync(path.join(UI, 'list.js'), 'utf8');
+  assert.match(src, /new Input\(/, 'the list is searchable');
+  assert.match(src, /overflow: 'scroll'/, 'every card, which means it scrolls');
+});
+
+// ---- the six states -------------------------------------------------------
+
+test('every interactive thing has six states and a spotlight that closes', async () => {
+  const W = await load('world.js');
+  assert.deepStrictEqual(W.STATE,
+    ['idle', 'hovered-far', 'hovered-near', 'contact', 'held', 'released'],
+    'six states, not three — there is no haptic channel to carry the affordance');
+  const far = W.spotlight(W.REACH_M[1]);
+  const near = W.spotlight(W.REACH_M[0]);
+  assert.ok(far > near, 'the spotlight has to SHRINK as the pointer comes in');
+  assert.ok(near <= 0.15, 'and converge to something like a dot on contact');
+  for (const d of [0, 0.1, 5, 50]) {
+    const k = W.spotlight(d);
+    assert.ok(k >= 0.14 && k <= 1, `spotlight(${d}) is ${k}`);
+  }
+  assert.ok(W.ACK_MS <= 300 && W.STEP > 1 && W.STEP < 1.1, 'a ~5% step, acknowledged fast');
+  const src = fs.readFileSync(path.join(UI, 'hover.js'), 'utf8');
+  for (const s of W.STATE) assert.ok(src.includes(`'${s}'`), `hover.js never enters "${s}"`);
+});
+
+test('the ray is the vendored pointer library, not a hand-rolled rectangle', async () => {
+  const src = fs.readFileSync(path.join(UI, 'hover.js'), 'utf8');
+  assert.match(src, /vendor\/pointer-events\/pointer\/ray\.js/, 'the controller ray comes from @pmndrs/pointer-events');
+  assert.match(src, /vendor\/pointer-events\/forward\.js/, 'and so does the mouse at a desk — one interaction model');
+  // A ray that passes through its target reports nothing about depth.
+  assert.match(src, /decor\.line\.scale\.z = reach/, 'the ray has to stop at what it hits');
+  for (const f of fs.readdirSync(UI)) {
+    if (!f.endsWith('.js')) continue;
+    const s = fs.readFileSync(path.join(UI, f), 'utf8');
+    assert.ok(!/new THREE\.Raycaster\(/.test(s), `${f} raycasts by hand instead of using the pointer library`);
+  }
+});
+
+// ---- the old room is gone --------------------------------------------------
+
+test('the canvas-painted room is gone, not left standing beside the new one', async () => {
+  for (const f of ['surface.js', 'panels.js', 'room.js', 'faces.js']) {
+    assert.ok(!fs.existsSync(path.join(UI, f)), `${f} is still here — there is meant to be one room`);
+  }
+  for (const f of fs.readdirSync(UI)) {
+    if (!f.endsWith('.js')) continue;
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    assert.ok(!/getContext\(['"]2d['"]\)/.test(src), `${f} still paints a canvas by hand`);
+    assert.ok(!/CanvasTexture/.test(src), `${f} still hangs a hand-painted canvas on a plane`);
+  }
+});
+
+// ---- the stack -------------------------------------------------------------
+
+function importMap() {
+  const html = fs.readFileSync(path.join(ROOT, 'ui', 'bridge3d.html'), 'utf8');
+  const m = /<script type="importmap">([\s\S]*?)<\/script>/.exec(html);
+  assert.ok(m, 'the page has no import map');
+  return JSON.parse(m[1]).imports;
+}
+
+test('every bare specifier the room reaches for is in the import map, and resolves to a file', async () => {
+  const imports = importMap();
+  const seen = new Set();
+  const missing = [];
+  const resolve = (spec) => {
+    if (imports[spec]) return path.join(ROOT, 'ui', imports[spec]);
+    for (const k of Object.keys(imports)) {
+      if (k.endsWith('/') && spec.startsWith(k)) return path.join(ROOT, 'ui', imports[k], spec.slice(k.length));
+    }
+    return null;
   };
-  const put = (what, x, y, w, h, line) => {
-    const m = cut({ x: Math.min(x, x + w), y: Math.min(y, y + h), w: Math.abs(w), h: Math.abs(h), line, what }, clip);
-    if (m) canvas.marks.push(m);
+  const walk = (file, from) => {
+    if (!fs.existsSync(file)) return missing.push(`${file} (from ${from})`);
+    if (seen.has(file) || path.basename(file) === 'three.module.min.js') { seen.add(file); return; }
+    seen.add(file);
+    const src = fs.readFileSync(file, 'utf8');
+    const specs = [];
+    for (const m of src.matchAll(/(?:^|[\s;}])(?:import|export)\s*(?:[\w*{}\s,]*?\s*from\s*)?['"]([^'"]+)['"]/gm)) specs.push(m[1]);
+    for (const m of src.matchAll(/import\s*\(\s*['"]([^'"]+)['"]/g)) specs.push(m[1]);
+    for (const s of specs) {
+      if (s.startsWith('.') || s.startsWith('/')) { walk(path.resolve(path.dirname(file), s), file); continue; }
+      const r = resolve(s);
+      if (!r) missing.push(`unmapped bare specifier "${s}" (from ${file})`);
+      else walk(r, file);
+    }
   };
-  const ctx = {
-    canvas, font: '10px x', textAlign: 'left', textBaseline: 'alphabetic',
-    fillStyle: '', strokeStyle: '', lineWidth: 1,
-    measureText(t) { return { width: String(t).length * size() * 0.52 }; },
-    fillText(t, x, y) {
-      const s = size(), w = ctx.measureText(t).width;
-      if (!String(t).length) return;
-      const left = ctx.textAlign === 'center' ? x - w / 2 : (ctx.textAlign === 'right' ? x - w : x);
-      put(String(t), left, y - s * 0.75, w, s);           // baseline to em box
-    },
-    fillRect: (x, y, w, h) => put('rect', x, y, w, h),
-    arc: (cx, cy, r) => put('arc', cx - r, cy - r, r * 2, r * 2),
-    drawImage: (img, sx, sy, sw, sh, dx, dy, dw, dh) => put('image', dx, dy, dw, dh),
-    moveTo: (x, y) => { at = [x, y]; },
-    lineTo(x, y) { if (at) put('line', at[0], at[1], x - at[0], y - at[1], true); at = [x, y]; },
-    rect: (x, y, w, h) => { pending = { x, y, w, h }; },
-    beginPath() { pending = null; at = null; },
-    clip() { if (pending) clip = cut(pending, clip); },
-    save() { clipped.push(clip); },
-    restore() { clip = clipped.length ? clipped.pop() : null; },
-  };
-  for (const m of ['clearRect', 'strokeText', 'closePath', 'fill', 'stroke']) ctx[m] = () => {};
-  canvas.getContext = () => ctx;
-  return canvas;
-}
-
-async function paintKit() {
-  globalThis.document = { createElement: () => fakeCanvas() };
-  globalThis.Image = class { };            // the sheet never lands: faces fall back to dots
-  const P = await load('panels.js');
-  const R = await load('room.js');
-  const lts = [
-    { id: 'monica', name: 'Monica', color: '#7c5cff', avatar: 12, chatOwed: true, chat: [{ author: 'user', text: 'status on the oauth card?', ts: new Date().toISOString() }, { author: 'monica', text: 'worker is mid-flight, PR up as a draft', ts: new Date().toISOString() }] },
-    { id: 'rex', name: 'Rex', color: '#2aa876', avatar: 33, chat: [] },
-    { id: 'ada', name: 'Ada', color: '#d8a03c', avatar: null, chat: [] },
-    { id: 'quill', name: 'Quill', color: '#e05c78', avatar: 21, chat: [] },
-  ];
-  const columns = [{ id: 'backlog', title: '📋 Backlog' }, { id: 'working', title: '🔨 Working' },
-    { id: 'review', title: '👀 Your review' }, { id: 'peer', title: '🤝 Peer review' }];
-  const cards = [];
-  for (let i = 0; i < 18; i++) {
-    cards.push({
-      id: 'c' + i, column: columns[i % 3].id, owner: lts[i % 4].id, type: 'implementation',
-      title: i % 3 ? 'a short one' : 'a card title long enough to wrap onto a second line and then some',
-      body: '# Repro\n1. sign in\n2. wait\n\n- [ ] a plan line', labels: ['infra'],
-      status: i % 2 ? { owed: true } : { worker: { state: 'live' } },
-      thread: [{ author: 'user', text: 'how is it going', ts: new Date().toISOString() }],
-    });
+  walk(path.join(UI, 'main.js'), 'the page');
+  assert.deepStrictEqual(missing, [], 'the room reaches for something the page cannot give it');
+  assert.ok(seen.size > 150, `only ${seen.size} modules reachable — the vendored stack is not wired up`);
+  // No CDN, no bundler, no build step: every target is a file in this repo.
+  for (const [spec, target] of Object.entries(imports)) {
+    assert.ok(/^\.\//.test(target), `"${spec}" points at ${target}, which is not in this repo`);
+    assert.ok(fs.existsSync(path.join(ROOT, 'ui', target)), `"${spec}" points at a file that is not there`);
   }
-  return { P, R, doc: { title: 'Fake Environment', columns, cards, lieutenants: lts } };
-}
-
-// The region's true arc, from its own edges. Deliberately re-derived here rather
-// than asked of the surface: a measurement taken with the code under test is not
-// a measurement.
-function trueArc(s, r) {
-  const D = 180 / Math.PI, d = s.distanceM;
-  const u = (x) => (x / s.canvas.width - 0.5) * s.widthM;
-  const v = (y) => (0.5 - y / s.canvas.height) * s.heightM;
-  return {
-    w: (Math.atan(u(r.x + r.w) / d) - Math.atan(u(r.x) / d)) * D,
-    h: (Math.atan(v(r.y) / d) - Math.atan(v(r.y + r.h) / d)) * D,
-  };
-}
-
-// Every panel the room can put in front of him, painted where it really stands.
-async function paintedPanels() {
-  const { P, R, doc } = await paintKit();
-  const out = [];
-  // The bar, at every number of lieutenants it claims to hold. This is where a
-  // fixed-width bar used to keep its 3° plates by eating the air between them.
-  for (let n = 1; n <= R.BAR_LIMIT; n++) {
-    const many = Array.from({ length: n }, (_, i) => ({
-      id: 'lt' + i, color: '#7c5cff', avatar: i % 2 ? i : null, chatOwed: i % 4 === 0,
-      name: i % 3 ? 'Lt' + i : 'a rather long lieutenant name',
-    }));
-    const bar = new P.LieutenantBar();
-    bar.canvas.marks = [];
-    bar.paint({ ...doc, lieutenants: many });
-    out.push({ name: `lieutenant bar, ${n} of them`, s: bar });
-  }
-  const bar = new P.LieutenantBar(); bar.canvas.marks = []; bar.paint(doc);
-  out.push({ name: 'lieutenant bar', s: bar });
-  for (const [where, at] of [['front', R.FRONT], ['pushed back', R.BACK]]) {
-    const board = new P.BoardPanel();
-    board.setDistance(R.eyeDistance({ x: 0, y: at.y, z: at.z }));
-    board.canvas.marks = [];
-    board.paint(doc);
-    out.push({ name: 'board, ' + where, s: board, doc });
-  }
-  for (let count = 1; count <= 12; count++) {
-    for (let i = 0; i < count; i++) {
-      const d = R.eyeDistance(R.placeWindow(i, count));
-      const card = new P.CardWindow('c3');
-      card.setDistance(d); card.canvas.marks = []; card.paint(doc);
-      out.push({ name: `card window ${i}/${count}`, s: card });
-      const chat = new P.ChatWindow('monica');
-      chat.setDistance(d); chat.canvas.marks = []; chat.paint(doc);
-      out.push({ name: `chat window ${i}/${count}`, s: chat });
-    }
-  }
-  return { out, R };
-}
-
-test('every painted region is a 3° target, measured in true arc where it sits', async () => {
-  const { out, R } = await paintedPanels();
-  let checked = 0;
-  for (const { name, s } of out) {
-    assert.ok(s.hits.length, `${name} painted nothing to point at`);
-    for (const r of s.hits) {
-      const a = trueArc(s, r);
-      checked++;
-      assert.ok(a.w >= R.HIT.min, `${name}: ${r.action.kind} is ${a.w.toFixed(2)}° wide, floor is ${R.HIT.min}°`);
-      assert.ok(a.h >= R.HIT.min, `${name}: ${r.action.kind} is ${a.h.toFixed(2)}° tall, floor is ${R.HIT.min}°`);
-    }
-  }
-  assert.ok(checked > 180, `only ${checked} regions measured — the walk is not covering the room`);
 });
 
-test('and no two of them are closer than 1.6°, nor on top of each other', async () => {
-  const { out, R } = await paintedPanels();
-  for (const { name, s } of out) {
-    const D = 180 / Math.PI, d = s.distanceM;
-    const u = (x) => Math.atan((x / s.canvas.width - 0.5) * s.widthM / d) * D;
-    const v = (y) => Math.atan((0.5 - y / s.canvas.height) * s.heightM / d) * D;
-    const box = (r) => ({ l: u(r.x), r: u(r.x + r.w), t: v(r.y), b: v(r.y + r.h), kind: r.action.kind });
-    const boxes = s.hits.map(box);
-    for (let i = 0; i < boxes.length; i++) {
-      for (let j = i + 1; j < boxes.length; j++) {
-        const a = boxes[i], b = boxes[j];
-        // Clear air between them on each axis; null where they overlap on it.
-        const gapX = a.r <= b.l ? b.l - a.r : (b.r <= a.l ? a.l - b.r : null);
-        const gapY = a.b >= b.t ? a.b - b.t : (b.b >= a.t ? b.b - a.t : null);
-        const apart = Math.max(gapX == null ? -Infinity : gapX, gapY == null ? -Infinity : gapY);
-        assert.ok(gapX != null || gapY != null,
-          `${name}: ${a.kind} and ${b.kind} are on top of each other`);
-        assert.ok(apart >= R.HIT.gap,
-          `${name}: ${a.kind} and ${b.kind} are ${apart.toFixed(2)}° apart, floor is ${R.HIT.gap}°`);
-      }
+test('kit components are imported one at a time, never the package barrel', async () => {
+  for (const f of fs.readdirSync(UI)) {
+    if (!f.endsWith('.js')) continue;
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    for (const m of src.matchAll(/from\s*['"]([^'"]*vendor\/uikit[^'"]*)['"]/g)) {
+      assert.ok(!/vendor\/uikit\/index\.js$/.test(m[1]) && !/components\/index\.js$/.test(m[1]),
+        `${f} imports the uikit barrel (${m[1]}) — that drags in an icon set and an addon we do not vendor`);
     }
   }
 });
 
-// A mark and a region can relate three ways: the mark is inside the region, the
-// mark contains it (a panel background, the chrome bar), or they are strangers.
-// Anything else is a mark hanging half off the box it belongs to.
-const overlaps = (m, r) => m.x < r.x + r.w && r.x < m.x + m.w && m.y < r.y + r.h && r.y < m.y + m.h;
-const inside = (m, r, e = 0.5) => m.x >= r.x - e && m.y >= r.y - e
-  && m.x + m.w <= r.x + r.w + e && m.y + m.h <= r.y + r.h + e;
-
-test('nothing is painted half on and half off the box it belongs to', async () => {
-  const { out } = await paintedPanels();
-  for (const { name, s } of out) {
-    for (const m of s.canvas.marks) {
-      for (const r of s.hits) {
-        if (!overlaps(m, r) || inside(m, r) || inside(r, m)) continue;
-        assert.fail(`${name}: "${m.what}" at x ${m.x.toFixed(1)}–${(m.x + m.w).toFixed(1)} hangs off `
-          + `the ${r.action.kind} box at ${r.x.toFixed(1)}–${(r.x + r.w).toFixed(1)}`);
-      }
+test('the room the captain opens never loads the dev loop', async () => {
+  // The flags are OFF by default, and "off" has to mean not fetched rather than
+  // merely not used: the emulator is reachable only through a dynamic import
+  // behind the query parameter.
+  for (const f of fs.readdirSync(UI)) {
+    if (!f.endsWith('.js') || f === 'devxr.js') continue;
+    const src = fs.readFileSync(path.join(UI, f), 'utf8');
+    for (const m of src.matchAll(/^\s*import\s[^;]*?from\s*['"]([^'"]+)['"]/gm)) {
+      assert.ok(!/devxr|iwer/i.test(m[1]), `${f} imports ${m[1]} at the top level`);
     }
   }
+  const main = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
+  assert.match(main, /preserveDrawingBuffer:\s*DEV\.has\(['"]capture['"]\)/,
+    'preserveDrawingBuffer should be on only when ?capture is');
+  // three.js ships foveation at maximum, which blurs the two shelves this room
+  // parks past 30° on purpose.
+  assert.match(main, /setFoveation\(0\)/, 'foveation has to be turned down or the far shelves go soft');
 });
 
-test('what a card paints lands on that card, not in the gutter beside it', async () => {
-  const { out, R } = await paintedPanels();
-  for (const { name, s } of out) {
-    const half = s.px(R.HIT.gap) / 2;
-    for (const r of s.hits) {
-      for (const m of s.canvas.marks) {
-        if (m.line || inside(r, m)) continue;          // lines and backgrounds are not content
-        const my = m.y + m.h / 2;
-        if (my < r.y || my > r.y + r.h) continue;      // not on this row at all
-        const near = m.x + m.w > r.x - half && m.x < r.x + r.w + half;
-        if (!near) continue;                           // somebody else's business
-        assert.ok(inside(m, r),
-          `${name}: "${m.what}" at x ${m.x.toFixed(1)}–${(m.x + m.w).toFixed(1)} is not on its own `
-          + `${r.action.kind} box at ${r.x.toFixed(1)}–${(r.x + r.w).toFixed(1)}`);
-      }
-    }
-  }
-});
-
-// ---- the dev loop: the places the room gets photographed from ----------------
-//
-// The loop is what makes every card after this one verifiable instead of hoped
-// at — `node dev/room-shots.js` drives an emulated headset and writes a PNG per
-// viewpoint. But a photograph only ever proves the room did not go blank. What
-// a photograph CANNOT prove is measured here, in the same unit as everything
-// above: is the head being asked to turn somewhere a neck goes, is what the
-// shot is named after actually inside the shot, and has the table of viewpoints
-// quietly gone stale against the room it claims to photograph.
-
-// Every place room.js actually stands a panel — what a viewpoint is allowed to
-// be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
-async function panelPlaces() {
-  const R = await load('room.js');
-  const out = [{ x: 0, y: R.FRONT.y, z: R.FRONT.z }, { x: 0, y: R.BACK.y, z: R.BACK.z }, R.BAR];
-  for (let count = 1; count <= 12; count++) {
-    for (let i = 0; i < count; i++) out.push(R.placeWindow(i, count));
-  }
-  return out;
-}
-
-const nearly = (a, b) => Math.abs(a - b) < 1e-9;
+// ---- the dev loop ----------------------------------------------------------
 
 test('every viewpoint is aimed at something the room really stands there', async () => {
-  const { VIEWPOINTS } = await load('viewpoints.js');
-  const places = await panelPlaces();
-  assert.ok(VIEWPOINTS.length >= 4, 'a loop with two viewpoints is a loop with one blind side');
+  const { VIEWPOINTS, places } = await load('viewpoints.js');
+  const where = places();
+  assert.ok(VIEWPOINTS.length >= 6, 'a loop with two viewpoints is a loop with four blind sides');
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
   for (const v of VIEWPOINTS) {
     const at = v.frames.at;
-    assert.ok(places.some((p) => nearly(p.x || 0, at.x || 0) && nearly(p.y, at.y) && nearly(p.z, at.z)),
-      `${v.name} frames (${at.x}, ${at.y}, ${at.z}) and no panel stands there`);
-    assert.ok(['empty', 'working'].includes(v.scene), `${v.name} wants an unknown scene`);
+    assert.ok(where.some((p) => near(p.x || 0, at.x || 0) && near(p.y, at.y) && near(p.z, at.z)),
+      `${v.name} frames (${at.x}, ${at.y}, ${at.z}) and nothing stands there`);
+    assert.ok(['world', 'list'].includes(v.scene), `${v.name} wants an unknown scene`);
+    assert.ok(v.why && v.why.length > 20, `${v.name} does not say what it is for`);
   }
+  assert.ok(VIEWPOINTS.some((v) => v.scene === 'list'), 'nothing photographs the escape hatch');
+  assert.ok(VIEWPOINTS.some((v) => v.floor), 'nothing photographs the landmarks, which is the thing most likely to be missing');
 });
 
 test('no viewpoint asks for a turn of the head the room does not', async () => {
   const { VIEWPOINTS, aimAt, gazeDistance } = await load('viewpoints.js');
-  const R = await load('room.js');
+  const W = await load('world.js');
   for (const v of VIEWPOINTS) {
     const a = aimAt(v.eye, v.look);
-    // Nothing lives past ±45°, so nothing is photographed from past it either.
     assert.ok(Math.abs(a.yaw) <= 45, `${v.name} turns the head ${a.yaw.toFixed(1)}° off centre`);
-    // Looking UP is the sore neck; the room keeps everything below +10°, and a
-    // shot that needs a chin lift is a shot of a room he would not use.
-    assert.ok(a.pitch <= R.RISE, `${v.name} looks ${a.pitch.toFixed(1)}° up`);
-    assert.ok(a.pitch >= -45, `${v.name} looks ${a.pitch.toFixed(1)}° down — that is a neck, not a glance`);
-    // And it is looking at something inside the band it is meant to be read in.
+    assert.ok(a.pitch <= W.RISE, `${v.name} looks ${a.pitch.toFixed(1)}° up`);
+    const down = v.floor ? W.FLOOR_LOOK : 45;
+    assert.ok(a.pitch >= -down, `${v.name} looks ${a.pitch.toFixed(1)}° down — that is a neck, not a glance`);
     const d = gazeDistance(v);
-    assert.ok(d >= R.NEAR && d <= R.FAR,
-      `${v.name} is looking ${d.toFixed(2)} m out, outside ${R.NEAR}–${R.FAR} m`);
+    assert.ok(d >= W.NEAR && d <= W.FAR + 1e-9, `${v.name} looks ${d.toFixed(2)} m out, outside ${W.NEAR}–${W.FAR} m`);
   }
 });
 
 test('what a shot is named after fits inside the shot, in arc', async () => {
   const { VIEWPOINTS, aimAt, FOVY } = await load('viewpoints.js');
-  const R = await load('room.js');
-  const MARGIN = 5;                       // degrees of clear air at the frame edge
+  const W = await load('world.js');
+  const MARGIN = 5;
   for (const v of VIEWPOINTS) {
     const gaze = aimAt(v.eye, v.look);
     const at = v.frames.at;
     const centre = aimAt(v.eye, [at.x || 0, at.y, at.z]);
-    const d = R.eyeDistance(at);
-    // The panel is turned to face the eye, so it covers its centre's direction
-    // give or take half its own arc — offset by however far the gaze is from
-    // that centre. Both axes, because a panel can fall out of the top of a
-    // frame as easily as off the side.
+    const d = W.eyeDistance(at);
     const half = FOVY / 2 - MARGIN;
-    const across = Math.abs(gaze.yaw - centre.yaw) + R.arcDeg(v.frames.panel.widthM, d) / 2;
-    const down = Math.abs(gaze.pitch - centre.pitch) + R.arcDeg(v.frames.panel.heightM, d) / 2;
-    assert.ok(across <= half, `${v.name}: its panel runs ${across.toFixed(1)}° off centre, past the ${half}° edge`);
-    assert.ok(down <= half, `${v.name}: its panel runs ${down.toFixed(1)}° up/down, past the ${half}° edge`);
+    const across = Math.abs(gaze.yaw - centre.yaw) + W.arcDeg(v.frames.panel.widthM, d) / 2;
+    const down = Math.abs(gaze.pitch - centre.pitch) + W.arcDeg(v.frames.panel.heightM, d) / 2;
+    assert.ok(across <= half, `${v.name}: what it frames runs ${across.toFixed(1)}° across, past the ${half}° edge`);
+    assert.ok(down <= half, `${v.name}: what it frames runs ${down.toFixed(1)}° up/down, past the ${half}° edge`);
   }
 });
 
@@ -541,15 +584,16 @@ test('aiming the head at a point really does point it at that point', async () =
   const { aimAt } = await load('viewpoints.js');
   const D = Math.PI / 180;
   // The independent derivation: rebuild the forward vector from the yaw and
-  // pitch aimAt handed back — WebXR's own convention, forward at -Z, yaw about
-  // Y, pitch about X — and check it lands back on the target. A sign flip here
-  // is a whole run of screenshots pointed at the opposite wall, and it is the
-  // one bug a PNG cannot report because the PNG looks perfectly fine.
+  // pitch aimAt handed back — WebXR's own convention, forward at -Z — and check
+  // it lands back on the target. A sign flip here is a whole run of screenshots
+  // pointed at the opposite wall, and it is the one bug a PNG cannot report
+  // because the PNG looks perfectly fine.
+  const W = await load('world.js');
   const cases = [
-    [[0, 1.45, 0], [0, 1.15, -1.55]],
-    [[0, 1.45, 0], [-0.68, 1.21, -1.17]],
-    [[0, 1.45, 0], [0.68, 1.21, -1.17]],
-    [[0, 1.45, 0], [0, 0.83, -1.0]],
+    [[0, W.EYE, 0], [0, 1.15, -1.55]],
+    [[0, W.EYE, 0], Object.values(W.shelfPlane(0).centre)],
+    [[0, W.EYE, 0], Object.values(W.shelfPlane(3).centre)],
+    [[0, W.EYE, 0], Object.values(W.agentAt(7).pos)],
     [[0.2, 1.5, 0.3], [-1.0, 2.0, -2.0]],
   ];
   for (const [eye, target] of cases) {
@@ -559,31 +603,18 @@ test('aiming the head at a point really does point it at that point', async () =
       Math.sin(pitch * D),
       -Math.cos(yaw * D) * Math.cos(pitch * D),
     ];
-    const to = [target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]];
-    const len = Math.hypot(...to);
+    const to = sub(target, eye);
+    const l = len(to);
     for (let i = 0; i < 3; i++) {
-      assert.ok(Math.abs(fwd[i] - to[i] / len) < 1e-9,
-        `aimAt(${eye}, ${target}) points at ${fwd} and not at the target`);
+      assert.ok(Math.abs(fwd[i] - to[i] / l) < 1e-9, `aimAt(${eye}, ${target}) points at ${fwd}`);
     }
   }
 });
 
-test('the room the captain opens never loads the dev loop', async () => {
-  // The whole deal on this line of work is that the flags are OFF by default —
-  // and "off" has to mean not fetched, not merely not used. So nothing the
-  // normal page pulls in may name the emulated runtime at all: it is reachable
-  // only through a dynamic import behind the query parameter.
-  const normal = ['main.js', 'room.js', 'panels.js', 'surface.js', 'faces.js', 'viewpoints.js'];
-  for (const f of normal) {
-    const src = fs.readFileSync(path.join(UI, f), 'utf8');
-    for (const m of src.matchAll(/^\s*import\s[^;]*?from\s*['"]([^'"]+)['"]/gm)) {
-      assert.ok(!/devxr|iwer/i.test(m[1]),
-        `${f} imports ${m[1]} at the top level — the emulator has to stay behind the flag`);
-    }
-  }
-  // And the capturable drawing buffer is a flag, not a default: it costs
-  // performance in a headset, where the frame budget is 13.9 ms.
-  const main = fs.readFileSync(path.join(UI, 'main.js'), 'utf8');
-  assert.match(main, /preserveDrawingBuffer:\s*DEV\.has\(['"]capture['"]\)/,
-    'preserveDrawingBuffer should be on only when ?capture is');
+test('world.js says where things go and knows nothing about how they are drawn', async () => {
+  const src = fs.readFileSync(path.join(UI, 'world.js'), 'utf8');
+  assert.ok(!/from ['"]three['"]/.test(src), 'world.js imports three — it is meant to be arguable without a GPU');
+  assert.ok(!/document\./.test(src), 'world.js touches the DOM');
+  const vp = fs.readFileSync(path.join(UI, 'viewpoints.js'), 'utf8');
+  assert.ok(!/from ['"]three['"]/.test(vp), 'viewpoints.js imports three');
 });

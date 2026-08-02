@@ -14,11 +14,17 @@
 // client since 22; the whole driver below is that plus JSON.
 //
 // What it can and cannot tell you: a photograph proves the room did not go
-// blank and shows what it looks like. It does NOT prove a target is 3° — exact
+// blank and shows what it looks like. It does NOT prove a target is 6° — exact
 // pixels differ across drivers and would only train you to ignore the check.
-// The arc is measured in test/bridge3d.test.js. So the only assertion made here
-// is structural: every frame has colour in it, and the run fails if one does
-// not. See ui/js/bridge3d/README.md, and `vr-design` for every design number.
+// The arc is measured in test/bridge3d.test.js.
+//
+// So this run asserts two things and no more. Structural: every frame has
+// colour in it. And POINTABLE: it aims the head at one of each kind of thing in
+// the room and checks the ray lights it up, because a room where the ray reaches
+// nothing photographs perfectly and is completely dead — which it was, once,
+// behind a glyph layer two millimetres in front of the colliders.
+//
+// See ui/js/bridge3d/README.md, and `vr-design` for every design number.
 'use strict';
 
 const { spawn } = require('node:child_process');
@@ -155,7 +161,7 @@ async function main() {
     return 0;
   }
 
-  const { VIEWPOINTS } = await import(pathToFileURL(path.join(ROOT, 'ui', 'js', 'bridge3d', 'viewpoints.js')));
+  const { VIEWPOINTS, PROBES } = await import(pathToFileURL(path.join(ROOT, 'ui', 'js', 'bridge3d', 'viewpoints.js')));
 
   // The board behind the room: the frontend playground, unless a URL was given
   // (point --url at a live server to photograph a real board instead).
@@ -175,6 +181,7 @@ async function main() {
 
   let cdp = null;
   const shots = [];
+  const probes = [];
   try {
     // The page target, found through the http side of the protocol.
     const list = await (async () => {
@@ -232,16 +239,36 @@ async function main() {
       const aim = await evaluate(cdp, 'window.__xr.look(' + JSON.stringify(v.name) + ')');
       await evaluate(cdp, 'window.__xr.frames(4)');       // let the room settle and repaint
       const stats = await evaluate(cdp, 'window.__xr.frameStats()');
+      // What the room costs to draw, per shot — the figure that says whether a
+      // world built out of real objects still fits an 11 ms frame.
+      const room = await evaluate(cdp, 'window.__bridge.stats()');
       const { data } = await cdp.send('Page.captureScreenshot', { format: 'png' });
       const file = path.join(args.out, v.name + '.png');
       fs.writeFileSync(file, Buffer.from(data, 'base64'));
       // Structural only: did anything land on the canvas. Not a pixel compare.
       const blank = !stats || stats.colours < 12 || stats.litFraction < 0.005;
-      shots.push({ name: v.name, scene: v.scene, why: v.why, file: path.relative(ROOT, file), aim, stats, ok: !blank });
+      shots.push({ name: v.name, scene: v.scene, why: v.why, file: path.relative(ROOT, file), aim, stats, room, ok: !blank });
       console.log((blank ? '✗ ' : '· ') + v.name.padEnd(14)
         + 'yaw ' + aim.yaw.toFixed(1).padStart(6) + '°  pitch ' + aim.pitch.toFixed(1).padStart(6) + '°  '
         + (stats ? stats.colours + ' colours, ' + (stats.litFraction * 100).toFixed(1) + '% lit' : 'NO FRAME')
+        + (room ? ', ' + room.calls + ' draws' : '')
         + '  → ' + path.relative(ROOT, file));
+    }
+
+    // Can the ray still land? A photograph never shows this, and the ways it
+    // breaks are all invisible — a glyph layer in front of the colliders, a
+    // hidden panel that is still pointable at, a pointer flag the library
+    // rewrites the moment you set it. So the run points at one of each kind of
+    // thing and checks it lights up.
+    await evaluate(cdp, setScene('world'));
+    for (const p of PROBES) {
+      await evaluate(cdp, `window.__xr.aim(${p.yaw}, ${p.pitch})`);
+      await evaluate(cdp, 'window.__xr.frames(4)');
+      const lit = await evaluate(cdp, 'window.__bridge.lit()');
+      const on = (lit || []).find((t) => t.name === p.expect);
+      probes.push({ ...p, lit, ok: !!on });
+      console.log((on ? '· ' : '✗ ') + ('ray on ' + p.name).padEnd(24)
+        + (on ? on.state + ' at ' + on.distance.toFixed(2) + ' m' : 'NOTHING — the ray reaches nothing there'));
     }
 
     const manifest = {
@@ -249,16 +276,20 @@ async function main() {
       url, size: args.width + 'x' + args.height,
       chrome: bin, board: args.url ? 'live server' : 'dev/ui-server.js fixture',
       note: 'Screenshots are structural evidence only — every arc figure is asserted in test/bridge3d.test.js, and every design number lives in the vr-design skill.',
-      shots,
+      shots, probes,
     };
     fs.writeFileSync(path.join(args.out, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
     if (errors.length) console.error('\nthe page complained:\n  ' + errors.join('\n  '));
     const bad = shots.filter((s) => !s.ok);
-    console.log(bad.length
-      ? '\n' + bad.length + ' blank frame(s): ' + bad.map((s) => s.name).join(', ')
-      : '\n' + shots.length + ' shots in ' + path.relative(ROOT, args.out) + '/ (+ manifest.json)');
-    return bad.length ? 1 : 0;
+    const dead = probes.filter((p) => !p.ok);
+    if (bad.length) console.log('\n' + bad.length + ' blank frame(s): ' + bad.map((s) => s.name).join(', '));
+    if (dead.length) console.log((bad.length ? '' : '\n') + 'the ray lands on nothing at: ' + dead.map((p) => p.name).join(', '));
+    if (!bad.length && !dead.length) {
+      console.log('\n' + shots.length + ' shots in ' + path.relative(ROOT, args.out)
+        + '/ (+ manifest.json), and the ray lands on all ' + probes.length + ' kinds of thing');
+    }
+    return bad.length || dead.length ? 1 : 0;
   } finally {
     if (cdp) try { cdp.close(); } catch (e) { /* going away anyway */ }
     child.kill();
@@ -274,24 +305,16 @@ async function main() {
   }
 }
 
-// What has to be OPEN for a scene's shots to be of anything. Driven through the
+// What has to be true for a scene's shots to be of anything. Driven through the
 // room's own handles (window.__bridge), so the photograph is of the room doing
-// its ordinary thing rather than of a rig posing it.
+// its ordinary thing rather than of a rig posing it. The world itself never
+// changes — it is a static room, which is the whole point of it — so the only
+// scene there is besides 'world' is the flat list standing open in front of it.
 function setScene(scene) {
-  if (scene === 'working') {
-    return `(() => {
-      const b = window.__bridge, doc = b.doc;
-      const cards = (doc.cards || []).slice(0, 2).map((c) => 'card:' + c.id);
-      const lt = (doc.lieutenants || [])[0];
-      for (const id of cards) b.open(id);
-      if (lt) b.open('lt:' + lt.id);
-      return b.state.open;
-    })()`;
-  }
   return `(() => {
     const b = window.__bridge;
-    for (const id of b.state.open.slice()) b.close(id);
-    return b.state.open;
+    b.openList(${scene === 'list'});
+    return b.stats();
   })()`;
 }
 

@@ -3,15 +3,15 @@
 // Pure: the room's own constants and some trigonometry. No three.js, no DOM, no
 // emulated headset. The page poses a head with these, the capture script names
 // its PNGs after them, and the tests measure them — which is the only reason
-// they are a module rather than five literals inside a script.
+// they are a module rather than six literals inside a script.
 //
 // A viewpoint is a place to STAND and a thing to LOOK AT, never a raw
-// quaternion: the point of a named shot is "this is what the board looks like
-// from where he reads it", and that survives the board moving. Every target is
-// read out of room.js, so a panel that gets repositioned drags its photograph
-// along with it instead of quietly becoming a picture of the floor.
+// quaternion: the point of a named shot is "this is what the shelves look like
+// from where he reads them", and that survives the shelves moving. Every target
+// is read out of world.js, so a thing that gets repositioned drags its
+// photograph along with it instead of quietly becoming a picture of the floor.
 
-import { EYE, FRONT, BAR, PANEL, placeWindow } from './room.js';
+import * as W from './world.js';
 
 const DEG = 180 / Math.PI;
 
@@ -23,7 +23,8 @@ export const FOVY = 90;
 // Where a head at `eye` has to be turned to face `target`: yaw about Y, pitch
 // about X, both in degrees. WebXR is right-handed with forward at -Z, so a head
 // at rest is yaw 0 / pitch 0, positive yaw turns left and positive pitch looks
-// up — the same convention IWER's eulerToQuat takes.
+// up — the same convention IWER's eulerToQuat takes. (world.js measures azimuth
+// positive to the RIGHT, which is the same angle with the opposite sign.)
 export function aimAt(eye, target) {
   const dx = target[0] - eye[0], dy = target[1] - eye[1], dz = target[2] - eye[2];
   return {
@@ -32,78 +33,119 @@ export function aimAt(eye, target) {
   };
 }
 
-// How far the thing being looked at is — the distance every arc in the room is
-// measured at, so a viewpoint carries it rather than guessing from z.
 export function gazeDistance(v) {
   return Math.hypot(v.look[0] - v.eye[0], v.look[1] - v.eye[1], v.look[2] - v.eye[2]);
 }
 
-// Standing where the captain stands. The room is authored around one head at
-// the origin at eye height; a viewpoint that moved the body would be
-// photographing a different room than the one the arc tests measure.
-const HERE = [0, EYE, 0];
+// Standing where the captain stands. The room is authored around one head at the
+// origin at eye height; a viewpoint that moved the body would be photographing a
+// different room than the one the arc tests measure.
+const HERE = [0, W.EYE, 0];
 
-const LEFT = placeWindow(0, 3);
-const MIDDLE = placeWindow(1, 3);
-const RIGHT = placeWindow(2, 3);
+const at = (p) => [p.x, p.y, p.z];
+
+// The two shelves worth photographing on their own: the one straight ahead of
+// his left shoulder, and the far one out at 33.75°, which is where a panel
+// turned to face the eye stops facing it and where foveation blurs what it
+// should not.
+const NEAR_SHELF = W.shelfPlane(1);
+const FAR_SHELF = W.shelfPlane(3);
+const nearExtent = W.shelfExtent(1);
+const farExtent = W.shelfExtent(3);
+
+// The arc of spheres, as one thing: eight of them 11.25° apart, so the set is
+// 78.75° across at 2.0 m plus a sphere at each end.
+const ARC = {
+  widthM: 2 * W.AGENT.distM * Math.sin((W.AGENT.pitchDeg * (W.AGENT.slots - 1) / 2) * Math.PI / 180) + W.AGENT.diaM,
+  heightM: W.sizeForArc(W.AGENT.riseDeg, W.AGENT.distM) + W.AGENT.diaM,
+};
+
+const LIST = W.listPanel();
+const PLATE = W.plate();
+const DECAL = W.decalAt(1);
 
 // Each one exists to answer a question a screenshot can answer; anything a
 // screenshot cannot answer is measured in test/bridge3d.test.js instead, and no
 // photograph is a substitute for wearing it.
 //
-// `scene` is what has to be OPEN for the shot to be of anything: 'empty' is the
-// room as it opens, 'working' is three windows up — which is also what pushes
-// the board back, so the working shot is a photograph of the same button press
-// rather than of a special mode.
-//
-// There is deliberately no photograph of the board pushed back on its own,
-// because there is no such view: whatever pushed it back is standing in front
-// of it, and it is wider in arc than the board is. That the pushed-back board
-// re-cuts its type for the further distance is a thing the arc tests measure
-// and a photograph could never have shown. That division is the whole point.
+// `scene` is what has to be true for the shot to be of anything: 'world' is the
+// room standing still, 'list' is the flat panel up in front of it.
 export const VIEWPOINTS = [
   {
-    name: 'resting', scene: 'empty',
+    name: 'resting', scene: 'world',
     why: 'head level, dead ahead — what he sees when he stops moving, and the shot that catches anything drifting up over the horizon',
     eye: HERE,
-    look: [0, EYE, FRONT.z],
-    frames: { panel: PANEL.board, at: { x: 0, y: FRONT.y, z: FRONT.z } },
+    look: [0, W.EYE, -W.SHELF.radius],
+    frames: { panel: nearExtent, at: NEAR_SHELF.centre },
   },
   {
-    name: 'board', scene: 'empty',
-    why: 'the remembering surface, read straight on: every card title, every column, at the distance it really stands',
+    name: 'shelves', scene: 'world',
+    why: 'the working shelf read straight on: are the slots a lattice, is a card a slab standing in one, and is the padding around it visible as air rather than as a gap in the drawing',
     eye: HERE,
-    look: [0, FRONT.y, FRONT.z],
-    frames: { panel: PANEL.board, at: { x: 0, y: FRONT.y, z: FRONT.z } },
+    look: at(NEAR_SHELF.centre),
+    frames: { panel: nearExtent, at: NEAR_SHELF.centre },
   },
   {
-    name: 'lieutenants', scene: 'empty',
-    why: 'the bar, low and close: are the faces faces, and is the plate under each of them still a target',
+    name: 'far-shelf', scene: 'world',
+    why: 'the outermost shelf, 33.75° off centre — where a flat plane turned to face the eye stops facing it, and where three.js would have blurred the type if foveation had been left at its default',
     eye: HERE,
-    look: [BAR.x, BAR.y, BAR.z],
-    frames: { panel: PANEL.bar, at: BAR },
+    look: at(FAR_SHELF.centre),
+    frames: { panel: farExtent, at: FAR_SHELF.centre },
   },
   {
-    name: 'working', scene: 'working',
-    why: 'the room with work up: three windows in front and the board gone back and quiet behind them, which is what the swap button actually buys',
+    name: 'lieutenants', scene: 'world',
+    why: 'the arc above the shelves: eight fixed berths, the crewed ones in their own colours with their names under them, and nothing of it above +10°',
     eye: HERE,
-    look: [MIDDLE.x, MIDDLE.y, MIDDLE.z],
-    frames: { panel: PANEL.card, at: MIDDLE },
+    look: at(W.agentAt(3).pos),
+    frames: { panel: ARC, at: W.agentAt(3).pos },
   },
   {
-    name: 'left-window', scene: 'working',
-    why: 'a window off to one side — where foveation blurs what it should not, and where a panel turned to face the eye stops facing it',
+    name: 'landmarks', scene: 'world',
+    why: 'the floor: a baked decal under each shelf carrying its column name, and the plate that opens the list. The layout that lost in the research lost for lacking exactly these',
     eye: HERE,
-    look: [LEFT.x, LEFT.y, LEFT.z],
-    frames: { panel: PANEL.card, at: LEFT },
+    look: at(DECAL.pos), floor: true,
+    frames: { panel: { widthM: DECAL.widthM, heightM: DECAL.depthM }, at: DECAL.pos },
   },
   {
-    name: 'right-window', scene: 'working',
-    why: 'and the mirror of it, because a room that is only ever photographed from the middle is a room with one good side',
+    name: 'list', scene: 'list',
+    why: 'the escape hatch, open: every card, searchable, one gesture away — because spatial memory failing is expected rather than exceptional',
     eye: HERE,
-    look: [RIGHT.x, RIGHT.y, RIGHT.z],
-    frames: { panel: PANEL.chat, at: RIGHT },
+    look: at(LIST.pos),
+    frames: { panel: { widthM: LIST.widthM, heightM: LIST.heightM }, at: LIST.pos },
   },
 ];
 
 export const byName = (name) => VIEWPOINTS.find((v) => v.name === name) || null;
+
+// ---- things the ray has to be able to land on -------------------------------
+//
+// A photograph proves the room did not go blank. It says nothing at all about
+// whether the ray reaches anything, and the way that breaks is silent: a glyph
+// layer two millimetres in front of the slots, an invisible panel that is still
+// a collider, a pointer library that rewrites the flag you set. Every one of
+// those looks perfect in a PNG.
+//
+// So the capture run also POINTS at one of each kind of thing and checks it
+// lights up. Aim is a head pose, in the same degrees everything else here
+// speaks: yaw is the opposite sign of world.js's azimuth.
+const slot = W.slotAt(1, 0, 0);
+const agent = W.agentAt(4);
+const mat = W.plate();
+
+export const PROBES = [
+  { name: 'a card slot', yaw: -slot.az, pitch: slot.el, expect: 'slot' },
+  { name: 'a lieutenant', yaw: -agent.az, pitch: agent.el, expect: 'lieutenant' },
+  { name: 'the list mat', yaw: -mat.azimuth, pitch: mat.elevation, expect: 'list-plate' },
+];
+
+// Everywhere the room actually stands something — what a viewpoint is allowed to
+// be aimed at. A viewpoint pointed anywhere else is a photograph of the floor.
+export function places() {
+  const out = [LIST.pos, PLATE.pos, { x: 0, y: W.EYE, z: -W.SHELF.radius }];
+  for (let i = 0; i < W.SHELF.azimuths.length; i++) {
+    out.push(W.shelfPlane(i).centre, W.decalAt(i).pos);
+    for (const s of W.slots(i)) out.push(s.pos);
+  }
+  for (let i = 0; i < W.AGENT.slots; i++) out.push(W.agentAt(i).pos);
+  return out;
+}

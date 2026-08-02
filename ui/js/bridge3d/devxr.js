@@ -21,7 +21,7 @@
 
 import { XRDevice, metaQuest3, eulerToQuat } from '../../vendor/iwer/iwer.module.min.js';
 import { VIEWPOINTS, byName, aimAt, FOVY } from './viewpoints.js';
-import { EYE } from './room.js';
+import { EYE } from './world.js';
 
 // Mono, not stereo: side-by-side eyes halve the horizontal resolution of every
 // screenshot to photograph the same room twice. The per-eye transforms are
@@ -52,7 +52,7 @@ export async function install() {
   // controller sits at the feet with its ray drawn across the whole room, and
   // every screenshot then has a blue line through the board.
   const OFFSET = { x: 0.22, y: -0.35, z: -0.12 };
-  const REACH = 1.6;                  // about where the room's front row stands
+  const REACH = 1.75;                 // the shelf radius: where most of the room stands
   if (device.controllers.left) device.controllers.left.connected = false;
   function aimController() {
     const c = device.controllers.right;

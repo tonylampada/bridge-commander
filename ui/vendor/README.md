@@ -16,6 +16,26 @@ tarball. To update: repack, copy, and bump the line here.
 - iwer/iwer.module.min.js — IWER, the Immersive Web Emulation Runtime, v2.3.0 (MIT) — https://github.com/meta-quest/immersive-web-emulation-runtime — `npm pack iwer@2.3.0` → `package/build/iwer.module.min.js` (190 KB). Meta's own runtime: it installs a synthetic `navigator.xr`, so a genuine `immersive-vr` session runs in a desktop browser with scriptable head and controller poses. The `build/` bundle is what is vendored, not `lib/` — the module build is rollup'd with its two dependencies (gl-matrix, webxr-layers-polyfill) inlined, so it has no bare specifiers and needs no import map. `@iwer/devui`, the interactive emulator panel, is deliberately NOT vendored: 850 KB for controls `ui/js/bridge3d/devxr.js` gives with a mouse in twenty lines. Loaded by that file alone, dynamically, only when `?xr=emulate` is on the URL — see `ui/js/bridge3d/README.md`.
 
 - three/three.module.min.js — three.js r169 (MIT) — https://github.com/mrdoob/three.js — `npm pack three@0.169.0` → `package/build/three.module.min.js` (672 KB raw, 166 KB gzipped). Only the core build: the `examples/jsm` addons — the WebXR button, the controller models, the orbit camera — all import the bare specifier `three`, which needs an import map or a bundler, so the few lines of them this page wanted are hand-written in `ui/js/bridge3d/` instead. Nothing the board ships imports it.
+- three/MathUtils.js — the same three.js r169 tarball, `package/src/math/MathUtils.js`, unmodified. uikit imports `three/src/math/MathUtils.js` by that exact deep path in three places, and the minified core build does not answer to it — it is one dependency-free file of pure functions, so the import map points that specifier here rather than at a shim we would have had to write and then maintain.
+
+### The room's stack — pmndrs uikit, vanilla
+
+Loaded only by `ui/bridge3d.html`, through the `<script type="importmap">` in that page.
+Pure ESM with an explicit `.js` on every relative import, which is the whole reason it vendors
+at all: no React, no bundler, no CDN, no build step. **Reachable from the room: 181 files,
+1.43 MB raw, 544 KB gzipped** — and the single biggest piece of that is one font.
+
+The evidence this is the right stack rather than a taste: Meta's own WebXR SDK for Quest
+(`facebook/immersive-web-sdk`) is built on `three` + `@pmndrs/uikit` + `@pmndrs/pointer-events`
++ `@pmndrs/handle`. See the `vr-design` skill's `building.md` for the survey and the rivals.
+
+- uikit/ — `@pmndrs/uikit` v1.0.74 (MIT) — https://github.com/pmndrs/uikit — `npm pack @pmndrs/uikit@1.0.74` → `package/dist/**/*.js` (the `.d.ts` and `.map` files are not copied; nothing serves them). Yoga flexbox layout with CSS-like properties, MSDF text that stays sharp at any distance, instanced panels, scroll, and `hover`/`active`/`focus` conditional properties. **Import components ONE AT A TIME** — `uikit/components/container.js`, never `uikit/index.js` or `uikit/components/index.js`: the barrel reaches for `components/svg.js`, which imports the three.js addon `SVGLoader` that this repo does not vendor, and in the finished kits it also drags in an icon set of 1,595 modules. A test in `test/bridge3d.test.js` fails if anything imports a barrel. The LICENSE is not in the tarball; it is fetched from the repo root.
+- uikit-pub-sub/ — `@pmndrs/uikit-pub-sub` v1.0.74 (MIT) — uikit's own tiny event bus. One file, pulled in by uikit.
+- pointer-events/ — `@pmndrs/pointer-events` v6.6.30 (MIT) — https://github.com/pmndrs/xr — `npm pack` → `package/dist/**/*.js`. Zero dependencies. Ray, grab and touch pointers with W3C-shaped events on real three.js objects; this is what replaced the room declaring rectangles while it painted. One trap worth knowing: it reads `object.pointerEvents`, and uikit **rewrites that field out of its own properties on every effect pass** — so a uikit component is made inert with `setProperties({ pointerEvents: 'none' })` and never by assignment.
+- msdfonts/inter.js — `@pmndrs/msdfonts` v1.0.74 (MIT) — `npm pack` → `package/dist/inter.js` only. Four weights of Inter as base64 WebP atlases plus metrics, 444 KB raw and 277 KB gzipped — **over half the weight of the whole stack**, and it does not compress because it is already WebP. The other seventeen fonts in the tarball are deliberately not vendored. uikit reaches for `@pmndrs/msdfonts/inter` through a dynamic import when a `Text` first needs a font, which is why the import map carries that exact specifier. The atlas holds **104 glyphs** — ASCII plus a little German, no emoji, no `·`, no `…`, no `×` — so every string the room paints goes through `safe()` in `ui/js/bridge3d/kit.js` first.
+- yoga-layout/ — `yoga-layout` v3.2.1 (MIT, Meta) — `npm pack` → `package/dist/{src,binaries}/**/*.js`. The flexbox engine, as an Emscripten build with the WASM base64-inlined into `binaries/yoga-wasm-base64-esm.js`, so it needs no separate asset fetch and no MIME configuration. The import map maps `yoga-layout/load`, which is the only entry point uikit uses. LICENSE fetched from the repo root; the tarball ships only `dist/` and `src/`.
+- signals-core/signals-core.js — `@preact/signals-core` v1.14.4 (MIT) — `npm pack` → `package/dist/signals-core.mjs`, **renamed to `.js`**. Content byte-for-byte unmodified; only the extension changed, because a static file server that has never heard of `.mjs` serves it as `application/octet-stream` and a browser refuses a module script with that MIME type. Renaming it is one line here; teaching every server that serves this repo about `.mjs` is not.
+- zod/ — `zod` v4.4.3 (MIT) — `npm pack` → `package/index.js` plus `package/v4/{core,classic,locales}/**/*.js`. Not a choice: uikit imports `zod` at runtime from its property and flex schemas. 79 files and 128 KB gzipped, of which the 53 `locales/` files are about 40 KB — they come along because zod's root entry re-exports them, and cutting them would mean modifying an upstream build. It is the least satisfying line in this file and it is the price of the layout engine.
 
 marked + purify load as classic scripts in index.html (globals — they are needed by every
 markdown surface). highlight and mermaid are lazy-loaded by `ui/js/md.js` only when rendered
@@ -27,9 +47,11 @@ React + Excalidraw are lazy-loaded by `ui/js/draw.js` alone, on the first `.exca
 artifact opened — the only file in `ui/js/` that knows React exists. Nothing else imports
 them, and a board that never opens a drawing never fetches them.
 
-three.js is a bet the board has not taken yet: only `ui/bridge3d.html` loads it, and that page
-is a prototype of the board inside a headset — four spatial arrangements, live panes on
-surfaces, meant to have three of its four ideas killed by an evening of wearing it. If the room
+three.js and the whole pmndrs stack are a bet the board has not taken yet: only
+`ui/bridge3d.html` loads any of it, and that page is the board as a room you stand inside —
+four shelves, cards as slabs in slots, the lieutenants as spheres. If the room
 turns out not to be worth building, delete `three/`, `three.LICENSE`, `iwer/`, `iwer.LICENSE`,
+`uikit/`, `uikit-pub-sub/`, `pointer-events/`, `msdfonts/`, `yoga-layout/`, `signals-core/`,
+`zod/` and their `.LICENSE` files,
 `ui/bridge3d.html`, `ui/js/bridge3d/`, `dev/room-shots.js` and `test/bridge3d.test.js`; nothing
 else references any of it.
