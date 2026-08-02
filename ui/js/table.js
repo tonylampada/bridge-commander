@@ -136,8 +136,9 @@ function wire(order) {
     // right-click is the way into selection mode here, same menu as a tile's
     tr.oncontextmenu = (e) => { e.preventDefault(); openMoveMenu(tr.dataset.id, e.clientX, e.clientY); };
     tr.onclick = (e) => {
-      // in selection mode the whole row is the checkbox — shift takes the range
-      if (selectionOn()) { pick(tr.dataset.id, e.shiftKey, order); render(); return; }
+      // in selection mode the whole row is the checkbox — shift takes the range,
+      // and a PR chip's <a> does not navigate out from under it
+      if (selectionOn()) { e.preventDefault(); pick(tr.dataset.id, e.shiftKey, order); render(); return; }
       if (e.target.closest('a')) return; // PR chip: let the link navigate
       // label / owner clicks feed the shared filter (a chip in the popup)
       const lab = e.target.closest('.label');

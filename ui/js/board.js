@@ -138,8 +138,15 @@ function wire() {
     el.onclick = (e) => {
       if (pressFired) { pressFired = false; return; } // long-press already handled
       // in selection mode the whole tile is the checkbox — nothing else on it
-      // does its usual thing (a label click here would filter, not select)
-      if (selectionOn()) { pick(el.dataset.id, e.shiftKey, boardOrder()); render(); return; }
+      // does its usual thing: a label click would filter, and a PR chip is an
+      // <a> that would open GitHub, so the anchor's own navigation is cancelled
+      // too (shift-clicking a run of cards must not also open six tabs)
+      if (selectionOn()) {
+        e.preventDefault();
+        pick(el.dataset.id, e.shiftKey, boardOrder());
+        render();
+        return;
+      }
       const t = e.target;
       if (t.closest('a')) return; // PR chip / link: let the anchor navigate, don't open detail
       if (t.closest('.t-peek')) { openCardPane(el.dataset.id); return; }

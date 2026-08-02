@@ -14,11 +14,16 @@ const { pathToFileURL } = require('node:url');
 
 const load = (f) => import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', f)).href);
 
-let sel, bulk;
+let sel, bulk, state;
 test.before(async () => {
   sel = await load('selection.js');
   bulk = await load('bulk.js');
+  state = await load('state.js');
 });
+// The board doc the client actually holds. `workers` is the worker REGISTRY —
+// the ground truth the server itself consults before it kills a session — and
+// it is what "is this card archivable" has to be asked of.
+function board(cards, workers) { state.S.doc = { cards, workers: workers || [], columns: [] }; }
 // module-level state, like the board's own: every test starts from off
 const reset = () => sel.exitSelection();
 
@@ -118,29 +123,43 @@ test('labels ADD and REMOVE against the card\'s own list — they never replace 
   assert.deepStrictEqual(bulk.labelsAfter(undefined, 'first', null), ['first'], 'a card with no labels yet');
 });
 
-test('a card with a live worker refuses to be archived, whatever the worker is doing', () => {
-  const c = (state) => ({ id: 'x', status: { worker: { id: 'w1', state } } });
-  assert.strictEqual(bulk.archiveRefusal(c('working')), 'worker working');
-  assert.strictEqual(bulk.archiveRefusal(c('needs-you')), 'worker needs-you');
-  assert.strictEqual(bulk.archiveRefusal(c('idle')), 'worker idle', 'an idle session is still a bound session');
-  assert.strictEqual(bulk.archiveRefusal(c('absent')), null);
-  assert.strictEqual(bulk.archiveRefusal({ id: 'x' }), null, 'no status at all = nothing to refuse');
+test('a live worker refuses the archive — and "live" is the registry, not the advisory lease', () => {
+  // The shape the real board records for a card being worked on RIGHT NOW: it
+  // sits in Working, it has NO card.status at all (nothing on the workspace
+  // calls status.set), and its liveness lives entirely in board.workers.
+  const working = { id: 'bulk-actions', column: 'working' };
+  board([working], [{ card: 'bulk-actions', done: false, branch: 'bc/bulk-actions' }]);
+  assert.strictEqual(bulk.archiveRefusal(working), 'live worker on bc/bulk-actions',
+    'the guard has to fire on the card as the real board records it');
+
+  // done = the worker finished; the entry stays until the card is archived or released
+  board([working], [{ card: 'bulk-actions', done: true }]);
+  assert.strictEqual(bulk.archiveRefusal(working), null);
+
+  // no registry entry at all
+  board([working], []);
+  assert.strictEqual(bulk.archiveRefusal(working), null);
+
+  // the lease is asked SECOND, never alone: `absent` proves nothing, but a set
+  // lease with no registry entry is still worth refusing
+  board([working], []);
+  assert.strictEqual(bulk.archiveRefusal({ id: 'x', status: { worker: { id: 'w1', state: 'working' } } }), 'worker working');
+  assert.strictEqual(bulk.archiveRefusal({ id: 'x', status: { worker: { id: null, state: 'absent' } } }), null);
 });
 
 test('the archive plan splits the selection before anything happens', () => {
-  const list = [
-    { id: 'a', status: { worker: { state: 'absent' } } },
-    { id: 'b', status: { worker: { state: 'working' } } },
-    { id: 'c' },
-  ];
+  const list = [{ id: 'a' }, { id: 'b' }, { id: 'c' }];
+  board(list, [{ card: 'b', done: false }, { card: 'c', done: true }]);
   const plan = bulk.archivePlan(list);
   assert.deepStrictEqual(plan.go.map((c) => c.id), ['a', 'c']);
   assert.deepStrictEqual(plan.refused.map((c) => c.id), ['b']);
 });
 
 test('the destructive confirm says what will happen, with the count, before it happens', () => {
-  const live = { id: 'b', title: 'live one', status: { worker: { state: 'working' } } };
-  const c = bulk.archiveConfirmText([{ id: 'a', title: 'one' }, live, { id: 'c', title: 'three' }]);
+  const live = { id: 'b', title: 'live one', column: 'working' };
+  const list = [{ id: 'a', title: 'one' }, live, { id: 'c', title: 'three' }];
+  board(list, [{ card: 'b', done: false }]);
+  const c = bulk.archiveConfirmText(list);
   assert.strictEqual(c.n, 2);
   assert.match(c.text, /Archive 2 cards\?/);
   assert.match(c.text, /restorable/i, 'it does not pretend the cards evaporate');
