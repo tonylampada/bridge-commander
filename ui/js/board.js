@@ -1,7 +1,7 @@
 // board: dense card tiles, drag&drop, long-press move menu, new-card /
 // new-lieutenant modals. (Lieutenant switching lives in the chat header —
 // ltswitcher.js — not on the board.)
-import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, workerFor } from './state.js';
+import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, workerFor, render } from './state.js';
 import { api } from './api.js';
 import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, ctxBarHtml } from './util.js';
 import { labelChipHtml } from './labels.js';
@@ -9,6 +9,7 @@ import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
 import { openCardPane } from './pane.js';
 import { avatarGridHtml, wireAvatarGrid } from './avatars.js';
+import { selectionOn, isSelected, enterSelection, pick } from './selection.js';
 
 const boardEl = document.getElementById('board');
 
@@ -63,9 +64,16 @@ function tileHtml(c) {
     : '';
   // owner color stripe on the LEFT edge: every card belongs to exactly one lieutenant
   const stripe = '<span class="t-stripe" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>';
-  return '<div class="tile' + (c.id === S.openCardId ? ' open' : '') + workerCls + '" draggable="true" data-id="' + esc(c.id) + '"' + workerTitle + '>' +
+  // selection mode only: the checkbox and the selected state. Off = the tile is
+  // exactly what it always was, and dragging still belongs to drag&drop.
+  const sel = selectionOn();
+  const box = sel
+    ? '<input class="t-sel" type="checkbox" tabindex="-1" aria-label="select card"' + (isSelected(c.id) ? ' checked' : '') + '>'
+    : '';
+  return '<div class="tile' + (c.id === S.openCardId ? ' open' : '') + (sel && isSelected(c.id) ? ' sel' : '') + workerCls +
+    '" draggable="' + (sel ? 'false' : 'true') + '" data-id="' + esc(c.id) + '"' + workerTitle + '>' +
     stripe +
-    '<div class="t-row1"><span class="t-emoji">' + esc(cardEmoji(c)) + '</span>' +
+    '<div class="t-row1">' + box + '<span class="t-emoji">' + esc(cardEmoji(c)) + '</span>' +
     '<span class="t-title">' + esc(c.title || c.id) + '</span>' +
     cornerInd + '</div>' +
     (labels || prs || order ? '<div class="t-chips">' + order + labels + prs + '</div>' : '') +
@@ -85,8 +93,16 @@ function tileHtml(c) {
     '</div></div>';
 }
 
+// the visible cards in the order the board draws them — what a shift-click
+// range runs over
+function boardOrder() {
+  return columns().flatMap((col) =>
+    cards().filter((c) => c.column === col.id && cardVisible(c)).sort(byRecency).map((c) => c.id));
+}
+
 export function renderBoard() {
   const cols = columns();
+  boardEl.classList.toggle('selecting', selectionOn()); // outside the html cache
   const html = !cols.length
     ? '<div class="empty">waiting for board…</div>'
     : cols.map((col) => {
@@ -121,6 +137,9 @@ function wire() {
   boardEl.querySelectorAll('.tile').forEach((el) => {
     el.onclick = (e) => {
       if (pressFired) { pressFired = false; return; } // long-press already handled
+      // in selection mode the whole tile is the checkbox — nothing else on it
+      // does its usual thing (a label click here would filter, not select)
+      if (selectionOn()) { pick(el.dataset.id, e.shiftKey, boardOrder()); render(); return; }
       const t = e.target;
       if (t.closest('a')) return; // PR chip / link: let the anchor navigate, don't open detail
       if (t.closest('.t-peek')) { openCardPane(el.dataset.id); return; }
@@ -202,6 +221,12 @@ export function openMoveMenu(cardId, x, y) {
   const sep = document.createElement('div');
   sep.className = 'mm-sep';
   menuEl.appendChild(sep);
+  // The way INTO selection mode, on both the board and the table — nothing has
+  // to sit on screen the rest of the time for this to be reachable.
+  const many = document.createElement('button');
+  many.textContent = '☑ select cards';
+  many.onclick = () => { closeMoveMenu(); enterSelection(cardId); render(); };
+  menuEl.appendChild(many);
   const kill = document.createElement('button');
   kill.className = 'danger';
   kill.textContent = '✕ archive';

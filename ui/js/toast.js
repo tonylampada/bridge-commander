@@ -18,7 +18,10 @@ function ensureRoot() {
   return root;
 }
 
-// e: { emoji, text, cardTitle, actor, card, lieutenant }
+// e: { emoji, text, cardTitle, actor, card, lieutenant, sub, sticky }
+// `sub` overrides the derived "cardTitle · actor" line; `sticky` keeps the
+// toast up until it is dismissed (a bulk report that names what it refused has
+// to be readable at leisure — it is the only place that news appears).
 export function push(e) {
   const stack = ensureRoot();
   const el = document.createElement('div');
@@ -35,7 +38,7 @@ export function push(e) {
   tx.textContent = e.text || '';
   const sub = document.createElement('div');
   sub.className = 'sub';
-  sub.textContent = [e.cardTitle, e.actor].filter(Boolean).join(' · ');
+  sub.textContent = e.sub || [e.cardTitle, e.actor].filter(Boolean).join(' · ');
   bd.append(tx, sub);
 
   const x = document.createElement('button');
@@ -48,7 +51,7 @@ export function push(e) {
 
   let timer = null;
   const dismiss = () => { clearTimeout(timer); el.remove(); };
-  const arm = () => { timer = setTimeout(dismiss, DISMISS_MS); };
+  const arm = () => { if (!e.sticky) timer = setTimeout(dismiss, DISMISS_MS); };
   el.onmouseenter = () => clearTimeout(timer);
   el.onmouseleave = arm;
   x.onclick = (ev) => { ev.stopPropagation(); dismiss(); };

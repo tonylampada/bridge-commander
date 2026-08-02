@@ -7,6 +7,8 @@ import { S, cards, columns, lieutenant, lieutenantColor, cardVisible, cardStatus
 import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, ctxBarHtml, setHtmlIfChanged } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
+import { openMoveMenu } from './board.js';
+import { selectionOn, isSelected, pick, setAll, allSelected } from './selection.js';
 
 const tableEl = document.getElementById('table');
 
@@ -51,8 +53,22 @@ function cmp(a, b) {
 }
 
 // ---------- html ----------
-function headHtml() {
-  return '<tr>' + COLS.map((col) => {
+// selection mode only: a leading checkbox column. The header box takes
+// EVERYTHING currently filtered in — the table is where selecting twelve
+// things is natural.
+function selHeadHtml(list) {
+  return selectionOn()
+    ? '<th class="c-sel"><input type="checkbox" class="tv-all" title="select every card the filter shows"' +
+      (allSelected(list.map((r) => r.c.id)) ? ' checked' : '') + '></th>'
+    : '';
+}
+function selCellHtml(c) {
+  return selectionOn()
+    ? '<td class="c-sel"><input type="checkbox" tabindex="-1" aria-label="select card"' + (isSelected(c.id) ? ' checked' : '') + '></td>'
+    : '';
+}
+function headHtml(list) {
+  return '<tr>' + selHeadHtml(list) + COLS.map((col) => {
     const on = T.sort.key === col.key;
     const arrow = on ? (T.sort.dir > 0 ? ' ▲' : ' ▼') : '';
     return '<th' + (col.sortable ? ' class="sort' + (on ? ' on' : '') + (col.hideM ? ' hide-m' : '') + '" data-sort="' + col.key + '"' : (col.hideM ? ' class="hide-m"' : '')) + '>' +
@@ -79,7 +95,8 @@ function rowHtml(row) {
   const c = row.c;
   const l = lieutenant(c.owner);
   const wst = c.column === 'working' ? ctxBarHtml((workerFor(c.id) || {}).agentStatus) : '';
-  return '<tr data-id="' + esc(c.id) + '">' +
+  return '<tr data-id="' + esc(c.id) + '"' + (selectionOn() && isSelected(c.id) ? ' class="sel"' : '') + '>' +
+    selCellHtml(c) +
     '<td class="c-title">' + titleCellHtml(row) + '</td>' +
     '<td class="c-status">' + statusCellHtml(row) + '</td>' +
     '<td class="c-type hide-m">' + esc(c.type || '') + '</td>' +
@@ -97,13 +114,16 @@ function rowHtml(row) {
 export function renderTable() {
   if (S.boardMode !== 'table') return;
   const list = rows();
-  const html = '<div class="tv-scroll"><table class="tv"><thead>' + headHtml() + '</thead><tbody>' +
-    (list.length ? list.map(rowHtml).join('') : '<tr><td colspan="9" class="tv-empty">no cards match</td></tr>') +
+  const span = COLS.length + (selectionOn() ? 1 : 0);
+  const html = '<div class="tv-scroll"><table class="tv' + (selectionOn() ? ' selecting' : '') + '"><thead>' + headHtml(list) + '</thead><tbody>' +
+    (list.length ? list.map(rowHtml).join('') : '<tr><td colspan="' + span + '" class="tv-empty">no cards match</td></tr>') +
     '</tbody></table></div>';
   if (!setHtmlIfChanged(tableEl, html)) return;
-  wire();
+  wire(list.map((r) => r.c.id));
 }
-function wire() {
+function wire(order) {
+  const all = tableEl.querySelector('.tv-all');
+  if (all) all.onclick = (e) => { e.stopPropagation(); setAll(order, all.checked); render(); };
   for (const th of tableEl.querySelectorAll('th.sort')) {
     th.onclick = () => {
       const key = th.dataset.sort;
@@ -113,7 +133,11 @@ function wire() {
     };
   }
   for (const tr of tableEl.querySelectorAll('tbody tr[data-id]')) {
+    // right-click is the way into selection mode here, same menu as a tile's
+    tr.oncontextmenu = (e) => { e.preventDefault(); openMoveMenu(tr.dataset.id, e.clientX, e.clientY); };
     tr.onclick = (e) => {
+      // in selection mode the whole row is the checkbox — shift takes the range
+      if (selectionOn()) { pick(tr.dataset.id, e.shiftKey, order); render(); return; }
       if (e.target.closest('a')) return; // PR chip: let the link navigate
       // label / owner clicks feed the shared filter (a chip in the popup)
       const lab = e.target.closest('.label');

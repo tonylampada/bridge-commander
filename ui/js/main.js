@@ -7,6 +7,8 @@ import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard, onOpenLieutenant as toastOnOpenLieutenant } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderTable } from './table.js';
+import { renderBulkBar } from './bulk.js';
+import { selectionOn, exitSelection } from './selection.js';
 import { renderArchive } from './archtable.js';
 import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.js';
 import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat, onQuoteSource } from './chat.js';
@@ -191,6 +193,7 @@ document.addEventListener('keydown', (e) => {
     else if (ltSwitcherOpen()) closeLtSwitcher();
     else if (ownerMenuOpen()) closeOwnerMenu(); // just the menu — keep the detail open
     else if (S.notifOpen) { S.notifOpen = false; render(); }
+    else if (selectionOn()) { exitSelection(); render(); } // leave selection mode
     else if (!spEl.hidden) { spEl.hidden = true; gearBtn.classList.remove('on'); }
     else if (detailOpen()) closeDetail();
     else if (searchModeOn()) topbarEl.classList.remove('searching'); // collapse first, filters survive
@@ -214,6 +217,9 @@ onRender(() => {
   syncFilterInputs();
   renderFilterUI();
   renderStatusDot();
+  // the selection is trimmed to what the filters still show BEFORE the views
+  // paint it, so the checkboxes and the action bar's count never disagree
+  renderBulkBar();
   // The file screen owns its own DOM and is never repainted from here: a render
   // under the captain's cursor would eat what he is typing.
   if (S.boardMode === 'file') { /* nothing to repaint */ }

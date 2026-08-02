@@ -550,6 +550,35 @@ body.resizing { user-select: none; cursor: col-resize; }
 .ns-row .ns-prev { border: 1px solid var(--line); border-radius: 6px; color: var(--faint); font-size: 11px; padding: 1px 6px; flex: none; }
 .ns-row .ns-prev:hover { color: var(--accent); border-color: var(--accent2); }
 
+/* ---------- selection mode + bulk action bar ----------
+   Every rule here is behind a checkbox or a .selecting/.sel class that only
+   exists while selection mode is on — off, the board is untouched. */
+#board.selecting .tile, .tv.selecting { user-select: none; } /* shift-click selects cards, not text */
+.tile .t-sel, .tv .c-sel input { accent-color: var(--accent); width: 14px; height: 14px; margin: 0; flex: none; cursor: pointer; }
+.tile .t-sel { margin-top: 2px; }
+.tile.sel { border-color: var(--accent); background: var(--panel); }
+.tv .c-sel { width: 1px; padding-right: 0; }
+.tv tbody tr.sel { background: var(--panel); box-shadow: inset 2px 0 0 var(--accent); }
+#bulk-bar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: 18px; z-index: 90;
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px;
+  background: var(--bg2); border: 1px solid var(--line2); box-shadow: var(--shadow);
+  max-width: calc(100vw - 20px); flex-wrap: wrap; justify-content: center;
+}
+#bulk-bar .bb-n { font-size: 12px; color: var(--accent); font-weight: 600; white-space: nowrap; }
+#bulk-bar .bb-acts, #bulk-bar .bb-confirm { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: center; }
+#bulk-bar .bb-acts[hidden], #bulk-bar .bb-confirm[hidden] { display: none; }
+#bulk-bar .bb-msg { font-size: 12px; color: var(--text); }
+#bulk-bar .bb-refused { font-size: 11px; color: var(--warn); font-family: var(--mono); max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#bulk-bar button, #bulk-bar select {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 7px; color: var(--dim);
+  font-size: 12px; padding: 4px 9px; cursor: pointer; outline: none;
+}
+#bulk-bar button:hover:not(:disabled), #bulk-bar select:hover:not(:disabled) { color: var(--accent); border-color: var(--accent2); }
+#bulk-bar .danger:hover:not(:disabled) { color: var(--danger); border-color: var(--danger); }
+#bulk-bar button:disabled, #bulk-bar select:disabled { opacity: .45; cursor: default; }
+@media (max-width: 760px) { #bulk-bar { bottom: 62px; } } /* clear of the mobile tab bar */
+
 /* ---------- notification toasts ---------- */
 #toast-stack {
   position: fixed; top: 52px; right: 10px; z-index: 80; display: flex; flex-direction: column;
