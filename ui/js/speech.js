@@ -223,7 +223,9 @@ export async function speak({url, voice, input, params, title, artist, onFirstSo
   announce(title, artist);
   transport(true, title);
   const s = live = {ac: new AbortController(), srcs: [], pending: 0, over: false};
-  if (ctx.state === 'suspended') await ctx.resume().catch(() => {});
+  // Anything but 'running' needs the resume: iOS parks it in 'interrupted'
+  // (not 'suspended') when the screen locks, and that is silence too.
+  if (ctx.state !== 'running') await ctx.resume().catch(() => {});
 
   const t0 = performance.now();
   const chunks = [];

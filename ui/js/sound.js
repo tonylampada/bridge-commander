@@ -5,12 +5,24 @@
 // speechSynthesis), so a later programmatic play() from an SSE event isn't
 // silently blocked by the browser.
 let ctx = null, master = null, comp = null, volume = 0.85;
+
+// Ask whether it is RUNNING, not which way it is broken: Chrome parks a
+// backgrounded context in 'suspended', iOS Safari moves it to 'interrupted'
+// when the screen locks, and WebKit is free to invent a third. 'closed' is the
+// one dead end — resume() can never bring it back.
+export const needsResume = (state) => state !== 'running' && state !== 'closed';
+// resume() rejects on iOS when there is no gesture behind it. Stay silent and
+// leave every recovery path armed for the next try.
+const wake = (c) => { if (c && needsResume(c.state)) c.resume().catch(() => {}); };
+
 function ensureCtx() {
   if (ctx) return ctx;
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) return null;
   try {
     ctx = new AC();
+    // Recover the moment iOS allows it, instead of finding out at the next tone.
+    ctx.onstatechange = () => wake(ctx);
     master = ctx.createGain(); master.gain.value = volume;
     comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14; comp.knee.value = 26; comp.ratio.value = 3.2;
@@ -74,7 +86,7 @@ export function play(name) {
   const c = ensureCtx();
   if (!c) return;
   const run = () => { try { fn(c.currentTime + 0.02); } catch (e) {} };
-  if (c.state === 'suspended') { c.resume().then(run).catch(() => {}); }
+  if (needsResume(c.state)) { c.resume().then(run).catch(() => {}); }
   else run();
 }
 
@@ -84,15 +96,12 @@ export function play(name) {
 // capture phase (runs before target handlers) across several gesture types,
 // because the board's first click is often a control like the gear icon that
 // calls stopPropagation() — a bubble-phase window listener would miss it.
-function primeOnGesture() {
-  const c = ensureCtx();
-  if (c && c.state === 'suspended') c.resume().catch(() => {});
-  for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.removeEventListener(ev, primeOnGesture, true);
-}
+// It stays attached for the life of the page: the context can die again long
+// after the first gesture (screen lock), and a gesture must always be able to
+// unlock it. A no-op when the context is already running.
+function primeOnGesture() { wake(ensureCtx()); }
 for (const ev of ['click', 'keydown', 'pointerdown', 'touchstart']) window.addEventListener(ev, primeOnGesture, { capture: true, passive: true });
 
 // Re-resume proactively on refocus so the next notification after a
-// backgrounded tab isn't the one that eats the resume latency.
-document.addEventListener('visibilitychange', () => {
-  if (!document.hidden && ctx && ctx.state === 'suspended') ctx.resume().catch(() => {});
-});
+// backgrounded tab (or a locked phone) isn't the one that eats the latency.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) wake(ctx); });
