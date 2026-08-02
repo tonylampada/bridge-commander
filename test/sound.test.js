@@ -62,6 +62,14 @@ class FakeCtx {
   }
 }
 let played = 0;
+// Every interval the module has running, because "is it looking" is a claim
+// about a timer and there is no way to ask it from the outside. A real one is
+// handed back, so the beats still happen; only the bookkeeping is ours.
+const intervals = new Set();
+const realSetInterval = global.setInterval, realClearInterval = global.clearInterval;
+global.setInterval = (fn, ms) => { const t = realSetInterval(fn, ms); intervals.add(t); return t; };
+global.clearInterval = (t) => { intervals.delete(t); return realClearInterval(t); };
+
 const tick = () => new Promise((r) => setTimeout(r, 0));
 // Real time has to actually pass: the corpse test is "did the clock move while
 // the world did", and there is no faking the world half of that from here.
@@ -229,4 +237,69 @@ test('the tap after a dictation: the context RAN, then died', async () => {
   assert.equal(built, 1, 'the tap should have replaced the corpse');
   assert.notEqual(theCtx, corpse, 'and played into the new context');
   assert.ok(played > 0, 'so the ▶ was heard, on the FIRST tap');
+});
+
+// The captain's loop with the page in it: the Shortcut takes the screen as well
+// as the microphone, so the death happens while the board is not being looked
+// at. Coming back is the moment to ask, and the answer has to be there before
+// the thumb arrives — the ▶ is a tap or two later, not a beat later.
+test('the dictation as it happens: the page goes away, and coming back is what asks', async () => {
+  fire('window', 'click');
+  await tick();
+  const corpse = theCtx;
+
+  await sleep(300);                      // the board is used normally
+  document.hidden = true;
+  fire('document', 'visibilitychange');  // the Shortcut takes the screen…
+  corpse.freeze();                       // …and the microphone with it
+  await sleep(1000);                     // the dictation
+
+  built = 0; played = 0;
+  document.hidden = false;
+  fire('document', 'visibilitychange');  // he is back on the board
+  await tick();
+  assert.equal(built, 1, 'the return alone replaced the corpse — no tap needed');
+  assert.notEqual(theCtx, corpse);
+
+  fire('window', 'click');               // and the ▶ he taps next
+  play('ding');
+  await tick();
+  assert.ok(played > 0, 'sounds');
+});
+
+// ── the watch ─────────────────────────────────────────────────────────────
+// The looking cannot be helped — a dead context fires no event, which is what
+// makes it dead — but the looking FOREVER can. Nothing takes the audio session
+// from a page that is sitting still, so a page sitting still runs no timer.
+test('the watch winds down once it has seen the clock keeping up', async () => {
+  fire('window', 'click');
+  await tick();
+  assert.equal(intervals.size, 1, 'the gesture armed it');
+  await sleep(1200);                     // two beats of a healthy clock
+  assert.equal(intervals.size, 0, 'and it let go: an idle page is not worth watching');
+  await sleep(700);
+  assert.equal(intervals.size, 0, 'and stays let go — nothing re-arms itself');
+});
+
+test('and re-arms for every moment something could have taken the session', async () => {
+  await sleep(1200);
+  assert.equal(intervals.size, 0, 'wound down');
+
+  fire('window', 'click');               // a tap
+  assert.equal(intervals.size, 1, 'looking again');
+  await sleep(1200);
+  assert.equal(intervals.size, 0);
+
+  theCtx.onstatechange();                // the session moving under the page
+  assert.equal(intervals.size, 1, 'looking again');
+  await sleep(1200);
+  assert.equal(intervals.size, 0);
+
+  document.hidden = true;                // the page going away…
+  fire('document', 'visibilitychange');
+  assert.equal(intervals.size, 0, 'nothing to watch while it is away');
+  await sleep(300);
+  document.hidden = false;               // …and coming back
+  fire('document', 'visibilitychange');
+  assert.equal(intervals.size, 1, 'the return is exactly when to look');
 });
