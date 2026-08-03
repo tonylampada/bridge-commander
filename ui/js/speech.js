@@ -211,7 +211,13 @@ function closeSink() {
    it for the element. The speech path above is untouched.
 
    The switch is somebody else's (a settings toggle, off by default): this costs
-   battery and keeps a player on the lock screen for as long as it runs. */
+   battery and keeps a player on the lock screen for as long as it runs. So is
+   WHAT plays: hold() takes an optional source — a function handed this module's
+   context and its sink, returning something with a stop() — because "the
+   session must never go quiet" is this module's business and "what quiet sounds
+   like" is not. The board hands it a slow ambient pad (ui/js/pad.js) when the
+   captain asks for one. With no source, it is the tone below, which is what
+   this module holds to on its own. */
 const HUM_HZ = 30;         // under the low end of any phone speaker
 const HUM_GAIN = 0.0008;   // and far under its floor in level: samples, no sound
 // A diagnostic, not a feature. "Is the tone still playing after the screen
@@ -223,20 +229,27 @@ const LOUD = (() => { try { return new URLSearchParams(location.search).get('hum
 const humHz = () => LOUD ? 220 : HUM_HZ;
 const humGain = () => LOUD ? 0.02 : HUM_GAIN;
 let held = false;          // the switch
-let hum = null;            // {osc, gain} while the tone is holding the session
+let source = null;         // what to hold WITH, or null for the tone below
+let hum = null;            // whatever is holding the session, with its stop()
 let owned = false;         // true from speak() until closeSink(): speech has the element
+
+// The module's own default: one oscillator, one gain, no sound. Same shape as
+// anything hold() is given — start it, and hand back the way to stop it.
+function tone(c, dest) {
+  const osc = c.createOscillator(), gain = c.createGain();
+  osc.frequency.value = humHz();
+  gain.gain.value = humGain();
+  osc.connect(gain); gain.connect(dest);
+  osc.start();
+  return { stop() { try { osc.stop(); } catch {} osc.disconnect(); gain.disconnect(); } };
+}
 
 function humOn() {
   if (hum || !held || owned || sink === null) return;   // refused once, refused for good
   const c = audio();
   if (!c.createMediaStreamDestination) return;
   if (!sink) sink = c.createMediaStreamDestination();
-  const osc = c.createOscillator(), gain = c.createGain();
-  osc.frequency.value = humHz();
-  gain.gain.value = humGain();
-  osc.connect(gain); gain.connect(sink);
-  osc.start();
-  const mine = hum = { osc, gain };
+  const mine = hum = (source || tone)(c, sink);
   if (c.state !== 'running') c.resume().catch(() => {});
   // It arms the element itself instead of calling openSink(), for the sake of
   // what happens when the browser says no. A refusal HERE is only a keep-alive
@@ -251,12 +264,11 @@ function humOn() {
   element().play().catch(() => { if (hum === mine) humOff(); });
 }
 
-// Silence the tone and leave the element alone: whoever calls this either takes
-// the element over (speak) or lets it go itself (hold(false)).
+// Silence whatever is holding and leave the element alone: whoever calls this
+// either takes the element over (speak) or lets it go itself (hold(false)).
 function humOff() {
   if (!hum) return;
-  try { hum.osc.stop(); } catch {}
-  try { hum.osc.disconnect(); hum.gain.disconnect(); } catch {}
+  try { hum.stop(); } catch {}
   hum = null;
 }
 
@@ -266,11 +278,17 @@ function humLost() { hum = null; }
 
 /* The switch itself. On: the element plays for as long as it is on, through
    speech and around it. Off: nothing is left behind — no tone, no element
-   playing, no stream held, no context kept open on its account. */
-export function hold(on) {
-  const was = held;
+   playing, no stream held, no context kept open on its account.
+
+   `src` is what to hold with (see above); it is compared by identity, so a
+   caller that hands the same function on every gesture — which is what the
+   board's primer does — changes nothing, and one that hands a different one
+   swaps what is playing without the session ever going quiet for a turn. */
+export function hold(on, src) {
+  const was = held, before = source;
   held = !!on;
-  if (held) humOn();
+  source = held ? (src || null) : null;
+  if (held) { if (hum && source !== before) humOff(); humOn(); }
   else { humOff(); if (was && !owned) closeSink(); }
 }
 export function holding() { return held; }

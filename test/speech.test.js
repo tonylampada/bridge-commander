@@ -529,6 +529,46 @@ test('a refused start lets go, so the next gesture can take it', async () => {
   hold(false);
 });
 
+// What holds the session is the caller's to choose — "the session must never go
+// quiet" is this module's business, "what quiet sounds like" is the board's. The
+// board hands over an ambient pad when the captain wants one (ui/js/pad.js).
+test('the caller can say what holds the session, and swapping it never leaves a gap', async () => {
+  await tick(10);
+  oscs.length = 0;
+  const made = [];
+  const src = (name) => (ctx, dest) => {
+    const it = { name, dest, stopped: false, stop() { it.stopped = true; } };
+    made.push(it);
+    return it;
+  };
+  const music = src('music'), other = src('other');
+
+  hold(true, music);
+  assert.equal(made.length, 1, 'the source was asked for exactly one thing to play');
+  assert.equal(made[0].dest, nodes.msd, 'and it plays into the element’s stream, like everything else here');
+  assert.equal(oscs.length, 0, 'the module’s own tone stayed out of the way');
+  assert.ok(!sinkEl.paused, 'the element is playing, which is the point of all of it');
+
+  hold(true, music);                   // the gesture primer, over and over
+  assert.equal(made.length, 1, 'the same source handed over again changes nothing');
+  assert.equal(made[0].stopped, false);
+
+  hold(true, other);                   // the captain picks another
+  assert.equal(made.length, 2, 'a different one takes over');
+  assert.ok(made[0].stopped, 'and the one before it was stopped');
+  assert.ok(!sinkEl.paused, 'without the element ever going quiet in between');
+
+  hold(false);
+  assert.ok(made[1].stopped, 'off stops it');
+  assert.ok(sinkEl.paused, 'and lets the element go, exactly as the tone does');
+
+  // …and with no source at all it is the module's own tone again.
+  hold(true);
+  assert.equal(made.length, 2, 'nobody else was asked');
+  assert.equal(humming().length, 1, 'the inaudible tone is back — this is what ?hum=loud makes audible');
+  hold(false);
+});
+
 // A page that never turns it on is the page that is on main today: every other
 // test in this file runs with the switch off, and this one says so out loud.
 test('a page that never asks for it never plays anything of its own', async () => {

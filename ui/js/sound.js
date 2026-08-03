@@ -102,9 +102,18 @@ function liveCtx() {
   ctx = master = comp = null;
   return ensureCtx();
 }
+// The notification volume, and who else it governs. Every tone here reads it
+// through `master` at the moment it plays, so a tone needs no telling — but the
+// keep-alive pad (keepalive.js, pad.js) is one long sound in ANOTHER context's
+// graph, playing while the slider is being dragged, and it has to follow the
+// slider live rather than at the next note.
+const watchers = [];
+export const getVolume = () => volume;
+export function onVolume(fn) { watchers.push(fn); }
 export function setVolume(v) {
   volume = Math.max(0, Math.min(1, Number(v)));
   if (master) master.gain.value = volume;
+  for (const fn of watchers) { try { fn(volume); } catch (e) {} }
 }
 // one voice: oscillator through an attack/decay gain envelope, optional pitch glide
 function voice(t0, { freq, freqTo, type = 'sine', dur = 0.3, peak = 0.3, attack = 0.006 }) {
