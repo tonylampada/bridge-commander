@@ -26,6 +26,7 @@
 //             events:  [{seq, ts, level, kind?, text, actor, card?, cardTitle?}], // board-level
 //             labels:  [{name, color}],                     // user-owned registry
 //             kinds:   {<kind>: {emoji, level}},            // registered kinds map (overrides built-ins)
+//             line:    null|<lieutenant-id>,                 // who holds the captain's voice channel
 //             reads:   { <user>: { notifSeq, notifSeqs[], threads: {<target>: ts} } } }
 //
 // Every card belongs to exactly one lieutenant (`owner`); card `type` is
@@ -250,7 +251,7 @@ function defaultBoard() {
   return {
     title: path.basename(WORKSPACE), subtitle: '', updated: now(), seq: 0,
     columns: COLUMNS, lieutenants: [], cards: [], events: [], labels: [], reads: {}, kinds: {},
-    projects: [], workers: [],
+    projects: [], workers: [], line: null,
   };
 }
 function normalizeBoard(doc) {
@@ -261,6 +262,7 @@ function normalizeBoard(doc) {
   if (!Array.isArray(b.events)) b.events = [];
   if (!Array.isArray(b.labels)) b.labels = [];
   if (!b.reads || typeof b.reads !== 'object') b.reads = {};
+  if (typeof b.line !== 'string' || !b.line) b.line = null; // resolved through lineHolder()
   b.kinds = sanitizeKinds(b.kinds);
   for (const lt of b.lieutenants) {
     if (!Array.isArray(lt.chat)) lt.chat = [];
@@ -339,6 +341,7 @@ const BUILTIN_KINDS = {
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
   'needs-captain': { emoji: '🚨', level: 1 },
+  line: { emoji: '📞', level: 2 },
 };
 function validKindEntry(v) {
   return !!(v && typeof v === 'object' && typeof v.emoji === 'string' && v.emoji.trim() &&
@@ -397,6 +400,37 @@ function registerCardLabels() {
 // ---------- lieutenants ----------
 const LT_PALETTE = ['#58b6ff', '#3ecf8e', '#e6c04a', '#c678dd', '#e2795b', '#56b6c2', '#98c379', '#e06c75'];
 function findLieutenant(id) { return board.lieutenants.find((l) => l.id === id); }
+
+// ---------- the line (the captain's voice channel) ----------
+// The captain talks to the board from his phone with the screen off, through a
+// voice shortcut that has no chat picker: it posts `target: "line"` and names
+// nobody. WHO that reaches is the SERVER's memory — the phone is not the only
+// thing that talks to this board, so a client-side answer (localStorage and
+// friends) would be a different answer per device.
+//
+// Two ways the line moves, and no third:
+//   - it follows the conversation — whoever last spoke to the captain in a main
+//     chat holds it, so nobody has to maintain it;
+//   - `line.pass` hands it over deliberately, as a delivery to the receiver.
+// A workspace that has never had a conversation still has to answer: the
+// FOUNDING lieutenant (first registered — the teleport) holds it by default, so
+// the shortcut works on day one with nothing seeded. Only a board with no
+// lieutenant at all has nobody on the line.
+function lineHolder() {
+  const held = board.line ? findLieutenant(board.line) : null; // a retired holder falls back
+  if (held) return { lieutenant: held, source: 'held' };
+  const first = board.lieutenants[0];
+  if (first) return { lieutenant: first, source: 'default' };
+  return { lieutenant: null, source: 'none' };
+}
+// The line follows the voice the captain last heard. Silent no-op when it is
+// already there, so an answering lieutenant never churns board state.
+function lineFollow(id) {
+  if (!id || board.line === id || !findLieutenant(id)) return false;
+  board.line = id;
+  return true;
+}
+
 function createLieutenant(body) {
   const name = String(body.name || '').trim();
   if (!name) return { error: 'name required' };
@@ -497,6 +531,7 @@ async function retireLieutenant(id, body) {
     catch (e) { console.error(now() + ' kill failed retiring ' + id + ': ' + String((e && e.message) || e)); }
   }
   board.lieutenants = board.lieutenants.filter((l) => l.id !== id);
+  if (board.line === id) board.line = null; // the line falls back rather than pointing at a ghost
   respawnAttempts.delete(id);
   nudged.delete(id);
   // A retired lieutenant can never drain again: its queue files go too.
@@ -734,9 +769,13 @@ function publicCard(card, user, msgSeqs) {
 const BOOT_ID = process.pid + '-' + Date.now();
 function publicBoard(user) {
   const msgSeqs = latestMessageSeqs(); // one queue scan for the whole payload
+  const holder = lineHolder().lieutenant;
   return Object.assign({}, board, {
     boot: BOOT_ID,
     kinds: effectiveKinds(),
+    // The RESOLVED holder, never the raw stored id: a board that never had a
+    // conversation still names whoever a `target: "line"` post would reach.
+    line: holder ? holder.id : null,
     cards: board.cards.map((c) => publicCard(c, user, msgSeqs)),
     // chatOwed/chatQueued mirror status.owed/owedState:'queued' for a
     // lieutenant's MAIN chat — both queue-derived, same rules as cards.
@@ -2970,13 +3009,29 @@ const server = http.createServer(async (req, res) => {
         // A free-form lieutenant message in its main chat is a level-1 notification.
         const ev = mkEvent({ text: text.slice(0, 200), actor: msg.author, level: body.level, kind: body.kind }, { level: 1 });
         board.events.push(ev);
+        // …and it is the last voice the captain heard, so the line follows it:
+        // an answer over the line keeps the line, and a lieutenant that speaks
+        // up on its own becomes who he reaches when he answers with the screen
+        // off. Card threads never move it — they are a board surface, read with
+        // eyes on a picker, not the channel with no picker.
+        if (lt) lineFollow(lt.id);
       }
       saveBoard(); broadcast(); // owed clears on ACK, not here — the reply alone leaves it derived from the queue
       return sendJson(res, 200, { ok: true });
     }
     if (route === 'POST /api/feedback') { // captain -> lieutenant (chat.say, captain side)
       const body = JSON.parse(await readBody(req) || '{}');
-      const target = String(body.target || '');
+      let target = String(body.target || '');
+      // `target: "line"` = whoever is on the line. The voice shortcut posts
+      // this and names nobody; the server resolves it to a real main chat, so
+      // everything below is an ordinary captain message — it just knows it
+      // came over the line.
+      const overLine = target === 'line';
+      if (overLine) {
+        const holder = lineHolder().lieutenant;
+        if (!holder) return sendJson(res, 404, { error: 'nobody is on the line — this board has no lieutenant' });
+        target = 'lieutenant:' + holder.id;
+      }
       const thread = threadFor(target);
       if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text || '');
@@ -2997,7 +3052,10 @@ const server = http.createServer(async (req, res) => {
       // of delivery arrives in a later phase. A dead session loses nothing. The
       // attachments (with absolute paths) ride the queue item so drain surfaces
       // the file paths to the agent.
-      const item = queuePush(lt.id, { kind: 'message', target, text, attachments });
+      // `via: 'line'` rides the ENVELOPE, never the captain's words: a lieutenant
+      // that reads channel information back to him got it glued into the text.
+      const item = queuePush(lt.id, Object.assign({ kind: 'message', target, text, attachments },
+        overLine ? { via: 'line' } : null));
       const msg = { author: 'user', text, ts: now() };
       if (attachments.length) msg.attachments = attachments;
       thread.push(msg);
@@ -3007,7 +3065,34 @@ const server = http.createServer(async (req, res) => {
         if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
       }
       saveBoard(); broadcast(); // a captain message flips derived owed via broadcast
-      return sendJson(res, 200, { ok: true, seq: item.seq });
+      return sendJson(res, 200, { ok: true, seq: item.seq, target, via: overLine ? 'line' : undefined });
+    }
+
+    // ----- the line -----
+    if (route === 'GET /api/line') { // line.who
+      const h = lineHolder();
+      if (!h.lieutenant) return sendJson(res, 200, { lieutenant: null, name: null, source: h.source });
+      return sendJson(res, 200, { lieutenant: h.lieutenant.id, name: h.lieutenant.name, source: h.source });
+    }
+    if (route === 'POST /api/line') { // line.pass — a DELIVERY, not a quiet flag flip
+      const body = JSON.parse(await readBody(req) || '{}');
+      const id = String(body.lieutenant || '').trim();
+      const lt = findLieutenant(id);
+      if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + (id || '(none)') });
+      const note = String(body.note || '').trim().slice(0, 2000);
+      // Who is handing it over: explicit actor, else the CALLER resolved from
+      // its tmux session (like say/drain/ack), else the captain.
+      const sess = body.session ? String(body.session) : '';
+      const caller = sess ? board.lieutenants.find((l) => l.ref && l.ref.session === sess) : null;
+      const from = String(body.actor || (caller && caller.name) || 'user').trim().slice(0, 60);
+      board.line = lt.id;
+      // The receiver finds out because it was TOLD — same durable queue as
+      // everything else, so it wakes and greets him in its own voice.
+      const item = queuePush(lt.id, { kind: 'line-passed', from, text: note });
+      board.events.push(mkEvent({ text: 'the line passed to ' + lt.name + (note ? ': ' + note : ''),
+        actor: from, kind: 'line' }, {}));
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, lieutenant: lt.id, name: lt.name, seq: item.seq });
     }
 
     // ----- read state (persisted server-side, per user) -----

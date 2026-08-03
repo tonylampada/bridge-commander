@@ -98,7 +98,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 let cmd = positional.shift();
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
-if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact') && positional.length) cmd = cmd + ' ' + positional.shift();
+if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line') && positional.length) cmd = cmd + ' ' + positional.shift();
 // Three-word verb: `card artifact add|rm`.
 if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
@@ -864,6 +864,30 @@ async function cmdSay() {
   console.log('said -> ' + target);
 }
 
+// ---------- the line ----------
+// The captain's voice channel: one holder at a time, remembered by the SERVER
+// (his phone is not the only thing that talks to the board, so no local state
+// may decide this). It follows whoever last spoke to him in a main chat; on a
+// board that never had a conversation the founding lieutenant holds it.
+async function cmdLine() {
+  const r = await request('GET', '/api/line');
+  if (opts.json) return console.log(JSON.stringify(r));
+  if (!r.lieutenant) return console.log('nobody is on the line — this board has no lieutenant.');
+  console.log('on the line: ' + r.name + ' (' + r.lieutenant + ')'
+    + (r.source === 'default' ? '  [default — nobody has spoken to the captain yet]' : ''));
+}
+
+async function cmdLinePass() {
+  const id = positional[0];
+  if (!id) die('usage: bc-axi line pass <lieutenant-id> --note "<what he wants from them>"');
+  const body = { lieutenant: id, note: opts.note || '' };
+  const sess = currentTmuxSession();
+  if (sess) body.session = sess;
+  if (opts.actor) body.actor = opts.actor;
+  const r = await request('POST', '/api/line', body);
+  console.log('the line is with ' + r.name + ' (' + r.lieutenant + ') — they were woken with the note.');
+}
+
 async function cmdDrain() {
   // feed.drain — at-least-once: the server serves everything past each
   // lieutenant's committed ack cursor and drain never advances it. After
@@ -896,9 +920,21 @@ async function cmdDrain() {
     if (it.kind === 'message' && cm) {
       head = 'captain message on ' + cardBit(cm[1]);
       hint = 'reply on the thread: bc-axi say ' + it.target + ' --text-file <f|->';
+    } else if (it.kind === 'message' && it.via === 'line') {
+      // The channel is in the ENVELOPE — his text above is untouched, so a
+      // reply read back to him never contains our plumbing.
+      head = 'captain message (over the line)';
+      hint = 'he is listening with the SCREEN OFF — this will be heard, not read: answer in a couple of '
+        + 'spoken sentences, no links or diffs unless he asked. Reply: bc-axi say '
+        + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
     } else if (it.kind === 'message') {
       head = 'captain message (your main chat)';
       hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
+    } else if (it.kind === 'line-passed') {
+      head = 'YOU ARE ON THE LINE — passed by ' + (it.from || 'user');
+      hint = 'greet him in ONE spoken line before anything else (bc-axi say lieutenant:' + it.lieutenant
+        + ' --text-file -) — the screen is off and the voice changing is how he knows the handoff took; '
+        + 'then do what the note asks';
     } else if (it.kind === 'start-order') {
       head = 'START ORDER — ' + cardBit(it.card);
       hint = 'the captain ordered this card started: read it (bc-axi card show ' + it.card + '), brief the worker, then: bc-axi card start ' + it.card + ' [--brief-file <f>]';
@@ -1030,6 +1066,7 @@ const commands = {
   show: cmdShow, // alias for card show
   event: cmdEvent, notify: cmdNotify,
   say: cmdSay, drain: cmdDrain, ack: cmdAck,
+  line: cmdLine, 'line pass': cmdLinePass,
 };
 if (!commands[cmd]) {
   die('bc-axi — agent CLI for the bridge-commander board.\n' +
@@ -1136,6 +1173,14 @@ if (!commands[cmd]) {
     '                                         the owning lieutenant (lieutenant-main says also notify).\n' +
     '                                         A card-thread say by anyone but the owner (e.g. its\n' +
     '                                         worker) also queues a worker-said item waking the owner\n' +
+    '\nthe line (the captain\'s voice channel — one holder, server-side):\n' +
+    '  line [--json]                          who holds it now. The captain\'s voice shortcut posts\n' +
+    '                                         {"target":"line"} and names nobody; the line follows\n' +
+    '                                         whoever last spoke to him in a main chat, and falls\n' +
+    '                                         back to the founding lieutenant on a silent board\n' +
+    '  line pass <lieutenant-id> --note "<what he wants from them>"\n' +
+    '                                         hand it over: the receiver is WOKEN with the note\n' +
+    '                                         (a real delivery), and greets him in one line first\n' +
     '\ndelivery (at-least-once):\n' +
     '  drain [--lieutenant <id>] [--json]     print pending QueueItems with card context and a\n' +
     '    next-action hint per item (--json: raw JSON lines). Captain messages, start/rework\n' +

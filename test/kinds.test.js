@@ -30,6 +30,7 @@ const BUILTINS = {
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
   'needs-captain': { emoji: '🚨', level: 1 },
+  line: { emoji: '📞', level: 2 },
 };
 
 test('kinds set/get roundtrip: built-ins under registered, idempotent replace, validation', async () => {

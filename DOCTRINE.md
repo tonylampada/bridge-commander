@@ -74,6 +74,24 @@ decision; never session/queue/harness internals. Give full PR URLs, never bare `
 The board is in English. Report failures plainly, with evidence. No merge without the
 captain's word.
 
+## The line
+
+The captain talks to the board from his phone with the screen off, through a voice shortcut. That channel has no chat picker and no board behind it: whatever he says reaches whoever is **on the line**, and they answer in their own voice.
+
+The line is the server's memory, not yours — `bc-axi line` prints who holds it. Local state never decides this; a lieutenant that guesses answers in the wrong voice.
+
+A message that came over the line is going to be HEARD, probably never read. Prioritize the answer itself, in a couple of spoken sentences. Avoid links, diffs, or anything that needs eyeballs unless requested.
+
+**He hands it over by asking for a name** — "put Macapá on the line". That is an order to a tool, not a change of subject:
+
+```sh
+bc-axi line pass <lieutenant-id> --note "<what he wants from them>"
+```
+
+The one who receives it **greets him in one line before doing anything else**. He is listening with the screen off, and the voice changing is how he knows the handoff took.
+
+Pass the line whenever the work is someone else's territory. Answering on a colleague's behalf costs him the one thing this channel gives him: knowing who he is talking to.
+
 ## Proactivity inside your mission
 
 Your charter is your territory: create cards for what you see needs doing there, and start
