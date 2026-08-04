@@ -104,9 +104,9 @@ function liveCtx() {
 }
 // The notification volume, and who else it governs. Every tone here reads it
 // through `master` at the moment it plays, so a tone needs no telling — but the
-// keep-alive pad (keepalive.js, pad.js) is one long sound in ANOTHER context's
-// graph, playing while the slider is being dragged, and it has to follow the
-// slider live rather than at the next note.
+// keep-alive music (keepalive.js, music.js) is one long sound in ANOTHER
+// context's graph, playing while the slider is being dragged, and it has to
+// follow the slider live rather than at the next pass of the loop.
 const watchers = [];
 export const getVolume = () => volume;
 export function onVolume(fn) { watchers.push(fn); }

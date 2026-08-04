@@ -215,8 +215,8 @@ function closeSink() {
    WHAT plays: hold() takes an optional source — a function handed this module's
    context and its sink, returning something with a stop() — because "the
    session must never go quiet" is this module's business and "what quiet sounds
-   like" is not. The board hands it a slow ambient pad (ui/js/pad.js) when the
-   captain asks for one. With no source, it is the tone below, which is what
+   like" is not. The board hands it a slow ambient loop (ui/js/music.js) when
+   the captain asks for one. With no source, it is the tone below, which is what
    this module holds to on its own. */
 const HUM_HZ = 30;         // under the low end of any phone speaker
 const HUM_GAIN = 0.0008;   // and far under its floor in level: samples, no sound

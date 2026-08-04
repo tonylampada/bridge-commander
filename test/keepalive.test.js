@@ -18,10 +18,12 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
 let keepAliveState, corpseWatchRuns, enabledFromStorage;
-let keepAliveVoice, keepAliveSound, KEEPALIVE_VOICES, PAD_POOL, DRONE, nextNote, padStep, padGain, PAD_PEAK;
+let keepAliveVoice, keepAliveSound, KEEPALIVE_VOICES;
+let MUSIC_TRACKS, MUSIC_DIR, LEAD, musicTrack, trackUrl, musicGain, MUSIC_PEAK;
 test.before(async () => {
   ({ keepAliveState, corpseWatchRuns, enabledFromStorage,
-     keepAliveVoice, keepAliveSound, KEEPALIVE_VOICES, PAD_POOL, DRONE, nextNote, padStep, padGain, PAD_PEAK } =
+     keepAliveVoice, keepAliveSound, KEEPALIVE_VOICES,
+     MUSIC_TRACKS, MUSIC_DIR, LEAD, musicTrack, trackUrl, musicGain, MUSIC_PEAK } =
     await import(pathToFileURL(path.join(__dirname, '..', 'ui', 'js', 'keepalive.js')).href));
 });
 
@@ -84,66 +86,74 @@ test('the toggle survives a reload, and anything unrecognised is off', () => {
 test('silent is the default, and stays the default for anything unrecognised', () => {
   assert.equal(keepAliveVoice(null), 'silent', 'never chosen');
   assert.equal(keepAliveVoice(''), 'silent');
-  assert.equal(keepAliveVoice('music'), 'music', 'the one opt-in there is');
-  assert.equal(keepAliveVoice('mozart'), 'silent', 'and anything else falls back to what was tested');
-  assert.deepEqual(KEEPALIVE_VOICES.map((v) => v.key), ['silent', 'music'], 'silent first: it is the default');
+  assert.equal(keepAliveVoice('mozart'), 'silent', 'anything unrecognised falls back to what was tested');
+  for (const t of MUSIC_TRACKS) assert.equal(keepAliveVoice(t.key), t.key, `${t.key} is choosable`);
+  assert.equal(KEEPALIVE_VOICES[0].key, 'silent', 'silent first: it is the default');
+  assert.deepEqual(KEEPALIVE_VOICES.map((v) => v.key), ['silent', ...MUSIC_TRACKS.map((t) => t.key)],
+    'and the tracks after it, in the order they are declared');
+});
+
+// The pad was persisted as `music` while it was the only one. His phone still
+// has that string in localStorage, and it does not mean silence.
+test('the pad’s old setting comes back as a track, not as silence', () => {
+  assert.equal(keepAliveVoice('music'), MUSIC_TRACKS[0].key,
+    'he asked for music and the pad is gone: the nearest thing is a track');
+  assert.notEqual(keepAliveVoice('music'), 'silent', 'never the setting he chose against');
 });
 
 test('what is coming out of the element, in one answer', () => {
   const q = (enabled, speaking, voice) => keepAliveSound({ enabled, speaking, voice });
-  assert.equal(q(false, false, 'music'), 'none', 'off is off, whatever was chosen');
-  assert.equal(q(true, true, 'music'), 'none', 'and speech is speech: the pad is OUT, not ducked');
+  const one = MUSIC_TRACKS[0].key;
+  assert.equal(q(false, false, one), 'none', 'off is off, whatever was chosen');
+  assert.equal(q(true, true, one), 'none', 'and speech is speech: the music is OUT, not ducked');
   assert.equal(q(true, true, 'silent'), 'none');
   assert.equal(q(true, false, 'silent'), 'tone', 'holding, inaudibly — the mode that was tested');
-  assert.equal(q(true, false, 'music'), 'music', 'holding, audibly, because he asked for it');
+  assert.equal(q(true, false, one), 'music', 'holding, audibly, because he asked for it');
+  assert.equal(q(true, false, 'music'), 'music', 'including through the pad’s old setting');
   assert.equal(q(true, false, undefined), 'tone', 'a page that never chose gets the tone');
 });
 
-// ── the pad ───────────────────────────────────────────────────────────────
-// A pad that drifts and never arrives: five notes that cannot make a leading
-// tone or a dominant between them, over a fifth with no third in it.
-test('the notes are the A minor pentatonic, and the drone under them has no third', () => {
-  assert.deepEqual(PAD_POOL, [220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33, 659.25],
-    'A3 C4 D4 E4 G4 A4 C5 D5 E5 — the same tempered values sound.js tunes its bells to');
-  assert.equal(DRONE.length, 2, 'a bare fifth');
-  assert.ok(Math.abs(DRONE[1][0] / DRONE[0][0] - 1.5) < 0.005, 'A2 and the fifth above it, and nothing else');
-  assert.ok(DRONE.every(([, amp]) => amp > 0 && amp < 0.3), 'both under the notes they sit beneath');
-});
-
-test('a note drifts from the one before it: never a repeat, never a leap', () => {
-  for (let i = 0; i < PAD_POOL.length; i++) {
-    const prev = PAD_POOL[i];
-    for (const r of [0, 0.1, 0.5, 0.9, 0.999]) {
-      const next = nextNote(prev, r);
-      assert.ok(PAD_POOL.includes(next), `${next} is in the pool`);
-      assert.notEqual(next, prev, 'the same note twice running is a pulse, not a drift');
-      assert.ok(Math.abs(PAD_POOL.indexOf(next) - i) <= 3, 'and it stays near where it was');
-    }
+// ── the tracks ────────────────────────────────────────────────────────────
+// Five files, shipped. The manifest is the contract between this module and
+// music.js: a key to persist, a file to fetch, and the LOOP's length — which
+// is not the file's length, because each file carries a second of its own loop
+// at either end so the loop points never sit on the codec's ragged edges.
+test('five tracks, each with a key, a file and a loop length', () => {
+  assert.equal(MUSIC_TRACKS.length, 5, 'five: enough to choose from, few enough to carry');
+  const keys = new Set();
+  for (const t of MUSIC_TRACKS) {
+    assert.match(t.key, /^[a-z][a-z0-9-]*$/, `${t.key} survives being a localStorage value`);
+    assert.ok(!keys.has(t.key), `${t.key} appears once`);
+    keys.add(t.key);
+    assert.ok(t.label && t.label.length <= 12, 'a label that fits in a select on a phone');
+    assert.match(t.file, /^[\w-]+\.m4a$/, `${t.file} is one of ours, not a path`);
+    assert.ok(t.seconds >= 15, `${t.key} loops every ${t.seconds}s — shorter than that is a jingle`);
+    assert.ok(t.seconds <= 120, 'and longer is page weight he pays for once per pass');
   }
+  assert.ok(!keys.has('silent'), 'no track can shadow the default');
+  assert.ok(!keys.has('music'), 'nor the pad’s old setting, which has to keep meaning "the first one"');
 });
 
-test('the first note can be any of them, and r is only ever asked for [0,1)', () => {
-  assert.equal(nextNote(null, 0), PAD_POOL[0], 'nothing to drift from yet: the whole pool');
-  assert.equal(nextNote(null, 0.999), PAD_POOL[PAD_POOL.length - 1]);
-  assert.ok(PAD_POOL.includes(nextNote(null, 1)), 'a stray 1 lands on a note, not off the end');
-  assert.ok(PAD_POOL.includes(nextNote(220, -1)), 'and so does a stray negative');
-});
-
-// Uneven on purpose: a fixed gap is a bar-line, and a bar-line is a pulse.
-test('the spacing is slow and never the same twice', () => {
-  assert.equal(padStep(0), 4.5, 'the closest two notes ever come');
-  assert.equal(padStep(1), 8.5, 'and the furthest');
-  assert.ok(padStep(0.5) > 6 && padStep(0.5) < 7);
-  assert.ok(padStep(0) > 2 * 1.5, 'nothing here is fast enough to be counted along with');
+test('a voice names a track, and everything else names none', () => {
+  for (const t of MUSIC_TRACKS) {
+    assert.equal(musicTrack(t.key), t, `${t.key}`);
+    assert.equal(trackUrl(t), MUSIC_DIR + t.file, 'served from the one directory they live in');
+  }
+  assert.equal(musicTrack('silent'), null, 'silent is not a track: it is speech.js’s own tone');
+  assert.equal(musicTrack(null), null);
+  assert.equal(musicTrack('mozart'), null);
+  assert.equal(musicTrack('music'), MUSIC_TRACKS[0], 'the pad’s old setting still names one');
+  assert.ok(MUSIC_DIR.startsWith('/'), 'absolute: bridge3d.html is not served from the same depth');
+  assert.ok(LEAD > 0 && LEAD <= 2, 'a second of lead either side is context for the codec, not content');
 });
 
 // It is background for two hours, not a notification heard once.
-test('the pad follows the notification volume, and a muted board is silent', () => {
-  assert.equal(padGain(0), 0, 'muted is muted — he did not ask for music, he asked for quiet');
-  assert.equal(padGain(1), PAD_PEAK);
-  assert.equal(padGain(0.5), PAD_PEAK / 2, 'and tracks the slider in between');
-  assert.equal(padGain(2), PAD_PEAK, 'nothing above the top of the slider');
-  assert.equal(padGain(-1), 0);
-  assert.equal(padGain(undefined), 0, 'and no volume at all is not full volume');
-  assert.ok(PAD_PEAK < 0.3 / 3, 'well under a notification tone: this one has to be tolerable for hours');
+test('the music follows the notification volume, and a muted board is silent', () => {
+  assert.equal(musicGain(0), 0, 'muted is muted — he did not ask for music, he asked for quiet');
+  assert.equal(musicGain(1), MUSIC_PEAK);
+  assert.equal(musicGain(0.5), MUSIC_PEAK / 2, 'and tracks the slider in between');
+  assert.equal(musicGain(2), MUSIC_PEAK, 'nothing above the top of the slider');
+  assert.equal(musicGain(-1), 0);
+  assert.equal(musicGain(undefined), 0, 'and no volume at all is not full volume');
+  assert.ok(MUSIC_PEAK < 1, 'the tracks are levelled to -20 LUFS; this only ever brings them down');
 });

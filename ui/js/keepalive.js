@@ -56,14 +56,49 @@ export function enabledFromStorage(raw) {
    what was tested on the captain's phone, and it is what a desktop tab should
    get if it ever turns this on at all. The music is the opt-in, for the hours
    the phone spends in a pocket: "não precisa ser zumbido, a gente pode colocar
-   uma musiquinha agradável". */
+   uma musiquinha agradável".
+
+   Five of them, and they are files rather than a synthesiser (ui/js/pad.js,
+   which they replaced) because decoding once and looping is what a phone's
+   audio hardware is built for, and generating notes forever is not. All five
+   are CC0 — no attribution, shippable in a public repo — and where each came
+   from is recorded in ui/audio/README.md, beside them.
+
+   `seconds` is the LOOP's length, which is two seconds shorter than the file:
+   each one carries a second of its own loop before it and a second after it,
+   so the loop points never sit on the codec's ragged edges. music.js's
+   loopPoints() is the other half of that, and dev/build-loops.sh is why. */
+export const MUSIC_DIR = '/ui/audio/';
+export const LEAD = 1;              // seconds of the loop either side of it
+export const MUSIC_TRACKS = [
+  //                                         a held chord, warm, close
+  { key: 'warm',   label: 'warm',   file: 'warm.m4a',   seconds: 18 },
+  //                                         a slow synth drift, wide
+  { key: 'drift',  label: 'drift',  file: 'drift.m4a',  seconds: 75 },
+  //                                         airy, high, almost weather
+  { key: 'void',   label: 'void',   file: 'void.m4a',   seconds: 75 },
+  //                                         a room with stone in it
+  { key: 'cavern', label: 'cavern', file: 'cavern.m4a', seconds: 75 },
+  //                                         the low one; nearly all bass
+  { key: 'deep',   label: 'deep',   file: 'deep.m4a',   seconds: 70 },
+];
 export const KEEPALIVE_VOICES = [
   { key: 'silent', label: 'silent' },
-  { key: 'music', label: 'music' },
+  ...MUSIC_TRACKS.map(({ key, label }) => ({ key, label })),
 ];
+
+// `music` is what the pad was persisted as while there was only one of them.
+// It comes back as the first track rather than as silence: he asked for music
+// and the pad is gone, so the nearest thing to what he chose is a track, not
+// the thing he chose against.
 export function keepAliveVoice(raw) {
-  return raw === 'music' ? 'music' : 'silent';
+  if (raw === 'music') return MUSIC_TRACKS[0].key;
+  return MUSIC_TRACKS.some((t) => t.key === raw) ? raw : 'silent';
 }
+export function musicTrack(voice) {
+  return MUSIC_TRACKS.find((t) => t.key === keepAliveVoice(voice)) || null;
+}
+export function trackUrl(track) { return MUSIC_DIR + track.file; }
 
 // The whole question in one place: what should be coming out of the element
 // right now. 'none' is the element not playing on the keep-alive's account at
@@ -71,49 +106,23 @@ export function keepAliveVoice(raw) {
 // out of the way, which are different reasons for the same silence.
 export function keepAliveSound({ enabled, speaking, voice } = {}) {
   if (keepAliveState({ enabled, speaking }) !== 'hold') return 'none';
-  return keepAliveVoice(voice) === 'music' ? 'music' : 'tone';
+  return keepAliveVoice(voice) === 'silent' ? 'tone' : 'music';
 }
 
-/* ── the pad ──────────────────────────────────────────────────────────────
-   A pad, not a loop: it drifts and never arrives. The notes are the A minor
-   pentatonic — A C D E G, the five that cannot make a leading tone or a
-   dominant between them, so nothing in here ever asks to resolve — taken from
-   the same tempered values sound.js tunes its bells to, across A3 to E5. Under
-   them sits a bare fifth on A2, held for as long as the pad is: a third would
-   commit the music to major or minor, and it never does.
-
-   The drone is not decoration. It is what makes the stream continuously
-   non-silent between one note and the next, and continuously non-silent is the
-   whole reason any of this exists. */
-export const PAD_POOL = [220, 261.63, 293.66, 329.63, 392, 440, 523.25, 587.33, 659.25];
-//                        A3     C4      D4      E4     G4   A4    C5      D5      E5
-export const DRONE = [[110, 0.22], [164.81, 0.11]];   // A2 and the fifth above it, E3
-
-// The next note drifts from the one before: somewhere within three steps of it,
-// and never itself, so the line wanders instead of leaping about. `r` is a
-// number in [0, 1) — the caller's randomness, kept out here so the choice is a
-// pure function that can be asked the same question twice.
-export function nextNote(prev, r) {
-  const i = PAD_POOL.indexOf(prev);
-  const pool = i < 0 ? PAD_POOL : PAD_POOL.filter((_, j) => j !== i && Math.abs(j - i) <= 3);
-  const at = Math.floor(Math.max(0, Math.min(0.999999, r)) * pool.length);
-  return pool[at];
-}
-
-// Seconds until the next note starts. Long enough that two or three notes are
-// always sounding together over the drone, uneven enough that no bar-line ever
-// appears — a pulse is the one thing an ambient pad must not grow.
-export function padStep(r) {
-  return 4.5 + Math.max(0, Math.min(1, r)) * 4;
-}
-
-// The pad follows the notification volume, the way every tone in sound.js does.
-// It sits well under them: a notification is meant to be noticed once, and this
-// is meant to be tolerated for two hours. A master volume of zero is silence
-// here too — the captain who muted the board did not ask for music.
-export const PAD_PEAK = 0.055;
-export function padGain(volume) {
+// The music follows the notification volume, the way every tone in sound.js
+// does. It sits well under them: a notification is meant to be noticed once,
+// and this is meant to be tolerated for two hours. The tracks are all levelled
+// to the same -20 LUFS so the choice of track is a choice of character and
+// never a jump in loudness.
+//
+// A master volume of zero is silence here too — the captain who muted the board
+// did not ask for music. It is not silence in the STREAM: music.js keeps its
+// inaudible tone under the loop whatever this returns, so a muted board still
+// holds the session. Muted is a promise not to be heard, not a promise to let
+// the session go.
+export const MUSIC_PEAK = 0.2;
+export function musicGain(volume) {
   const v = Number(volume);
   if (!(v > 0)) return 0;
-  return Math.min(1, v) * PAD_PEAK;
+  return Math.min(1, v) * MUSIC_PEAK;
 }

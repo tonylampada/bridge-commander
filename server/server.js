@@ -2341,6 +2341,10 @@ if (Number.isInteger(PRWATCH_MS) && PRWATCH_MS > 0) setInterval(prWatchTick, PRW
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
+  // The keep-alive's loops. music.js fetches them as bytes and would not care
+  // what this said — but a captain auditioning one before he merges it opens
+  // the URL, and a browser plays audio/mp4 where it downloads octet-stream.
+  '.m4a': 'audio/mp4',
 };
 function serveStatic(res, rel) {
   const file = path.normalize(path.join(UI_DIR, rel));

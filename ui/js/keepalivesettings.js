@@ -8,15 +8,18 @@
 //                                 Shortcut by never letting the element go
 //                                 quiet, through the same element the speech
 //                                 leaves through (never a second one).
-//   · pad.js startPad()         — what it holds WITH, when the captain wants
-//                                 music instead of the inaudible tone.
+//   · music.js startMusic()     — what it holds WITH, when the captain wants
+//                                 one of the loops instead of the inaudible
+//                                 tone.
 //   · sound.js setCorpseWatch() — the 500ms heartbeat that catches the context
 //                                 the Shortcut leaves for dead.
 // Off by default, and off means none of them run.
 import { hold } from './speech.js';
 import { setCorpseWatch, getVolume, onVolume } from './sound.js';
-import { startPad } from './pad.js';
-import { KEEPALIVE_VOICES, corpseWatchRuns, enabledFromStorage, keepAliveVoice, padGain } from './keepalive.js';
+import { startMusic } from './music.js';
+import { KEEPALIVE_VOICES, corpseWatchRuns, enabledFromStorage, keepAliveVoice,
+         musicTrack, trackUrl, musicGain } from './keepalive.js';
+import { push as toast } from './toast.js';
 
 const KEY = 'bc-audio-keepalive';
 const VOICE_KEY = 'bc-audio-keepalive-voice';
@@ -25,15 +28,32 @@ const sel = document.getElementById('ka-voice');
 
 let on = false;
 let voice = 'silent';
-let pad = null;                 // the pad while it is playing, for the volume slider
+let playing = null;             // the loop while it is playing, for the volume slider
 
-// hold() compares sources by identity, so this is built ONCE per voice: the
+// hold() compares sources by identity, so these are built ONCE per track: the
 // gesture primer below hands the same function over on every tap, and handing
 // the same one over means nothing changes. Only a real change of voice swaps
 // what is playing. `silent` is not a source at all — it is speech.js's own
 // inaudible tone, which is what ?hum=loud makes audible.
-const music = (ctx, dest) => (pad = startPad(ctx, dest, padGain(getVolume())));
-const sourceFor = (v) => (v === 'music' ? music : null);
+const sources = new Map();
+function sourceFor(v) {
+  const track = musicTrack(v);
+  if (!track) return null;
+  let src = sources.get(track.key);
+  if (!src) {
+    src = (ctx, dest) => {
+      playing = startMusic(ctx, dest, musicGain(getVolume()), trackUrl(track), track.seconds);
+      // A track that will not load still holds the session — music.js's tone is
+      // under it and does not depend on the file — so this is not an error, it
+      // is the keep-alive being silent when he asked for it not to be. Say so
+      // rather than leave him watching a switch that looks on and sounds off.
+      playing.ready.catch(() => toast({ emoji: '🎵', text: `${track.label} could not be loaded — the keep-alive is holding silently` }));
+      return playing;
+    };
+    sources.set(track.key, src);
+  }
+  return src;
+}
 
 function apply() {
   btn.classList.toggle('on', on);
@@ -42,7 +62,7 @@ function apply() {
   sel.value = voice;
   setCorpseWatch(corpseWatchRuns(on));
   hold(on, sourceFor(voice));
-  if (!on) pad = null;
+  if (!on) playing = null;
 }
 
 function set(next, persist) {
@@ -63,9 +83,9 @@ sel.onchange = () => {
   try { voice === 'silent' ? localStorage.removeItem(VOICE_KEY) : localStorage.setItem(VOICE_KEY, voice); } catch (e) {}
   apply();                      // held already → hold() swaps the source under it
 };
-// The pad is one long sound, so it follows the slider while it is being
-// dragged instead of at the next note. A stopped pad ignores this.
-onVolume((v) => { if (pad) pad.setLevel(padGain(v)); });
+// The loop is one long sound, so it follows the slider while it is being
+// dragged instead of at the next pass. A stopped loop ignores this.
+onVolume((v) => { if (playing) playing.setLevel(musicGain(v)); });
 
 // Restoring across a reload is only half a restore: iOS wants a gesture behind
 // the element's first play(), and a page that has just loaded has none. So the

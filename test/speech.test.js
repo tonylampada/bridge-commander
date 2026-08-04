@@ -531,7 +531,7 @@ test('a refused start lets go, so the next gesture can take it', async () => {
 
 // What holds the session is the caller's to choose — "the session must never go
 // quiet" is this module's business, "what quiet sounds like" is the board's. The
-// board hands over an ambient pad when the captain wants one (ui/js/pad.js).
+// board hands over an ambient loop when the captain wants one (ui/js/music.js).
 test('the caller can say what holds the session, and swapping it never leaves a gap', async () => {
   await tick(10);
   oscs.length = 0;
