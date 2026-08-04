@@ -66,6 +66,25 @@ test('cards cannot be created in Working (Working ⇔ live worker)', async () =>
   } finally { await teardown(); }
 });
 
+test('a minted card starts on bc/<id>: branch, window and worktree all follow the id', async () => {
+  const { s, teardown } = await boot();
+  try {
+    // no id pinned — the owner mints it, and everything downstream follows it
+    const card = (await s.api('POST', '/api/cards',
+      { title: 'Tile click clears selection', owner: LT, attributes: { repo: 'proj' } })).body.card;
+    assert.strictEqual(card.id, 'ADA-1');
+
+    const r = await s.api('POST', '/api/cards/ADA-1/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    // deliberately the id and nothing else — no title slug appended (the captain
+    // reads branch names and wants them aligned with the card).
+    assert.strictEqual(r.body.worker.branch, 'bc/ADA-1');
+    assert.strictEqual(r.body.card.attributes.branch, 'bc/ADA-1');
+    assert.strictEqual(r.body.worker.ref.window, 'w-ADA-1');
+    assert.strictEqual(path.basename(r.body.worker.worktree.path), 'ADA-1');
+  } finally { await teardown(); }
+});
+
 test('card.start refusals: plan cards, missing/unregistered repo, already Working', async () => {
   const { s, teardown } = await boot();
   try {

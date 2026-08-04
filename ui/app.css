@@ -945,11 +945,13 @@ a.a-uri { color: var(--accent); }
   box-shadow: var(--shadow); animation: pop-in .15s ease-out;
 }
 #ls-color { width: 38px; height: 34px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); cursor: pointer; flex: none; }
-#ls-voice, #ls-charter {
+#ls-voice, #ls-charter, #ls-prefix {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 11px; font-size: 13px; outline: none; width: 100%; min-width: 0;
 }
-#ls-voice:focus, #ls-charter:focus { border-color: var(--accent2); }
+#ls-voice:focus, #ls-charter:focus, #ls-prefix:focus { border-color: var(--accent2); }
+/* the card-id prefix is three characters — sized to them, not to the row */
+#ls-prefix { flex: none; width: 5.5em; font-family: var(--mono); text-transform: uppercase; }
 #ls-voice { cursor: pointer; }
 #ls-charter { resize: vertical; min-height: 90px; font-family: var(--mono); font-size: 12px; }
 #ls-cancel { color: var(--dim); border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; font-size: 12.5px; }
@@ -1238,7 +1240,7 @@ a.a-uri { color: var(--accent); }
      blows up the whole layout. Force every focusable text input to 16px on
      mobile so focus never triggers a zoom (the accessible fix; the viewport
      maximum-scale is only a secondary guard). */
-  #filter, .composer textarea, #lp-input, #nc-name, #nc-body, #nc-type, #nc-owner, #lt-name, #lt-charter, #ls-charter, #ls-voice, #dt-body-input { font-size: 16px; }
+  #filter, .composer textarea, #lp-input, #nc-name, #nc-body, #nc-type, #nc-owner, #lt-name, #lt-charter, #ls-charter, #ls-voice, #ls-prefix, #dt-body-input { font-size: 16px; }
   #layout { flex-direction: column; min-height: 0; }
   /* each view fills the space above the tab bar and owns its own scroll region */
   #chat { width: 100%; flex: 1; min-height: 0; border-right: none; display: none; }

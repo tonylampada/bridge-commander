@@ -7,7 +7,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { startServerWithLieutenant, withOwner } = require('./helper');
+const { startServerWithLieutenant, LT } = require('./helper');
 
 // A minimal but valid 1x1 PNG.
 const PNG = Buffer.from(
@@ -19,7 +19,9 @@ const PNG = Buffer.from(
 // Create a card and promote a file at `filePath` (bare path or file:// uri) to
 // its artifacts; returns the stored artifact uri (normalized by the server).
 async function cardWithArtifact(s, uri, label) {
-  const cr = await s.api('POST', '/api/cards', withOwner({ title: 'Deliverable' }));
+  // no id pinned: each call mints its own (ADA-1, ADA-2, …), so a test may
+  // stand up several of these without colliding
+  const cr = await s.api('POST', '/api/cards', { owner: LT, title: 'Deliverable' });
   assert.strictEqual(cr.status, 200, JSON.stringify(cr.body));
   const id = cr.body.card.id;
   const add = await s.api('POST', '/api/cards/' + id + '/artifacts', { uri, label });

@@ -82,7 +82,7 @@
   ],
   "lieutenants": [
     {
-      "id": "monica", "name": "Monica", "color": "#7c5cff", "avatar": 12,
+      "id": "monica", "name": "Monica", "color": "#7c5cff", "avatar": 12, "prefix": "MON", "cardSeq": 14,
       "charter": "Owns auth + captain experience. Keeps the board honest, ships small PRs.",
       "created": "T-864000", "lastTurnEnd": "T-120", "turns": 342,
       "ref": { "harness": "claude", "session": "bc-lt-monica", "cwd": "/fake/ws" },
@@ -97,7 +97,7 @@
       ]
     },
     {
-      "id": "rex", "name": "Rex", "color": "#2aa876", "avatar": 33,
+      "id": "rex", "name": "Rex", "color": "#2aa876", "avatar": 33, "prefix": "REX", "cardSeq": 31,
       "charter": "CI, tests, and everything that flakes at 3am. Runs many workers at once.",
       "created": "T-700000", "lastTurnEnd": "T-90", "turns": 891,
       "ref": { "harness": "claude", "session": "bc-lt-rex", "cwd": "/fake/ws" },
@@ -107,7 +107,7 @@
       ]
     },
     {
-      "id": "ada", "name": "Ada", "color": "#d8a03c", "avatar": 7,
+      "id": "ada", "name": "Ada", "color": "#d8a03c", "avatar": 7, "prefix": "ADA", "cardSeq": 8,
       "charter": "Frontend polish. (Session died — the gnarly fixture state.)",
       "created": "T-500000", "lastTurnEnd": "T-4000", "turns": 57,
       "ref": null,
@@ -118,7 +118,7 @@
       ]
     },
     {
-      "id": "quill", "name": "Quill", "color": "#e05c78", "avatar": 21,
+      "id": "quill", "name": "Quill", "color": "#e05c78", "avatar": 21, "prefix": "QUI", "cardSeq": 5,
       "charter": "Docs, UX spikes, peer review. Slow and thorough.",
       "created": "T-600000", "lastTurnEnd": "T-39000", "turns": 210,
       "ref": { "harness": "claude", "session": "bc-lt-quill", "cwd": "/fake/ws" },

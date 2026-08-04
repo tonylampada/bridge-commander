@@ -241,7 +241,7 @@ test('cli: lieutenant create --avatar and lieutenant patch', async () => {
 
     r = await runCli(['lieutenant', 'patch', 'avi', '--avatar', '9', '--color', '#abcdef', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
-    assert.match(r.stdout, /lieutenant avi updated \(avatar=9 color=#abcdef\)/);
+    assert.match(r.stdout, /lieutenant avi updated \(avatar=9 color=#abcdef prefix=AVI\)/);
 
     r = await runCli(['lieutenant', 'patch', 'avi', '--avatar', 'none', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
@@ -261,11 +261,11 @@ test('cli: lieutenant create (charter via stdin file) and list', async () => {
     fs.writeFileSync(charterFile, 'Own the API surface.\nEscalate breaking changes.');
     let r = await runCli(['lieutenant', 'create', '--name', 'Ada', '--color', '#58b6ff', '--charter-file', charterFile, ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
-    assert.match(r.stdout, /lieutenant ada created \(#58b6ff\)/);
+    assert.match(r.stdout, /lieutenant ada created \(#58b6ff, mints ADA-n\)/);
 
     r = await runCli(['lieutenant', 'list', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
-    assert.match(r.stdout, /ada\tAda\t#58b6ff\tOwn the API surface\./);
+    assert.match(r.stdout, /ada\tAda\t#58b6ff\tADA-1\tOwn the API surface\./);
 
     r = await runCli(['lieutenant', 'list', '--json', ...args]);
     const parsed = JSON.parse(r.stdout);
@@ -340,6 +340,124 @@ test('lieutenant voice: set on create, patched, cleared back to the board voice,
     await s.api('PATCH', '/api/lieutenants/ada', { color: '#ff00ff' });
     lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'ada');
     assert.strictEqual(lt.voice, 'pt_BR-edresson-low');
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------- the card-id prefix (the head of every id this lieutenant mints) ----------
+
+test('prefix: defaulted from the name, nudged aside when taken, explicit one refused instead', async () => {
+  const s = await startServer();
+  try {
+    let r = await s.api('POST', '/api/lieutenants', { name: 'Monica' });
+    assert.strictEqual(r.body.lieutenant.prefix, 'MON'); // first three letters
+    assert.strictEqual(r.body.lieutenant.cardSeq, 0); // nothing minted yet
+
+    // accents fold, emoji and punctuation drop
+    r = await s.api('POST', '/api/lieutenants', { name: '🛰️ Wáldir' });
+    assert.strictEqual(r.body.lieutenant.prefix, 'WAL');
+    r = await s.api('POST', '/api/lieutenants', { name: '🤖', id: 'bot' });
+    assert.strictEqual(r.body.lieutenant.prefix, 'LT'); // no letters at all
+
+    // a DEFAULT that is taken is nudged aside — two lieutenants never share one
+    r = await s.api('POST', '/api/lieutenants', { name: 'Monique' });
+    assert.strictEqual(r.body.lieutenant.prefix, 'MO2');
+
+    // an EXPLICIT one that is taken is refused, so the pick is never silently changed
+    r = await s.api('POST', '/api/lieutenants', { name: 'Montana', prefix: 'mon' });
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /prefix MON already belongs to Monica \(monica\)/);
+
+    // an explicit free one is honored, uppercased
+    r = await s.api('POST', '/api/lieutenants', { name: 'Montana', prefix: 'mtn' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.prefix, 'MTN');
+
+    // shape is validated
+    for (const bad of ['', '1st', '-', 'waytoolongprefix']) {
+      r = await s.api('POST', '/api/lieutenants', { name: 'Bad ' + bad, id: 'bad-' + bad, prefix: bad });
+      if (bad === '') { assert.strictEqual(r.status, 200); continue; } // "" = no pick, default applies
+      assert.strictEqual(r.status, 400, JSON.stringify(bad));
+      assert.match(r.body.error, /bad prefix/);
+    }
+  } finally {
+    await s.stop();
+  }
+});
+
+test('prefix patch: applies, refuses one another lieutenant holds, leaves minted ids alone', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
+  let s = await startServer({ dir });
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Monica', id: 'monica' });
+    await s.api('POST', '/api/lieutenants', { name: 'Waldir', id: 'waldir' });
+    const first = (await s.api('POST', '/api/cards', { title: 'Before', owner: 'monica' })).body.card;
+    assert.strictEqual(first.id, 'MON-1');
+
+    // taken → 409, and NOTHING else in the same patch applies
+    let r = await s.api('PATCH', '/api/lieutenants/monica', { prefix: 'WAL', color: '#123456' });
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /already belongs to Waldir/);
+    let lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'monica');
+    assert.strictEqual(lt.prefix, 'MON');
+    assert.notStrictEqual(lt.color, '#123456');
+
+    // its own prefix is not "taken" by itself
+    r = await s.api('PATCH', '/api/lieutenants/monica', { prefix: 'MON' });
+    assert.strictEqual(r.status, 200);
+
+    // a free one applies; the counter carries on, and the card already minted keeps its id
+    r = await s.api('PATCH', '/api/lieutenants/monica', { prefix: 'mnc' });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.lieutenant.prefix, 'MNC');
+    const next = (await s.api('POST', '/api/cards', { title: 'After', owner: 'monica' })).body.card;
+    assert.strictEqual(next.id, 'MNC-2');
+    assert.strictEqual((await s.api('GET', '/api/cards/MON-1')).body.id, 'MON-1');
+
+    // survives a restart
+    await s.stop();
+    s = await startServer({ dir });
+    lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'monica');
+    assert.strictEqual(lt.prefix, 'MNC');
+    assert.strictEqual(lt.cardSeq, 2);
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('prefix + counter are backfilled for lieutenants that predate them, without touching their cards', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
+  const s = await startServer({
+    dir,
+    seed(d) {
+      fs.mkdirSync(path.join(d, '.bridge-commander'), { recursive: true });
+      fs.writeFileSync(path.join(d, '.bridge-commander', 'board.json'), JSON.stringify({
+        lieutenants: [
+          { id: 'monica', name: 'Monica', color: '#7c5cff', charter: '', chat: [] },
+          { id: 'monique', name: 'Monique', color: '#2aa876', charter: '', chat: [] },
+        ],
+        cards: [{ id: 'pane-interactive', title: 'Old slug card', type: 'implementation',
+          owner: 'monica', column: 'backlog', labels: [], attributes: {}, body: '',
+          events: [], thread: [] }],
+      }));
+    },
+  });
+  try {
+    const lts = (await s.api('GET', '/api/lieutenants')).body.lieutenants;
+    assert.strictEqual(lts.find((l) => l.id === 'monica').prefix, 'MON');
+    assert.strictEqual(lts.find((l) => l.id === 'monique').prefix, 'MO2'); // no two share one
+    assert.strictEqual(lts.find((l) => l.id === 'monica').cardSeq, 0);
+
+    // the slug card is untouched and still answers to its id everywhere
+    const card = (await s.api('GET', '/api/cards/pane-interactive')).body;
+    assert.strictEqual(card.id, 'pane-interactive');
+    assert.strictEqual((await s.api('PATCH', '/api/cards/pane-interactive', { title: 'Renamed' })).status, 200);
+
+    // and the counter numbers what comes NEXT, blind to the slugs already there
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'New', owner: 'monica' })).body.card.id, 'MON-1');
   } finally {
     await s.stop();
     fs.rmSync(dir, { recursive: true, force: true });

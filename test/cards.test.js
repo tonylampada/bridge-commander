@@ -8,13 +8,18 @@ const { startServer, startServerWithLieutenant, withOwner, runCli, LT } = requir
 
 function archivePath(s) { return path.join(s.dir, '.bridge-commander', 'archive.jsonl'); }
 
-test('card create: defaults, slug ids, created event, owner + type validated', async () => {
+// Card creates in this test pin no id: they go through the mint, so the ids
+// asserted here are the owner's (Ada → ADA-n). Everywhere else in the suite
+// withOwner() pins a slug id — see the helper.
+const mint = (card) => Object.assign({ owner: LT }, card);
+
+test('card create: defaults, minted ids, created event, owner + type validated', async () => {
   const s = await startServerWithLieutenant();
   try {
-    let r = await s.api('POST', '/api/cards', withOwner({ title: 'Fix The Widget!' }));
+    let r = await s.api('POST', '/api/cards', mint({ title: 'Fix The Widget!' }));
     assert.strictEqual(r.status, 200);
     const card = r.body.card;
-    assert.strictEqual(card.id, 'fix-the-widget'); // slugged from title
+    assert.strictEqual(card.id, 'ADA-1'); // minted by the owner (Ada), not slugged from the title
     assert.strictEqual(card.column, 'backlog'); // born in Backlog
     assert.strictEqual(card.type, 'implementation'); // default type
     assert.strictEqual(card.owner, LT);
@@ -30,33 +35,33 @@ test('card create: defaults, slug ids, created event, owner + type validated', a
 
     // the three first-class types
     for (const type of ['plan', 'investigation']) {
-      r = await s.api('POST', '/api/cards', withOwner({ title: 'A ' + type, type }));
+      r = await s.api('POST', '/api/cards', mint({ title: 'A ' + type, type }));
       assert.strictEqual(r.body.card.type, type);
     }
-    r = await s.api('POST', '/api/cards', withOwner({ title: 'Bad type', type: 'chore' }));
-    assert.strictEqual(r.status, 400);
+    r = await s.api('POST', '/api/cards', mint({ title: 'Bad type', type: 'chore' }));
+    assert.strictEqual(r.status, 400); // refused: the counter did not advance on it
 
-    // same title again gets a -2 suffix
-    r = await s.api('POST', '/api/cards', withOwner({ title: 'Fix The Widget!' }));
-    assert.strictEqual(r.body.card.id, 'fix-the-widget-2');
+    // the counter counts cards BORN, not creates attempted
+    r = await s.api('POST', '/api/cards', mint({ title: 'Fix The Widget!' })); // same title, new id
+    assert.strictEqual(r.body.card.id, 'ADA-4');
 
     // explicit duplicate id conflicts
-    r = await s.api('POST', '/api/cards', withOwner({ title: 'Another', id: 'fix-the-widget' }));
+    r = await s.api('POST', '/api/cards', mint({ title: 'Another', id: 'ADA-1' }));
     assert.strictEqual(r.status, 409);
 
     // title required; unknown column rejected
-    r = await s.api('POST', '/api/cards', withOwner({ title: '   ' }));
+    r = await s.api('POST', '/api/cards', mint({ title: '   ' }));
     assert.strictEqual(r.status, 400);
-    r = await s.api('POST', '/api/cards', withOwner({ title: 'x', column: 'nope' }));
+    r = await s.api('POST', '/api/cards', mint({ title: 'x', column: 'nope' }));
     assert.strictEqual(r.status, 400);
 
     // born in Backlog ONLY: review and peer are no birthplace either
     for (const column of ['review', 'peer']) {
-      r = await s.api('POST', '/api/cards', withOwner({ title: 'x', column }));
+      r = await s.api('POST', '/api/cards', mint({ title: 'x', column }));
       assert.strictEqual(r.status, 400);
       assert.match(r.body.error, /born in Backlog only/);
     }
-    r = await s.api('POST', '/api/cards', withOwner({ title: 'Explicit backlog', column: 'backlog' }));
+    r = await s.api('POST', '/api/cards', mint({ title: 'Explicit backlog', column: 'backlog' }));
     assert.strictEqual(r.status, 200);
   } finally {
     await s.stop();
@@ -300,6 +305,90 @@ test('captain-created card queues card-created to the owner; lieutenant-created 
     assert.strictEqual(created[0].lieutenant, LT);
     assert.strictEqual(created[0].card, 'by-captain');
     assert.strictEqual(created[0].text, 'By captain');
+  } finally {
+    await s.stop();
+  }
+});
+
+// ---------- minting: the counter, and the duplicate that is an error ----------
+
+test('the counter is the lieutenant\'s: per-owner, persisted, never reissued', async () => {
+  const dir = fs.mkdtempSync(require('node:os').tmpdir() + path.sep + 'bc-mint-');
+  let s = await startServer({ dir });
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Monica', id: 'monica' });
+    await s.api('POST', '/api/lieutenants', { name: 'Waldir', id: 'waldir' });
+
+    // each lieutenant counts its own
+    const ids = [];
+    for (const owner of ['monica', 'waldir', 'monica']) {
+      ids.push((await s.api('POST', '/api/cards', { title: 'Card for ' + owner, owner })).body.card.id);
+    }
+    assert.deepStrictEqual(ids, ['MON-1', 'WAL-1', 'MON-2']);
+
+    // archiving MON-2 does NOT hand its number back
+    await s.api('POST', '/api/cards/MON-2/archive', { reason: 'killed' });
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'Next', owner: 'monica' })).body.card.id, 'MON-3');
+
+    // the counter is board state, so a restart continues where it left off
+    await s.stop();
+    s = await startServer({ dir });
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'After restart', owner: 'monica' })).body.card.id, 'MON-4');
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a duplicate id is REFUSED, visibly — no suffix, no retry, no next free number', async () => {
+  const s = await startServer();
+  try {
+    await s.api('POST', '/api/lieutenants', { name: 'Monica', id: 'monica' });
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'First', owner: 'monica' })).body.card.id, 'MON-1');
+
+    // The shape of the collision this can produce in the wild: a card already
+    // sitting on the id its owner would mint next (a prefix outliving the
+    // lieutenant that used it, a hand-written id that guessed the same string).
+    // No machinery prevents it — what must never happen is a collision created
+    // SILENTLY, so the create is refused and the captain settles it.
+    await s.api('POST', '/api/cards', { title: 'Squatter', owner: 'monica', id: 'MON-2' });
+    let r = await s.api('POST', '/api/cards', { title: 'Colliding', owner: 'monica' });
+    assert.strictEqual(r.status, 409);
+    assert.match(r.body.error, /card exists: MON-2/);
+    assert.match(r.body.error, /explicit free id/, 'the message says what a human can do about it');
+    assert.match(r.body.error, /unused prefix/);
+
+    // refused means refused: nothing was created, and the counter did not move
+    assert.strictEqual((await s.api('GET', '/api/cards/MON-2')).body.title, 'Squatter');
+    const lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'monica');
+    assert.strictEqual(lt.cardSeq, 1, 'a refused create leaves the counter alone');
+
+    // and it stays refused — a retry is the same answer, never a quiet next number
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'Colliding' , owner: 'monica' })).status, 409);
+
+    // the two ways out, both the human\'s: an explicit free id...
+    r = await s.api('POST', '/api/cards', { title: 'Colliding', owner: 'monica', id: 'MON-9' });
+    assert.strictEqual(r.status, 200);
+    // ...or a free prefix, which unwedges the mint for good
+    await s.api('PATCH', '/api/lieutenants/monica', { prefix: 'MNC' });
+    assert.strictEqual((await s.api('POST', '/api/cards', { title: 'Free again', owner: 'monica' })).body.card.id, 'MNC-2');
+  } finally {
+    await s.stop();
+  }
+});
+
+test('CLI: card create refuses a duplicate with the server\'s sentence, not an HTTP envelope', async () => {
+  const s = await startServerWithLieutenant();
+  const args = ['--workspace', s.dir, '--port', String(s.port)];
+  try {
+    let r = await runCli(['card', 'create', '--title', 'First', '--owner', LT, ...args]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /created ADA-1 in backlog/);
+
+    r = await runCli(['card', 'create', '--title', 'Again', '--owner', LT, '--id', 'ADA-1', ...args]);
+    assert.strictEqual(r.code, 1, 'a refused create is a failure exit, never a quiet success');
+    assert.match(r.stderr, /card create refused: card exists: ADA-1/);
+    assert.doesNotMatch(r.stderr, /HTTP 409/);
   } finally {
     await s.stop();
   }

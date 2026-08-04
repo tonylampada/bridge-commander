@@ -63,7 +63,7 @@ test('cli accepts global flags in any position relative to the verb', async () =
     r = await runCli(['--workspace', s.dir, 'card', '--port', String(s.port), 'create',
       '--title', 'Interleaved', '--owner', LT]);
     assert.strictEqual(r.code, 0, r.stderr);
-    assert.match(r.stdout, /created interleaved in backlog/);
+    assert.match(r.stdout, /created ADA-1 in backlog/); // the owner minted the id
 
     // flags AFTER the verb still work (unchanged behavior)
     r = await runCli(['board', '--workspace', s.dir, '--port', String(s.port)]);
@@ -112,17 +112,17 @@ test('cli card create / board / say / drain / ack round-trip against a test serv
     let r = await runCli(['card', 'create', '--title', 'CLI card', '--owner', LT, '--type', 'investigation',
       '--attr', 'repo=alpha', '--label', 'cli', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
-    assert.match(r.stdout, /created cli-card in backlog/);
+    assert.match(r.stdout, /created ADA-1 in backlog/); // minted by the owner
 
     r = await runCli(['board', ...args]);
-    assert.match(r.stdout, /cli-card {2}CLI card/);
+    assert.match(r.stdout, /ADA-1 {2}CLI card/);
     assert.match(r.stdout, /investigation \| ada/);
 
-    r = await runCli(['card', 'show', 'cli-card', ...args]);
+    r = await runCli(['card', 'show', 'ADA-1', ...args]);
     assert.match(r.stdout, /type=investigation, owner=ada/);
 
     // captain feedback, then CLI drain offers it and ack commits the cursor
-    await s.api('POST', '/api/feedback', { target: 'card:cli-card', text: 'question from the board' });
+    await s.api('POST', '/api/feedback', { target: 'card:ADA-1', text: 'question from the board' });
     r = await runCli(['drain', '--lieutenant', LT, '--json', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     const items = r.stdout.trim().split('\n').map((l) => JSON.parse(l));
@@ -134,9 +134,9 @@ test('cli card create / board / say / drain / ack round-trip against a test serv
     r = await runCli(['drain', '--lieutenant', LT, ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /1 pending item\(s\):/);
-    assert.match(r.stdout, /captain message on card cli-card "CLI card"/);
+    assert.match(r.stdout, /captain message on card ADA-1 "CLI card"/);
     assert.match(r.stdout, /question from the board/);
-    assert.match(r.stdout, /bc-axi say card:cli-card/);
+    assert.match(r.stdout, /bc-axi say card:ADA-1/);
     assert.match(r.stdout, new RegExp('bc-axi ack ' + items[0].seq));
 
     r = await runCli(['ack', String(items[0].seq), ...args]);
@@ -150,9 +150,9 @@ test('cli card create / board / say / drain / ack round-trip against a test serv
     // lieutenant reply via say (interlocutor default: the owning lieutenant)
     const sayFile = path.join(s.dir, 'reply.md');
     fs.writeFileSync(sayFile, 'on it, captain');
-    r = await runCli(['say', 'card:cli-card', '--text-file', sayFile, ...args], { TMUX: '' });
+    r = await runCli(['say', 'card:ADA-1', '--text-file', sayFile, ...args], { TMUX: '' });
     assert.strictEqual(r.code, 0, r.stderr);
-    const card = (await s.api('GET', '/api/cards/cli-card')).body;
+    const card = (await s.api('GET', '/api/cards/ADA-1')).body;
     assert.strictEqual(card.thread[1].author, 'Ada');
     assert.strictEqual(card.thread[1].text, 'on it, captain');
 
@@ -164,15 +164,15 @@ test('cli card create / board / say / drain / ack round-trip against a test serv
     assert.strictEqual(said[0].kind, 'worker-said');
     assert.strictEqual(said[0].text, 'on it, captain');
     r = await runCli(['drain', '--lieutenant', LT, ...args]);
-    assert.match(r.stdout, /worker said — card cli-card/);
-    assert.match(r.stdout, /bc-axi worker send cli-card/);
+    assert.match(r.stdout, /worker said — card ADA-1/);
+    assert.match(r.stdout, /bc-axi worker send ADA-1/);
     r = await runCli(['ack', String(said[0].seq), ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
 
     // lieutenant handoff via the CLI
-    r = await runCli(['card', 'move', 'cli-card', 'review', ...args]);
-    assert.match(r.stdout, /moved cli-card -> review/);
-    r = await runCli(['card', 'move', 'cli-card', 'peer', ...args]); // not the lieutenant's to set
+    r = await runCli(['card', 'move', 'ADA-1', 'review', ...args]);
+    assert.match(r.stdout, /moved ADA-1 -> review/);
+    r = await runCli(['card', 'move', 'ADA-1', 'peer', ...args]); // not the lieutenant's to set
     assert.strictEqual(r.code, 1);
 
     // status reads pending queue from the server

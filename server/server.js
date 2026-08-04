@@ -12,7 +12,7 @@
 // Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
 //             columns: fixed frame (backlog | working | review | peer),
-//             lieutenants: [{id, name, color, avatar?: 0-63, voice?, charter, chat: [{author,text,ts}], created,
+//             lieutenants: [{id, name, color, prefix, cardSeq, avatar?: 0-63, voice?, charter, chat: [{author,text,ts}], created,
 //                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
@@ -30,7 +30,9 @@
 //             reads:   { <user>: { notifSeq, notifSeqs[], threads: {<target>: ts} } } }
 //
 // Every card belongs to exactly one lieutenant (`owner`); card `type` is
-// plan | implementation | investigation. Chat targets are `lieutenant:<id>`
+// plan | implementation | investigation. A card id is minted by its owner as
+// <prefix>-<cardSeq>, e.g. MON-14 — cards created before that keep their
+// hand-written slug ids, and no verb tells the two apart. Chat targets are `lieutenant:<id>`
 // (a lieutenant's main chat) and `card:<id>` (a card thread, whose interlocutor
 // is the owning lieutenant).
 //
@@ -270,6 +272,7 @@ function normalizeBoard(doc) {
     // ref: a persisted HarnessRef or null (odd shapes collapse to null).
     if (lt.ref !== undefined && !isHarnessRef(lt.ref)) lt.ref = null;
   }
+  ensureMinting(b.lieutenants); // prefix + card counter (backfilled for the ones that predate them)
   // projects: the registered-repo registry; workers: the live worker-ref registry
   // (both survive restarts — board is truth). Odd shapes are dropped.
   if (!Array.isArray(b.projects)) b.projects = [];
@@ -401,6 +404,55 @@ function registerCardLabels() {
 const LT_PALETTE = ['#58b6ff', '#3ecf8e', '#e6c04a', '#c678dd', '#e2795b', '#56b6c2', '#98c379', '#e06c75'];
 function findLieutenant(id) { return board.lieutenants.find((l) => l.id === id); }
 
+// ---------- card-id minting (prefix + counter, both the LIEUTENANT's) ----------
+// A card id is <PREFIX>-<n>: the prefix names the lieutenant that created it,
+// the number is that lieutenant's own counter — incremented at creation, never
+// reissued. Nothing new lands on the card; the id is still just the id, so the
+// branch (bc/<id>), the worktree and the artifact paths follow it unchanged.
+// Cards born before this keep their hand-written slugs. There is no migration:
+// every verb takes an id, and a slug is an id.
+function validPrefix(p) {
+  const s = String(p == null ? '' : p).toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^[A-Z][A-Z0-9]{0,7}$/.test(s) ? s : null;
+}
+// Default from the display name: its first three letters. Accents fold, emoji
+// and punctuation drop (the same "never let non-ASCII reach a name" rule as
+// slugBase); a name with no letters at all falls back to LT.
+function prefixFrom(name) {
+  const letters = String(name || '').normalize('NFD').replace(/[^A-Za-z]/g, '');
+  return letters ? letters.slice(0, 3).toUpperCase() : 'LT';
+}
+// A prefix belongs to one lieutenant at a time — two lieutenants sharing one
+// would mint each other's ids and collide on every create. The default is
+// nudged aside when taken (MON → MO2); an EXPLICIT prefix is refused instead,
+// so the captain always learns his pick was unavailable.
+function uniquePrefixIn(lts, base, exceptId) {
+  const taken = (p) => lts.some((l) => l.id !== exceptId && l.prefix === p);
+  if (!taken(base)) return base;
+  for (let i = 2; ; i++) {
+    const n = String(i);
+    const cand = base.slice(0, Math.max(1, 3 - n.length)) + n;
+    if (!taken(cand)) return cand;
+  }
+}
+const BAD_PREFIX = 'bad prefix (1-8 letters/digits starting with a letter — it heads every card id this lieutenant mints)';
+function prefixOwner(p, exceptId) {
+  return board.lieutenants.find((l) => l.id !== exceptId && l.prefix === p) || null;
+}
+function prefixTakenMsg(p, owner) {
+  return 'prefix ' + p + ' already belongs to ' + owner.name + ' (' + owner.id + ') — pick another';
+}
+// Backfill on load: lieutenants registered before this feature get a prefix and
+// a counter at zero. Their existing slug cards are not touched or counted —
+// the counter numbers what this lieutenant mints from now on.
+function ensureMinting(lts) {
+  for (const lt of lts) {
+    const p = validPrefix(lt.prefix);
+    lt.prefix = p || uniquePrefixIn(lts, prefixFrom(lt.name), lt.id);
+    if (!Number.isInteger(lt.cardSeq) || lt.cardSeq < 0) lt.cardSeq = 0;
+  }
+}
+
 // ---------- the line (the captain's voice channel) ----------
 // The captain talks to the board from his phone with the screen off, through a
 // voice shortcut that has no chat picker: it posts `target: "line"` and names
@@ -440,9 +492,18 @@ function createLieutenant(body) {
   if (body.avatar !== undefined && body.avatar !== null && !validAvatar(body.avatar)) {
     return { error: 'avatar must be an integer 0-63' };
   }
+  let prefix;
+  if (body.prefix === undefined || body.prefix === null || body.prefix === '') {
+    prefix = uniquePrefixIn(board.lieutenants, prefixFrom(name), id);
+  } else {
+    prefix = validPrefix(body.prefix);
+    if (!prefix) return { error: BAD_PREFIX };
+    const clash = prefixOwner(prefix, id);
+    if (clash) return { error: prefixTakenMsg(prefix, clash), code: 409 };
+  }
   const color = validColor(body.color) || LT_PALETTE[board.lieutenants.length % LT_PALETTE.length];
   const lt = {
-    id, name: name.slice(0, 60), color,
+    id, name: name.slice(0, 60), color, prefix, cardSeq: 0,
     charter: String(body.charter || '').slice(0, 8000),
     chat: [], created: now(),
   };
@@ -1301,7 +1362,6 @@ function columnTitle(id) {
 function slugBase(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
 }
-function slug(s) { return slugBase(s) || 'card'; }
 // Lieutenant id from a display name. A name with no ASCII at all (pure emoji)
 // falls back to 'lt', made unique so a second such lieutenant can still be
 // born; a real slug collision stays a 409 in createLieutenant (same-name
@@ -1311,11 +1371,6 @@ function lieutenantIdFrom(name) {
   if (base) return base;
   if (!findLieutenant('lt')) return 'lt';
   for (let i = 2; ; i++) if (!findLieutenant('lt-' + i)) return 'lt-' + i;
-}
-function newCardId(title) {
-  const base = slug(title);
-  if (!findCard(base)) return base;
-  for (let i = 2; ; i++) if (!findCard(base + '-' + i)) return base + '-' + i;
 }
 function userReads(user) {
   const u = String(user || 'user').slice(0, 60);
@@ -1362,12 +1417,26 @@ function createCard(body, actorDefault) {
   if (!title) return { error: 'title required' };
   const owner = String(body.owner || '').trim();
   if (!owner) return { error: 'owner required (every card belongs to exactly one lieutenant)' };
-  if (!findLieutenant(owner)) return { error: 'unknown lieutenant: ' + owner };
+  const lt = findLieutenant(owner);
+  if (!lt) return { error: 'unknown lieutenant: ' + owner };
   const type = body.type ? String(body.type) : 'implementation';
   if (!CARD_TYPES.includes(type)) return { error: 'bad type (use ' + CARD_TYPES.join('|') + ')' };
-  const id = body.id ? String(body.id) : newCardId(title);
+  // No id given: the owner mints the next one from its own counter. The counter
+  // advances only when the card is actually born (below).
+  const minted = body.id ? 0 : (Number.isInteger(lt.cardSeq) ? lt.cardSeq : 0) + 1;
+  const id = body.id ? String(body.id) : lt.prefix + '-' + minted;
   if (!/^[\w][\w.:-]*$/.test(id)) return { error: 'bad card id (use [A-Za-z0-9_.:-])' };
-  if (findCard(id)) return { error: 'card exists: ' + id, code: 409 };
+  // A duplicate is an error, not a case to engineer around: no suffix, no retry,
+  // no silently picking the next free number. It can happen when a prefix outlives
+  // the lieutenant that used it (retire, recreate, counter back at 1) — rare, and
+  // the captain settles it with the lieutenant. What must never happen is a
+  // collision created SILENTLY.
+  if (findCard(id)) {
+    return { error: minted
+      ? 'card exists: ' + id + ' — ' + lt.name + ' would mint that id next (counter at ' + (minted - 1)
+        + '). Create it with an explicit free id, or give ' + lt.name + ' an unused prefix in its settings.'
+      : 'card exists: ' + id, code: 409 };
+  }
   const column = body.column ? String(body.column) : 'backlog';
   if (!board.columns.some((c) => c.id === column)) return { error: 'unknown column: ' + column };
   // Working is a fact, not a label: a card is in Working iff a live worker
@@ -1386,6 +1455,7 @@ function createCard(body, actorDefault) {
     events: [], thread: [],
   };
   card.events.push(mkEvent({ text: 'created in ' + columnTitle(column), actor }, { kind: 'created' }));
+  if (minted) lt.cardSeq = minted; // never reissued, never rolled back
   board.cards.push(card);
   registerCardLabels();
   if (actor === 'user') queuePush(owner, { kind: 'card-created', card: id, text: card.title, column });
@@ -2677,6 +2747,17 @@ const server = http.createServer(async (req, res) => {
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
       if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
       const body = JSON.parse(await readBody(req) || '{}');
+      // Prefix first, and refused before anything else applies: it is the only
+      // field a peer can veto (two lieutenants may not share one), so a rejected
+      // pick must not leave half a patch behind. Past cards keep the id they
+      // were minted with — a prefix change is about what comes next.
+      if (body.prefix !== undefined) {
+        const p = validPrefix(body.prefix);
+        if (!p) return sendJson(res, 400, { error: BAD_PREFIX });
+        const clash = prefixOwner(p, lt.id);
+        if (clash) return sendJson(res, 409, { error: prefixTakenMsg(p, clash) });
+        lt.prefix = p;
+      }
       if (body.ref !== undefined) {
         if (body.ref !== null && !isHarnessRef(body.ref)) {
           return sendJson(res, 400, { error: 'bad ref (want {harness, session, cwd, resumeId?} or null)' });

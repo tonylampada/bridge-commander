@@ -165,6 +165,7 @@ function openLtMenu(ltId, x, y) {
 const lsEl = document.getElementById('ls-overlay');
 const lsWho = document.getElementById('ls-who');
 const lsColor = document.getElementById('ls-color');
+const lsPrefix = document.getElementById('ls-prefix');
 const lsVoice = document.getElementById('ls-voice');
 const lsGrid = document.getElementById('ls-grid');
 const lsCharter = document.getElementById('ls-charter');
@@ -176,6 +177,7 @@ function openLtSettings(ltId) {
   lsLtId = ltId;
   lsWho.textContent = l.name || ltId;
   lsColor.value = lieutenantColor(ltId);
+  lsPrefix.value = l.prefix || '';
   lsCharter.value = l.charter || '';
   lsGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
   wireAvatarGrid(lsGrid, (idx) => patch({ avatar: idx }));
@@ -209,6 +211,19 @@ function fillVoices(chosen) {
   });
 }
 lsColor.onchange = () => patch({ color: lsColor.value });
+// The card-id prefix commits on change like the other picks. The server refuses
+// one another lieutenant already holds — say so and put the field back, so the
+// box never shows a prefix this lieutenant does not have.
+lsPrefix.onchange = async () => {
+  const l = lieutenant(lsLtId);
+  const want = lsPrefix.value.trim().toUpperCase();
+  if (!l || want === (l.prefix || '')) return;
+  if (!(await patch({ prefix: want }))) lsPrefix.value = l.prefix || '';
+  else lsPrefix.value = want;
+};
+// Enter in a one-line field would submit the form (= save the charter and
+// close). Here it means "commit this prefix" and nothing else.
+lsPrefix.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); lsPrefix.blur(); } };
 lsVoice.onchange = () => patch({ voice: lsVoice.value });
 document.getElementById('ls-cancel').onclick = closeLtSettings;
 lsEl.onclick = (e) => { if (e.target === lsEl) closeLtSettings(); };

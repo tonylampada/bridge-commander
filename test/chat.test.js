@@ -111,7 +111,7 @@ test('card-thread say by a non-owner queues a worker-said item waking the owner;
   try {
     // grace owns the card and HAS a session ref (so she can be identified as the owner)
     await s.api('POST', '/api/lieutenants', { name: 'Grace', id: 'grace', ref: { harness: 'fake', session: 'bc-grace', cwd: '/tmp' } });
-    await s.api('POST', '/api/cards', { title: 'Watched', owner: 'grace' });
+    await s.api('POST', '/api/cards', { title: 'Watched', owner: 'grace', id: 'watched' });
 
     // an unidentified caller (a worker's tmux session resolves to no lieutenant)
     // → durable worker-said item for the owner, on top of the thread message

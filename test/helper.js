@@ -104,8 +104,17 @@ async function startServerWithLieutenant(opts = {}) {
   return s;
 }
 
-// Card create body with the default owner filled in.
-function withOwner(card) { return Object.assign({ owner: LT }, card); }
+// Card create body with the default owner filled in, and — unless the caller
+// pins one — a hand-written SLUG id from the title, the way ids were written
+// before lieutenants minted them. So the bulk of the suite keeps exercising
+// every verb against a slug id, which is exactly the guarantee the boards
+// carrying 60-odd of them need. Minting (<PREFIX>-<n>) is asserted directly,
+// without this helper, in cards.test.js.
+function withOwner(card) {
+  const id = card.id || String(card.title || '').toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
+  return Object.assign({ owner: LT, id }, card);
+}
 
 // Run bc-axi and capture output.
 function runCli(args, env = {}) {
