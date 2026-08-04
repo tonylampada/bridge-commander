@@ -140,6 +140,23 @@ validating:
     {{run.output}}
 
     Read the diff yourself as well — the run is evidence, not a verdict.
+
+    Then answer both of these in writing, before you decide anything. Neither
+    is optional, and "the tests pass" is not an answer to either.
+
+    1. FALSIFY THE TESTS. Revert the change itself, keep the new test files,
+       and run them. A test that passes without the fix protects nothing. If
+       any still pass, that is a finding — say "the test does not fail without
+       the fix" and name the test. If the change added no test files, say so
+       explicitly: "nothing to falsify — no tests were added", and weigh that.
+       Restore the tree before you go on.
+
+    2. NAME WHAT WAS REMOVED. What behaviour does this change take away — a
+       capability, a code path, a case that used to work? Answer with the
+       behaviour, or with "nothing was removed". Trading a capability away is
+       a product decision, not an implementation detail: it reaches a human or
+       it does not happen.
+
     Then decide, and be willing to say no:
 
     - Something real is wrong → write what is wrong and how to reproduce it
@@ -149,12 +166,16 @@ validating:
 
       That text goes VERBATIM into the implementer's next round. It is the only
       thing they will have to go on, so write it for someone who cannot ask you
-      a question.
+      a question. A test that passed without the fix belongs in that file, named
+      — so does a behaviour the change removed that the task did not ask for.
+      Both are "something real is wrong".
 
     - It is good → push the branch and open the PR yourself. YOU author the
       description: invoke the `nobloat-pr-description` skill (type
       `/nobloat-pr-description`) — motivation first, prepare the reviewer, no
-      mechanics lecture, the diff already shows the how. Then report:
+      mechanics lecture, the diff already shows the how. If the change removed
+      a behaviour and you judged that right, say which one in the description —
+      the reviewer is the human it has to reach. Then report:
 
           {{done}} --outcome "<one line> <full PR URL>"
 
