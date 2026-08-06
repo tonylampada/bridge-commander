@@ -22,6 +22,7 @@ const SELF_DIR = path.dirname(fs.realpathSync(process.argv[1]));
 const SERVER_JS = process.env.BC_SERVER_JS || path.join(SELF_DIR, '..', 'server', 'server.js');
 const { STATE_DIR_NAME, LEGACY_STATE_DIR_NAME, migrateStateDir, resolveStateDir, migrateHomeStateDir, isWorkspace } =
   require(path.join(SELF_DIR, '..', 'server', 'statedir.js'));
+const gitrev = require(path.join(SELF_DIR, '..', 'server', 'gitrev.js'));
 const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
@@ -188,6 +189,26 @@ function request(method, urlPath, body, timeoutMs) {
 }
 async function serverUp() {
   try { return await request('GET', '/api/status', null, 1500); } catch (e) { return null; }
+}
+
+// ---------- code drift ----------
+// A server keeps serving the code it booted with, so a merge into its checkout
+// leaves it a version behind while every call still succeeds. The server hands
+// us the commit it started from; HEAD right now is a couple of file reads under
+// .git (no git binary, no subprocess) against the checkout the SERVER named.
+// One line, only when they provably differ — silence when they match and
+// silence when either side is unknown.
+//
+// This lives on `status` and the usage screen only. No card operation reads it,
+// nothing here can fail a call, and a down server is simply not asked.
+function driftLineFor(st) {
+  const code = st && st.code;
+  if (!code || !code.root) return null;
+  try { return gitrev.driftLine(code, gitrev.headCommit(code.root)); } catch (e) { return null; }
+}
+async function driftNote() {
+  const st = await serverUp();
+  return st ? driftLineFor(st) : null;
 }
 function readInput(fileArg) {
   const src = fileArg && fileArg !== '-' ? fileArg : 0; // fd 0 = stdin
@@ -1056,8 +1077,12 @@ async function cmdStatus() {
   }
   const st = await serverUp();
   if (!st) { console.log('server: down (workspace ' + WORKSPACE + ', port ' + PORT + ')'); process.exit(1); }
+  const code = st.code || {};
+  const codeTag = code.short ? code.short + (code.dirty ? '+dirty' : '') : 'unknown';
   console.log('server: up  workspace=' + st.workspace + '  cards=' + st.cards + '  lieutenants=' + st.lieutenants +
-    '  pending-queue=' + st.queue_pending + '  url=http://localhost:' + PORT + '/');
+    '  pending-queue=' + st.queue_pending + '  code=' + codeTag + '  url=http://localhost:' + PORT + '/');
+  const drift = driftLineFor(st);
+  if (drift) console.log('⚠ ' + drift);
 }
 
 // ---------- config ----------
@@ -1103,7 +1128,7 @@ const commands = {
   line: cmdLine, 'line pass': cmdLinePass,
 };
 if (!commands[cmd]) {
-  die('bc-axi — agent CLI for the bridge-commander board.\n' +
+  const usage = ('bc-axi — agent CLI for the bridge-commander board.\n' +
     'Workspace: nearest .bridge-commander/ from cwd upward, or --workspace DIR. Port: workspace config.json (default 4780), or --port N.\n' +
     'Bind host: config.json "host" (default 127.0.0.1 loopback), or --host H on init/open. Never 0.0.0.0 — there is no app auth.\n' +
     '\nserver & workspace:\n' +
@@ -1114,7 +1139,10 @@ if (!commands[cmd]) {
     '                                         scaffolds AGENTS.md + captain.md + learnings/. Idempotent\n' +
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +
     '                                         Bootstraps .bridge-commander/ in cwd on first run.\n' +
-    '  status                                 up/down, cards, lieutenants, pending queue items\n' +
+    '  status                                 up/down, cards, lieutenants, pending queue items, and the\n' +
+    '                                         commit the server BOOTED from (code=). When the checkout has\n' +
+    '                                         moved past it, one line names both commits and the restart —\n' +
+    '                                         silence means the running server IS the code on disk\n' +
     '  stop                                   stop the workspace server\n' +
     '\nlieutenant:\n' +
     '  lieutenant create --name N [--id id] [--color #rrggbb] [--avatar N] [--prefix ABC] [--charter-file f|-] [--spawn [--harness h]]\n' +
@@ -1243,5 +1271,10 @@ if (!commands[cmd]) {
     '\nconfig:\n' +
     '  config show | config voices "a,b"      TTS voice filter for the UI\n' +
     '\nText/body/charter always via --text-file/--body-file/--charter-file or stdin ("-"), never shell-interpolated.');
+  // The last line of the help screen is the one still on screen when an agent
+  // stops reading: if the running server is behind its checkout, it says so
+  // here. A down server, an unknown commit, or a match all print nothing extra.
+  driftNote().then((n) => die(usage + (n ? '\n\n⚠ ' + n : '')), () => die(usage));
+} else {
+  commands[cmd]().catch((e) => die(e.message));
 }
-commands[cmd]().catch((e) => die(e.message));

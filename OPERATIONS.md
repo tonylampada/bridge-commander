@@ -26,6 +26,18 @@ The board runs from a checkout on disk; a merged PR is not live until that check
 - Restart the server only if `server/` or `harness/` changed.
 - UI-only changes need just a browser refresh — no restart.
 
+## Is the server running the code on disk?
+
+The server reads its commit once, at boot, and never again — so after a merge it keeps serving
+the old code while every call still succeeds. You do not have to remember: `bc-axi status`
+prints `code=<short>` (`+dirty` when the tree was dirty at boot), and both `bc-axi status` and
+the bare usage screen add one line the moment the checkout has moved past it, naming both
+commits and the restart. Silence means the running server IS the code on disk. `code=unknown`
+means git could not be read — not drift.
+
+This is a report and never a gate: no operation is refused because of drift, and nothing
+restarts the server for you.
+
 ## Updating the tool
 
 Which update path applies depends on how the skill dir was installed — check for `.git`:

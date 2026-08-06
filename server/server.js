@@ -64,6 +64,7 @@ const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
+const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { execFile } = require('child_process');
 
 // ---------- args ----------
@@ -200,6 +201,14 @@ const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
 const BIND_HOST = opts.host || configHost() || '127.0.0.1';
 // Turn-end hooks (workspace-level and per-worker-spawn) POST here.
 const TURNEND_URL = 'http://127.0.0.1:' + PORT + '/api/turn-end';
+
+// The commit this process is RUNNING, decided once here at boot and never
+// re-read: a merge into the checkout below moves the files, not this record,
+// and /api/status hands the difference to the CLI to announce. Boot is the only
+// place a git subprocess is allowed — no request path ever pays for it.
+// BC_CODE_ROOT is a test-only seam (tests point it at a fabricated checkout).
+const CODE_ROOT = process.env.BC_CODE_ROOT || path.join(__dirname, '..');
+const CODE = gitrev.bootRecord(CODE_ROOT);
 
 // ---------- pidfile: single instance per workspace ----------
 function pidAlive(pid) { try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; } }
@@ -2488,6 +2497,7 @@ const server = http.createServer(async (req, res) => {
         queue_seq: qseq, queue_pending: pending,
         projects: board.projects.length, workers: board.workers.length,
         pid: process.pid,
+        code: CODE, // {root, commit, short, dirty} as of BOOT — the CLI compares it to HEAD now
         sysload: sysload.stats(), // the monitoring refcount probe: {subscribers, sampling}
       });
     }
