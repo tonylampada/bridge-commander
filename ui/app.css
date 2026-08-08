@@ -637,6 +637,20 @@ body.resizing { user-select: none; cursor: col-resize; }
 .pb-ref-k { flex: none; font-family: var(--mono); color: var(--accent); }
 .pb-ref-d { color: var(--faint); min-width: 0; overflow-wrap: anywhere; }
 
+/* projects: one block per registered project — name and live-card count on the
+   head line, the path under it, then the git facts as key/value rows */
+#pj-list { display: flex; flex-direction: column; gap: 12px; }
+.pj-row { display: flex; flex-direction: column; gap: 2px; }
+.pj-head { display: flex; gap: 8px; align-items: baseline; }
+.pj-name { flex: 1; min-width: 0; color: var(--text); font-size: 13px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pj-n { flex: none; color: var(--faint); font-size: 10.5px; font-family: var(--mono); }
+.pj-path { margin-bottom: 2px; }
+.pj-fact { display: flex; gap: 6px; align-items: baseline; font-size: 11px; line-height: 1.35; }
+.pj-k { flex: none; width: 46px; color: var(--faint); }
+.pj-v { min-width: 0; color: var(--text); font-family: var(--mono); overflow-wrap: anywhere; }
+.pj-warn .pj-v { color: var(--danger); }
+
 #lm-list { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
 .lm-row { display: flex; gap: 6px; align-items: center; }
 .lm-row input[type=color], #lm-color { width: 26px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: none; cursor: pointer; flex: none; }

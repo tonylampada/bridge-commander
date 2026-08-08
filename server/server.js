@@ -65,7 +65,7 @@ const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAY
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
 function parseArgs(argv) {
@@ -1761,6 +1761,30 @@ async function addProject(body) {
   return { project };
 }
 
+// What a registered clone says about itself: where it pushes, and the branch a
+// fresh worktree starts detached from. Both are read from the checkout, never
+// from the registry — `source` records what the clone was made from once and
+// then goes stale, while these two follow the repo.
+//
+// A missing `.git` short-circuits: without it there is nothing to read, and
+// `git -C` would happily answer for whatever repo the path happens to sit
+// inside. Nothing here throws — a read that fails is a null field, so a row the
+// server cannot describe still renders with what it has.
+function projectGit(dir) {
+  const out = { remote: null, branch: null, missing: !dir || !fs.existsSync(dir) };
+  if (out.missing || !fs.existsSync(path.join(dir, '.git'))) return out;
+  const read = (args) => {
+    try {
+      return execFileSync('git', ['-C', dir].concat(args),
+        { encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'] }).trim() || null;
+    } catch (e) { return null; }
+  };
+  out.remote = read(['remote', 'get-url', 'origin']);
+  const head = read(['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
+  out.branch = head ? head.replace(/^origin\//, '') : null;
+  return out;
+}
+
 // ---------- workers (F5: card.start, worker.signal, worker done) ----------
 // A worker lives as a tmux WINDOW inside its owning lieutenant's session
 // (papercut #8): ref = { session: <lieutenant session>, window: 'w-<card-id>' }.
@@ -3358,7 +3382,23 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- projects (F6) -----
-    if (route === 'GET /api/projects') return sendJson(res, 200, { projects: board.projects });
+    // The registry as it is stored, plus what a reader needs to trust a row.
+    // `cards` is board data (the live cards whose `repo` names this project), so
+    // it is always there and costs nothing. `remote` and `branch` are two git
+    // reads off the clone — only ?git=1 pays for them, so the CLI and every
+    // other caller of this route are unchanged.
+    // Ordered by live-card count then name: the registry grows monotonically and
+    // most of it is idle, so the ones actually in use lead.
+    if (route === 'GET /api/projects') {
+      const git = /^(1|true)$/.test(url.searchParams.get('git') || '');
+      const projects = board.projects.map((p) => {
+        const out = Object.assign({}, p,
+          { cards: board.cards.filter((c) => c.attributes && c.attributes.repo === p.name).length });
+        return git ? Object.assign(out, projectGit(p.path)) : out;
+      });
+      projects.sort((a, b) => (b.cards - a.cards) || String(a.name).localeCompare(String(b.name)));
+      return sendJson(res, 200, { projects });
+    }
     if (route === 'POST /api/projects') {
       const r = await addProject(JSON.parse(await readBody(req) || '{}'));
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });

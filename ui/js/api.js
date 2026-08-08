@@ -89,6 +89,10 @@ export const api = {
   // the playbooks a card can point at — read off disk server-side, so a
   // playbook added a second ago is in the next answer. Never cached here.
   playbooks: () => j('GET', '/api/playbooks'),
+  // the registered projects, already ordered by live-card count. `git` asks the
+  // server for the two reads off each clone (remote, default branch) — the
+  // projects tab wants them, nothing else does, and nothing else pays for them.
+  projects: (git) => j('GET', '/api/projects' + (git ? '?git=1' : '')),
   // slash commands the current chat target's harness answers (composer autocomplete)
   commands: (target) => j('GET', '/api/commands?target=' + encodeURIComponent(target)),
 };

@@ -20,6 +20,7 @@ import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
 import { renderPlaybooks } from './pbmanager.js';
+import { renderProjects } from './projmanager.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 
@@ -106,7 +107,7 @@ document.getElementById('workspace-open').onclick = () => {
 // the source afresh on the way in), the render loop repaints it without. A new
 // section is a <section data-sec>, a <button data-tab> and one entry here; the
 // switching below never learns its name.
-const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks };
+const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks, projects: renderProjects };
 let wsTab = 'labels';
 function setWsTab(tab) {
   wsTab = tab;

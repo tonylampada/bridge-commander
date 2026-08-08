@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServerWithLieutenant, runCli } = require('./helper');
+const { startServerWithLieutenant, withOwner, runCli } = require('./helper');
 
 function makeRepo(root, name) {
   const repo = path.join(root, name);
@@ -89,6 +89,76 @@ test('project add via CLI clones and registers', async () => {
       '--name', 'stale', '--workspace', wsDir, '--port', String(s.port)]);
     assert.strictEqual(stale.code, 1);
     assert.match(stale.stderr, /unknown flag --mode/);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ---------- what the projects tab reads ----------
+// The registry alone does not say whether a project is worth looking at, nor
+// whether a start off it will work. `cards` is board data and always there;
+// remote and default branch are read off the clone and only for a caller that
+// asks, because every other caller of this route wants neither.
+test('GET /api/projects: live-card count always, git facts only with ?git=1, ordered by use', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-projects-'));
+  const repo = makeRepo(root, 'alpha');
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const s = await startServerWithLieutenant({ dir: wsDir });
+  try {
+    for (const name of ['alpha', 'beta', 'gamma']) {
+      assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name })).status, 200);
+    }
+    // gamma: two live cards. alpha: one live and one archived — the archived one
+    // does not count. beta: none.
+    await s.api('POST', '/api/cards', withOwner({ title: 'g one', attributes: { repo: 'gamma' } }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'g two', attributes: { repo: 'gamma' } }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'a one', attributes: { repo: 'alpha' } }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'a gone', attributes: { repo: 'alpha' } }));
+    assert.strictEqual((await s.api('POST', '/api/cards/a-gone/archive', { actor: 'agent' })).status, 200);
+
+    let list = (await s.api('GET', '/api/projects')).body.projects;
+    assert.deepStrictEqual(list.map((p) => [p.name, p.cards]),
+      [['gamma', 2], ['alpha', 1], ['beta', 0]], 'card count descending, then name');
+    assert.ok(list.every((p) => p.remote === undefined && p.branch === undefined),
+      'no git read for a caller that did not ask');
+
+    list = (await s.api('GET', '/api/projects?git=1')).body.projects;
+    const gamma = list.find((p) => p.name === 'gamma');
+    assert.strictEqual(gamma.remote, repo, 'a real checkout says where it pushes');
+    assert.strictEqual(gamma.branch, 'main', 'and the branch a worktree starts detached from');
+    assert.strictEqual(gamma.missing, false);
+    assert.strictEqual(gamma.cards, 2, 'the count is there either way');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A path that is gone, or is a directory that was never a checkout, is exactly
+// when the row matters — so it renders with what there is, and the request is
+// still a 200.
+test('GET /api/projects?git=1: an unreadable clone is null fields, never an error', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-projects-'));
+  const repo = makeRepo(root, 'app');
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const s = await startServerWithLieutenant({ dir: wsDir });
+  try {
+    for (const name of ['ghost', 'bare']) {
+      assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name })).status, 200);
+    }
+    fs.rmSync(path.join(wsDir, 'projects', 'ghost'), { recursive: true, force: true });
+    fs.rmSync(path.join(wsDir, 'projects', 'bare', '.git'), { recursive: true, force: true });
+
+    const r = await s.api('GET', '/api/projects?git=1');
+    assert.strictEqual(r.status, 200);
+    const by = Object.fromEntries(r.body.projects.map((p) => [p.name, p]));
+    assert.deepStrictEqual([by.ghost.remote, by.ghost.branch], [null, null], 'nothing on disk to read');
+    assert.strictEqual(by.ghost.missing, true, 'and the row says the path is gone');
+    assert.deepStrictEqual([by.bare.remote, by.bare.branch], [null, null], 'a directory is not a checkout');
+    assert.strictEqual(by.bare.missing, false, 'the path is there — it is just not a repo');
   } finally {
     await s.stop();
     fs.rmSync(root, { recursive: true, force: true });

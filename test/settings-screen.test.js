@@ -75,13 +75,15 @@ test('the heading row carries a tab per section', () => {
   const screen = element('settings-screen');
   const tabs = element('ss-tabs');
   const tabNames = [...tabs.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepStrictEqual(tabNames, ['labels', 'playbooks'], 'a button per section');
+  assert.deepStrictEqual(tabNames, ['labels', 'playbooks', 'projects'], 'a button per section');
   const secNames = [...screen.matchAll(/data-sec="([^"]+)"/g)].map((m) => m[1]);
   assert.deepStrictEqual(secNames, tabNames, 'every tab names a section of the screen');
-  // both sections live inside the screen, and labels is the one that starts up
-  assert.ok(screen.includes('id="ss-labels"') && screen.includes('id="ss-playbooks"'));
+  // every section lives inside the screen, and labels is the one that starts up
+  assert.ok(screen.includes('id="ss-labels"') && screen.includes('id="ss-playbooks"')
+    && screen.includes('id="ss-projects"'));
   assert.match(element('ss-labels'), /class="ss-sec on"/, 'labels is the section shown at rest');
   assert.match(element('ss-playbooks'), /class="ss-sec"/);
+  assert.match(element('ss-projects'), /class="ss-sec"/);
   // the active tab is marked the way the ▦☰🧊 switcher marks its mode: .on
   const css = fs.readFileSync(ui('app.css'), 'utf8');
   assert.match(css, /#view-seg button\.on, #ss-tabs button\.on/, 'the tabs reuse the switcher rule');
@@ -104,9 +106,9 @@ function loadSetWsTab() {
   };
   const painted = [];
   const stub = (name) => (reload) => painted.push([name, reload]);
-  const make = new Function('document', 'renderLabelManager', 'renderPlaybooks',
+  const make = new Function('document', 'renderLabelManager', 'renderPlaybooks', 'renderProjects',
     mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
-  const api = make(document, stub('labels'), stub('playbooks'));
+  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'));
   return { secs, tabs, painted, ...api };
 }
 
@@ -268,4 +270,21 @@ test('the playbooks section holds the reference panel, and does not restate its 
   const pb = fs.readFileSync(ui('js', 'pbmanager.js'), 'utf8');
   assert.match(pb, /r\.reference/, 'the section renders what /api/playbooks sent');
   assert.ok(!/CARD_ID|keep_worktree/.test(pb), 'and holds no second copy of the list');
+});
+
+// The third section, added the way the second one said a third would be: markup,
+// a tab, one WS_RENDER entry, and a module of its own. Showing only — the
+// registry is written from a terminal, never from here.
+test('projects are a section of the workspace screen, painted by their own module', () => {
+  const sec = element('ss-projects');
+  assert.match(sec, /class="ss-title">projects</);
+  assert.ok(sec.includes('id="pj-list"'), 'with the list the section renders into');
+  assert.match(mainSrc, /import \{ renderProjects \} from '\.\/projmanager\.js'/);
+  assert.match(mainSrc, /const WS_RENDER = \{[^}]*projects: renderProjects/, 'one WS_RENDER entry');
+
+  const pj = fs.readFileSync(ui('js', 'projmanager.js'), 'utf8');
+  assert.match(pj, /api\.projects\(true\)/, 'the tab is what asks for the git reads');
+  assert.ok(!/api\.addProject|POST|DELETE/.test(pj), 'and the section only ever shows');
+  const apiSrc = fs.readFileSync(ui('js', 'api.js'), 'utf8');
+  assert.match(apiSrc, /projects: \(git\) => j\('GET', '\/api\/projects' \+ \(git \? '\?git=1' : ''\)\)/);
 });

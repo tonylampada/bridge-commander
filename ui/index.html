@@ -171,6 +171,7 @@
         <span id="ss-tabs" role="group" aria-label="workspace section">
           <button type="button" data-tab="labels" class="on">labels</button>
           <button type="button" data-tab="playbooks">playbooks</button>
+          <button type="button" data-tab="projects">projects</button>
         </span>
       </div>
       <section class="ss-sec on" id="ss-labels" data-sec="labels">
@@ -193,6 +194,13 @@
              Visible without a click, and scrolling on its own so it never
              pushes the list off a phone screen. -->
         <div id="pb-ref"></div>
+      </section>
+      <!-- projects: the registry a card's `repo` attribute has to name. Showing
+           only — registering one clones a repo and removing one deletes a
+           checkout that may hold uncommitted work, so both stay at a terminal. -->
+      <section class="ss-sec" id="ss-projects" data-sec="projects">
+        <div class="ss-title">projects</div>
+        <div id="pj-list"></div>
       </section>
     </div>
   </section>
