@@ -302,6 +302,27 @@ test('card-archived hooks (manual archive): board-level events with a card ref; 
   } finally { await teardown(); }
 });
 
+// The handoff usually released the worktree long before the card is archived:
+// a hook must be told N/A (the empty string), not handed a path that is gone.
+test('card-archived hooks on a handed-off card: BC_WORKTREE is empty, not a released path', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'released-env.out');
+    shHook(s.dir, 'card-archived', 'capture.sh',
+      'echo "[$BC_WORKTREE]" > ' + JSON.stringify(out));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Handed off', id: 'handed', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/handed/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/handed/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/handed/move', { column: 'review', actor: 'agent' });
+    assert.ok(!fs.existsSync(w.worktree.path), 'the handoff released it');
+
+    const r = await s.api('POST', '/api/cards/handed/archive', { reason: 'merged', actor: 'user' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    await until('card-archived hook ran', async () => fs.existsSync(out));
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), '[]');
+  } finally { await teardown(); }
+});
+
 test('card-archived hooks run BEFORE the worktree release on the merged-PR path', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-hooks-merge-'));
   const repo = makeRepo(root);

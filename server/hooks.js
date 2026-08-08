@@ -17,7 +17,7 @@
 //   BC_EVENT     the event name (worker-done | worker-died | card-archived)
 //   BC_CARD      card id
 //   BC_REPO      project repo path (the registered clone)
-//   BC_WORKTREE  absolute worker worktree path
+//   BC_WORKTREE  absolute worker worktree path (empty once it was released)
 //   BC_BRANCH    worker branch
 //
 // Per-hook timeout (default ~120s) then SIGKILL; stdout+stderr are captured

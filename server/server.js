@@ -1820,14 +1820,21 @@ const HOOK_TIMEOUT_MS = parseInt(process.env.BC_HOOK_TIMEOUT_MS, 10) > 0
 
 // Hook env context: prefer the live worker record, fall back to the card's
 // own attributes (the worker registry entry may already be gone on archive).
+//
+// A RELEASED worktree is no longer a path: the registry entry keeps naming it
+// (the recovery paths probe it to explain what happened), but a hook gets the
+// empty string that documents N/A instead of a directory that is gone — the
+// ordinary card-archived case, since the handoff released it long before a PR
+// merged.
 function hookContext(card, w) {
   const attrs = (card && card.attributes) || {};
   const project = findProject(String((w && w.project) || attrs.repo || ''));
+  const wt = (w && w.worktree && !w.worktree.released && w.worktree.path) || '';
   return {
     workspace: WORKSPACE,
     card: card.id,
     repo: project ? project.path : '',
-    worktree: (w && w.worktree && w.worktree.path) || String(attrs.worktree || ''),
+    worktree: wt || String(attrs.worktree || ''),
     branch: (w && w.branch) || String(attrs.branch || ''),
   };
 }
@@ -1909,8 +1916,14 @@ async function releaseCardWorktree(card, w, opts = {}) {
     const live = findCard(card.id); // archived in the meantime → the board stream carries it
     // the attribute is a pointer at a directory: a released one has to stop
     // pointing, or every reader downstream is sent to a path that is gone —
-    // and `already gone` is the case where the directory is provably absent
-    if (rel.released && live && live.attributes) delete live.attributes.worktree;
+    // and `already gone` is the case where the directory is provably absent.
+    // The registry entry keeps the path (worker.send and `card start --resume`
+    // name it when they refuse) but is marked released, so hooks stop being
+    // handed a $BC_WORKTREE that no longer exists.
+    if (rel.released) {
+      if (live && live.attributes) delete live.attributes.worktree;
+      if (w && w.worktree) w.worktree.released = true;
+    }
     if (!(rel.released && rel.reason === 'already gone')) { // nothing happened, nothing to say
       const text = rel.released
         ? 'worktree released: ' + wtRec.path

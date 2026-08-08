@@ -208,7 +208,9 @@ Missing dir = no-op; non-executables are skipped.
 Hooks are fire-and-forget — they never block or fail the lifecycle outcome they observe
 (per-hook timeout ~120s, `BC_HOOK_TIMEOUT_MS` overrides, then kill; output captured and
 capped). The ONE ordering guarantee: `card-archived` hooks finish (or time out) BEFORE the
-worktree release, so a hook can still reach paths inside `$BC_WORKTREE`. Each run lands on
+worktree release, so a hook can still reach paths inside `$BC_WORKTREE` — but only when there
+is one left: the handoff (`card.move` out of Working) usually released it already, and a
+released worktree is never named again, so `BC_WORKTREE` is empty for those. Each run lands on
 the timeline: `hook-ran` level 2 per success, `hook-failed` level 1 (the captain's bell) with
 filename + exit detail + trimmed output; an archived card's events land on the board stream
 with a card reference, and failures also queue to the owner.
