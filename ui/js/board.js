@@ -244,24 +244,24 @@ document.addEventListener('click', (e) => { if (!menuEl.hidden && !menuEl.contai
 const ncOverlay = document.getElementById('nc-overlay');
 const ncType = document.getElementById('nc-type');
 const ncOwner = document.getElementById('nc-owner');
-const ncBrief = document.getElementById('nc-brief');
+const ncPlaybook = document.getElementById('nc-playbook');
 let ncColumnId = ''; // the column whose "+" opened the modal — the create target
 
-// The brief dropdown: the templates in the workspace's briefs/ folder. Refetched
-// on every open — the folder is the captain's to edit, and a template added
-// between two cards has to be pickable on the second. The empty option stays
-// selectable: a card may be born briefless and get one later, but it will not
-// start until it does, which is what the hint says.
-export async function fillBriefOptions(select, selected) {
+// The playbook dropdown: the workspace's playbooks/ folder. Refetched on every
+// open — the folder is the captain's to edit, and a playbook added between two
+// cards has to be pickable on the second. The empty option stays selectable: a
+// card may be born without a playbook and get one later, but it will not start
+// until it does, which is what the hint says.
+export async function fillPlaybookOptions(select, selected) {
   select.textContent = '';
   const none = document.createElement('option');
   none.value = '';
-  none.textContent = '— brief (needed to start)';
+  none.textContent = '— playbook (needed to start)';
   select.appendChild(none);
   let ids = [];
-  try { ids = (await api.briefs()).briefs || []; } catch (e) { ids = []; }
-  // a card pointing at a template that has since been renamed away still shows
-  // its own value rather than silently reading as "no brief"
+  try { ids = (await api.playbooks()).playbooks || []; } catch (e) { ids = []; }
+  // a card pointing at a playbook that has since been renamed away still shows
+  // its own value rather than silently reading as "no playbook"
   if (selected && !ids.includes(selected)) ids = [selected, ...ids];
   for (const id of ids) {
     const o = document.createElement('option');
@@ -293,8 +293,8 @@ export function openNewCard(columnId) {
   // async: the modal opens now, the options land a tick later. `default` is
   // preselected only when it actually exists — offering an id the server would
   // reject is worse than offering none.
-  fillBriefOptions(ncBrief, '').then((ids) => {
-    if (!ncBrief.value && ids.includes('default')) ncBrief.value = 'default';
+  fillPlaybookOptions(ncPlaybook, '').then((ids) => {
+    if (!ncPlaybook.value && ids.includes('default')) ncPlaybook.value = 'default';
   });
   ncOverlay.hidden = false;
   document.getElementById('nc-name').focus();
@@ -308,11 +308,11 @@ document.getElementById('nc-modal').onsubmit = async (e) => {
   const title = document.getElementById('nc-name').value.trim();
   if (!title) return;
   const body = document.getElementById('nc-body').value;
-  // What a card starts on is the BRIEF's business (its frontmatter), so the
-  // modal picks a template and nothing else about the harness.
+  // What a card starts on is the PLAYBOOK's business (its frontmatter), so the
+  // modal picks a playbook and nothing else about the harness.
   try {
     const r = await api.createCard(
-      { title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value, brief: ncBrief.value });
+      { title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value, playbook: ncPlaybook.value });
     closeNewCard();
     openDetail(r.card.id);
   } catch (err) { alert(err.message); }

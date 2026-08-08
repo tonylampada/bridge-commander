@@ -23,9 +23,9 @@ const SERVER_JS = process.env.BC_SERVER_JS || path.join(SELF_DIR, '..', 'server'
 const { STATE_DIR_NAME, LEGACY_STATE_DIR_NAME, migrateStateDir, resolveStateDir, migrateHomeStateDir, isWorkspace } =
   require(path.join(SELF_DIR, '..', 'server', 'statedir.js'));
 const gitrev = require(path.join(SELF_DIR, '..', 'server', 'gitrev.js'));
-// The brief templates a workspace is seeded with, and the worker-duties skill
-// that goes with them — one call, because they are one thing (see brief.js).
-const { seedBriefsAndDuties } = require(path.join(SELF_DIR, '..', 'server', 'brief.js'));
+// The playbooks a workspace is seeded with, and the worker-duties skill that
+// goes with them — one call, because they are one thing (see playbooks.js).
+const { seedPlaybooksAndDuties } = require(path.join(SELF_DIR, '..', 'server', 'playbooks.js'));
 const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
@@ -54,7 +54,7 @@ const opts = {
   level: null, kind: null, actor: null, reason: null, note: null, attrs: [], labels: [], json: false,
   wakeOwner: false,
   worker: null, ttl: null, spawn: false, harness: null,
-  brief: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
+  playbook: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
   uri: null, file: null, version: null,
 };
 const positional = [];
@@ -90,7 +90,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--harness') opts.harness = argv[++i];
   else if (a === '--model') opts.model = argv[++i];
   else if (a === '--effort') opts.effort = argv[++i];
-  else if (a === '--brief') opts.brief = argv[++i];
+  else if (a === '--playbook') opts.playbook = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
   else if (a === '--wake-owner') opts.wakeOwner = true;
   else if (a === '--resume') opts.resume = true;
@@ -112,7 +112,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 let cmd = positional.shift();
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
-if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line' || cmd === 'brief') && positional.length) cmd = cmd + ' ' + positional.shift();
+if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line' || cmd === 'playbook') && positional.length) cmd = cmd + ' ' + positional.shift();
 // Three-word verb: `card artifact add|rm`.
 if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
@@ -416,10 +416,10 @@ async function cmdInit() {
       console.log('scaffolded captain.md');
     }
   }
-  // brief templates + the worker-duties skill. Templates are copies (yours to
-  // edit, never overwritten); the skill is a symlink (ours, upgraded with the tool).
-  const seeded = seedBriefsAndDuties(STATE_DIR);
-  if (seeded.briefs.length) console.log('seeded brief templates: ' + seeded.briefs.join(', '));
+  // playbooks + the worker-duties skill. Playbooks are copies (yours to edit,
+  // never overwritten); the skill is a symlink (ours, upgraded with the tool).
+  const seeded = seedPlaybooksAndDuties(STATE_DIR);
+  if (seeded.playbooks.length) console.log('seeded playbooks: ' + seeded.playbooks.join(', '));
   if (seeded.skill) console.log('worker duties symlinked (' + seeded.skill + ' -> the packaged skill)');
 
   const learnings = path.join(WORKSPACE, 'learnings');
@@ -605,11 +605,11 @@ async function cmdKinds() {
 async function cmdCreate() {
   if (!opts.title || !opts.owner) {
     die('usage: bc-axi card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
-      '                    [--brief <id>] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
+      '                    [--playbook <id>] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
       '                    (cards are born in Backlog)\n' +
       '  The owner mints the id (<PREFIX>-<n>, e.g. MON-14).\n' +
-      '  --brief names a template in <workspace>/.bridge-commander/briefs/ (bc-axi brief list).\n' +
-      '  A card with no brief cannot start — set one here or with card patch --brief.');
+      '  --playbook names a file in <workspace>/.bridge-commander/playbooks/ (bc-axi playbook list).\n' +
+      '  A card with no playbook cannot start — set one here or with card patch --playbook.');
   }
   if (opts.id) {
     // The owner mints the id — refuse locally, before any create, and name the
@@ -630,7 +630,7 @@ async function cmdCreate() {
     attributes: parseAttrs(opts.attrs), labels: opts.labels,
   };
   if (opts.type) body.type = opts.type;
-  if (opts.brief !== null) body.brief = opts.brief;
+  if (opts.playbook !== null) body.playbook = opts.playbook;
   if (opts.column) body.column = opts.column;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   // A duplicate id is refused, never resolved: print the server's sentence as
@@ -661,15 +661,15 @@ async function cmdMove() {
 
 async function cmdPatch() {
   const id = positional[0];
-  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--brief <id>] [--owner L] [--body-file f|-] [--attr k=v]... (--attr k= deletes)\n  --brief picks the template card start renders (bc-axi brief list); --brief "" clears it.');
+  if (!id) die('usage: bc-axi card patch <card-id> [--title T] [--type t] [--playbook <id>] [--owner L] [--body-file f|-] [--attr k=v]... (--attr k= deletes)\n  --playbook picks the playbook card start renders (bc-axi playbook list); --playbook "" clears it.');
   const body = {};
   if (opts.owner !== null) body.owner = opts.owner; // allowed only while no worker is bound (server enforces)
   if (opts.title !== null) body.title = opts.title;
   if (opts.type !== null) body.type = opts.type;
-  if (opts.brief !== null) body.brief = opts.brief;
+  if (opts.playbook !== null) body.playbook = opts.playbook;
   if (opts.bodyFile) body.body = readInput(opts.bodyFile);
   if (opts.attrs.length) body.attributes = parseAttrs(opts.attrs);
-  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --brief / --owner / --body-file / --attr)');
+  if (!Object.keys(body).length) die('nothing to patch (use --title / --type / --playbook / --owner / --body-file / --attr)');
   await request('PATCH', '/api/cards/' + encodeURIComponent(id), body);
   console.log('patched ' + id);
 }
@@ -919,7 +919,7 @@ async function cmdProjectAdd() {
   if (!source) {
     die('usage: bc-axi project add <git-url|path> [--name n]\n' +
       '  Clones into <workspace>/projects/<name> and registers {name, path}.\n' +
-      '  How finished work leaves the worktree is the CARD\'s brief, not the repo\'s.');
+      '  How finished work leaves the worktree is the CARD\'s playbook, not the repo\'s.');
   }
   const body = { source, actor: opts.actor || 'agent' };
   if (opts.name) body.name = opts.name;
@@ -935,15 +935,15 @@ async function cmdProjectList() {
   for (const p of r.projects) console.log(p.name + '\t' + p.path);
 }
 
-// ---------- brief templates ----------
-// The list the card's --brief picks from: the workspace's briefs/ plus the
-// packaged ones it has not overridden. Read off disk on every call, so a
-// template dropped in a second ago shows up.
-async function cmdBriefList() {
-  const r = await request('GET', '/api/briefs');
-  if (opts.json) return console.log(JSON.stringify(r.briefs, null, 2));
-  if (!r.briefs.length) return console.log('no brief templates (seed them: bc-axi init)');
-  for (const id of r.briefs) console.log(id);
+// ---------- playbooks ----------
+// The list the card's --playbook picks from: the workspace's playbooks/ plus
+// the packaged ones it has not overridden. Read off disk on every call, so a
+// playbook dropped in a second ago shows up.
+async function cmdPlaybookList() {
+  const r = await request('GET', '/api/playbooks');
+  if (opts.json) return console.log(JSON.stringify(r.playbooks, null, 2));
+  if (!r.playbooks.length) return console.log('no playbooks (seed them: bc-axi init)');
+  for (const id of r.playbooks) console.log(id);
   console.log('\nedit them in ' + r.dir + ' — the next card started uses what is on disk');
 }
 
@@ -1162,7 +1162,7 @@ const commands = {
   'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList, 'lieutenant retire': cmdLtRetire,
   'lieutenant patch': cmdLtPatch,
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
-  'brief list': cmdBriefList,
+  'playbook list': cmdPlaybookList,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
   'card start': cmdStart, 'card park': cmdCardPark,
@@ -1184,8 +1184,8 @@ if (!commands[cmd]) {
     '                                         workspace.init (the teleport): run INSIDE tmux; bootstraps\n' +
     '                                         .bridge-commander/, boots the server, registers the caller\'s tmux\n' +
     '                                         session as the founding lieutenant, installs the turn-end hook,\n' +
-    '                                         scaffolds AGENTS.md + captain.md + learnings/, seeds the brief\n' +
-    '                                         templates and symlinks the worker-duties skill. Idempotent\n' +
+    '                                         scaffolds AGENTS.md + captain.md + learnings/, seeds the\n' +
+    '                                         playbooks and symlinks the worker-duties skill. Idempotent\n' +
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +
     '                                         Bootstraps .bridge-commander/ in cwd on first run.\n' +
     '  status                                 up/down, cards, lieutenants, pending queue items, and the\n' +
@@ -1213,10 +1213,10 @@ if (!commands[cmd]) {
     '                                         a card\'s repo attribute must name a registered project\n' +
     '                                         before card start\n' +
     '  project list [--json]                  name, path\n' +
-    '\nbrief (the markdown templates a card picks from):\n' +
-    '  brief list [--json]                    template ids in <workspace>/.bridge-commander/briefs/\n' +
+    '\nplaybook (the markdown procedures a card picks from):\n' +
+    '  playbook list [--json]                 playbook ids in <workspace>/.bridge-commander/playbooks/\n' +
     '                                         (plus the packaged ones not overridden there). Edit a\n' +
-    '                                         template and the next card started on it uses the edit\n' +
+    '                                         playbook and the next card started on it uses the edit\n' +
     '\nread:\n' +
     '  board [--json]                         lane + columns + card one-liners (or full JSON)\n' +
     '  card show <card-id> [--json]           one card: type, owner, attrs, body, events, thread\n' +
@@ -1225,18 +1225,18 @@ if (!commands[cmd]) {
     '  kinds [--json]                         print the effective kinds map (built-ins + registered)\n' +
     '\ncard:\n' +
     '  card create --title T --owner <lieutenant> [--type plan|implementation|investigation]\n' +
-    '              [--brief <id>] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
+    '              [--playbook <id>] [--body-file f|-] [--attr k=v]... [--label l]...\n' +
     '                                         new card (default type: implementation; born in Backlog ONLY).\n' +
     '                                         The owner mints the id — <PREFIX>-<n>, e.g. MON-14 — from its\n' +
-    '                                         own counter. --brief names the template card start renders\n' +
-    '                                         (brief list); a card with none cannot start\n' +
+    '                                         own counter. --playbook names the playbook card start renders\n' +
+    '                                         (playbook list); a card with none cannot start\n' +
     '  card move <card-id> <column>           lieutenant moves land ONLY in review (the handoff,\n' +
     '                                         level-1 event); → working is refused (card start does it).\n' +
     '                                         Captain drags happen in the UI; a captain drag into\n' +
     '                                         working / review→backlog is an ORDER (queue item), not a move\n' +
-    '  card patch <card-id> [--title T] [--type t] [--brief <id>] [--owner L] [--body-file f|-] [--attr k=v]...\n' +
-    '                                         update card (k= deletes attr; --brief picks the template,\n' +
-    '                                         --brief "" clears it; owner reassignable ONLY\n' +
+    '  card patch <card-id> [--title T] [--type t] [--playbook <id>] [--owner L] [--body-file f|-] [--attr k=v]...\n' +
+    '                                         update card (k= deletes attr; --playbook picks the playbook,\n' +
+    '                                         --playbook "" clears it; owner reassignable ONLY\n' +
     '                                         while no worker is bound to the card — else archive and\n' +
     '                                         recreate); body = the deliverable, rewritten to current\n' +
     '                                         state before every handoff\n' +
@@ -1246,11 +1246,11 @@ if (!commands[cmd]) {
     '                                         appends a loud level-1 event\n' +
     '  card start <card-id> [--brief-file f|-] [--resume] [--harness h]\n' +
     '                                         card.start: ONE atomic op — isolated worktree + real\n' +
-    '                                         worker session (the card\'s brief template, rendered\n' +
+    '                                         worker session (the card\'s playbook, rendered\n' +
     '                                         against the card AS IT IS NOW, is the launch prompt),\n' +
     '                                         session/worktree/branch bound to the card, card ->\n' +
     '                                         Working. Refuses plan cards, Working cards, unregistered\n' +
-    '                                         repos, and cards with no brief. --resume\n' +
+    '                                         repos, and cards with no playbook. --resume\n' +
     '                                         reincarnates the recorded worker (after worker-died);\n' +
     '                                         it never takes --brief-file (use worker send instead).\n' +
     '  card park <card-id>                    move a Working card whose worker is absent or DEAD back\n' +

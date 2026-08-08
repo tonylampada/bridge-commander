@@ -206,8 +206,8 @@
 <!-- owner menu (detail ✎ on the lieutenant chip — reassign the owning lieutenant) -->
 <div id="owner-menu" hidden></div>
 
-<!-- brief menu (detail ✎ on the brief chip — pick the template card start renders) -->
-<div id="brief-menu" hidden></div>
+<!-- playbook menu (detail ✎ on the playbook chip — pick what card start renders) -->
+<div id="playbook-menu" hidden></div>
 
 <!-- lieutenant settings modal (switcher ⋯ → settings): everything about a
      lieutenant. Color, avatar and voice commit on pick; the charter is prose, so
@@ -241,9 +241,9 @@
       <option value="implementation">🔥 implementation</option>
       <option value="investigation">🕵️ investigation</option>
     </select>
-    <!-- the brief: which markdown template card start renders for the worker.
-         Options come from /api/briefs (the workspace's briefs/ folder). -->
-    <select id="nc-brief" title="brief — the template the worker is launched with"></select>
+    <!-- the playbook: which markdown file card start renders into the worker's
+         brief. Options come from /api/playbooks (the workspace's playbooks/). -->
+    <select id="nc-playbook" title="playbook — what the worker's brief is rendered from"></select>
     <textarea id="nc-body" placeholder="body (markdown, optional)" rows="5"></textarea>
     <div class="nc-actions">
       <button type="button" id="nc-cancel">cancel</button>

@@ -71,7 +71,7 @@ test('a minted card starts on bc/<id>: branch, window and worktree all follow th
   try {
     // no id pinned — the owner mints it, and everything downstream follows it
     const card = (await s.api('POST', '/api/cards',
-      { title: 'Tile click clears selection', owner: LT, brief: 'default', attributes: { repo: 'proj' } })).body.card;
+      { title: 'Tile click clears selection', owner: LT, playbook: 'default', attributes: { repo: 'proj' } })).body.card;
     assert.strictEqual(card.id, 'ADA-1');
 
     const r = await s.api('POST', '/api/cards/ADA-1/start', { harness: 'fake' });
@@ -157,7 +157,7 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     assert.notStrictEqual(git(wt, 'rev-parse', '--absolute-git-dir'), git(repo, 'rev-parse', '--absolute-git-dir'));
     assert.strictEqual(git(wt, 'rev-parse', 'HEAD'), git(repo, 'rev-parse', 'HEAD'));
 
-    // the brief: the card's template (`default`) rendered against the card as
+    // the brief: the card's playbook (`default`) rendered against the card as
     // it stands — title, body, thread, branch, and the workspace-carrying CLI
     const rec = JSON.parse(fs.readFileSync(path.join(fdir, sess + '.json'), 'utf8'));
     assert.strictEqual(rec.cwd, wt);
@@ -234,11 +234,11 @@ test('worker signal + done: card events, owner queue items, prs auto-populated, 
   } finally { await teardown(); }
 });
 
-test('investigation: brief carries the report contract, no branch; done attaches the report artifact', async () => {
+test('investigation: the playbook carries the report contract, no branch; done attaches the report artifact', async () => {
   const { s, fdir, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Why slow', id: 'why-slow', type: 'investigation', brief: 'investigation',
+      title: 'Why slow', id: 'why-slow', type: 'investigation', playbook: 'investigation',
       attributes: { repo: 'proj' }, body: 'Find out why the dashboard takes 30s.',
     }));
     const r = await s.api('POST', '/api/cards/why-slow/start', { harness: 'fake' });
@@ -571,21 +571,21 @@ test('card start --resume refuses a brief and points at worker send (API + CLI)'
   } finally { await teardown(); }
 });
 
-// A brief is a flavour of SDLC, and part of that flavour is WHAT RUNS IT: the
-// template may open with frontmatter naming harness, model, the attributes it
-// cannot work without, and whether a branch is cut. Precedence is explicit CLI
-// flag > frontmatter > config default. Observed through a 'recfake' harness
-// preloaded into the server process (test/recording-harness.js via NODE_OPTIONS)
-// that captures the extraArgs card.start builds — the harness port (harness/)
-// itself stays untouched.
-function writeTemplate(s, id, text) {
-  const dir = path.join(s.dir, '.bridge-commander', 'briefs');
+// A playbook is a repeatable procedure, and part of the procedure is WHAT RUNS
+// IT: the playbook may open with frontmatter naming harness, model, the
+// attributes it cannot work without, and whether a branch is cut. Precedence is
+// explicit CLI flag > frontmatter > config default. Observed through a 'recfake'
+// harness preloaded into the server process (test/recording-harness.js via
+// NODE_OPTIONS) that captures the extraArgs card.start builds — the harness port
+// (harness/) itself stays untouched.
+function writePlaybook(s, id, text) {
+  const dir = path.join(s.dir, '.bridge-commander', 'playbooks');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, id + '.md'), text);
   return id;
 }
 
-test('brief frontmatter names the harness and model; an explicit flag still wins', async () => {
+test('playbook frontmatter names the harness and model; an explicit flag still wins', async () => {
   const recFile = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'bc-rec-')), 'extraargs.json');
   const preload = path.join(__dirname, 'recording-harness.js');
   const { s, teardown } = await boot({
@@ -595,7 +595,7 @@ test('brief frontmatter names the harness and model; an explicit flag still wins
   const readExtra = () => JSON.parse(fs.readFileSync(recFile, 'utf8')).extraArgs;
   const clearExtra = () => { try { fs.unlinkSync(recFile); } catch (e) {} };
   try {
-    writeTemplate(s, 'runs-on-recfake', [
+    writePlaybook(s, 'runs-on-recfake', [
       '---', 'harness: recfake', 'model: template-model', '---', '# {{CARD_TITLE}}', '',
     ].join('\n'));
 
@@ -603,7 +603,7 @@ test('brief frontmatter names the harness and model; an explicit flag still wins
     // frontmatter here, so its extraArgs file being written proves the harness
     // key fired; the --model proves the model key fired.
     await s.api('POST', '/api/cards', withOwner({
-      title: 'FM A', id: 'fm-a', brief: 'runs-on-recfake', attributes: { repo: 'proj' },
+      title: 'FM A', id: 'fm-a', playbook: 'runs-on-recfake', attributes: { repo: 'proj' },
     }));
     clearExtra();
     let r = await s.api('POST', '/api/cards/fm-a/start', {});
@@ -612,7 +612,7 @@ test('brief frontmatter names the harness and model; an explicit flag still wins
 
     // (b) explicit --model overrides the template's model
     await s.api('POST', '/api/cards', withOwner({
-      title: 'FM B', id: 'fm-b', brief: 'runs-on-recfake', attributes: { repo: 'proj' },
+      title: 'FM B', id: 'fm-b', playbook: 'runs-on-recfake', attributes: { repo: 'proj' },
     }));
     clearExtra();
     r = await s.api('POST', '/api/cards/fm-b/start', { model: 'cli-model' });
@@ -622,7 +622,7 @@ test('brief frontmatter names the harness and model; an explicit flag still wins
     // (c) explicit --harness overrides the template's harness: the plain 'fake'
     // never writes the extraArgs file, so its absence is the proof.
     await s.api('POST', '/api/cards', withOwner({
-      title: 'FM C', id: 'fm-c', brief: 'runs-on-recfake', attributes: { repo: 'proj' },
+      title: 'FM C', id: 'fm-c', playbook: 'runs-on-recfake', attributes: { repo: 'proj' },
     }));
     clearExtra();
     r = await s.api('POST', '/api/cards/fm-c/start', { harness: 'fake' });
@@ -637,11 +637,11 @@ test('brief frontmatter names the harness and model; an explicit flag still wins
 test('a card missing a `requires` attribute is refused before ANYTHING is provisioned', async () => {
   const { s, teardown } = await boot();
   try {
-    writeTemplate(s, 'needs-pr', [
+    writePlaybook(s, 'needs-pr', [
       '---', 'requires: [pr_url, repo_slug]', '---', 'review {{ATTR_PR_URL}}', '',
     ].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Review it', id: 'needy', brief: 'needs-pr',
+      title: 'Review it', id: 'needy', playbook: 'needs-pr',
       attributes: { repo: 'proj', pr_url: 'https://github.com/o/r/pull/7' },
     }));
     const r = await s.api('POST', '/api/cards/needy/start', { harness: 'fake' });
@@ -666,11 +666,11 @@ test('a card missing a `requires` attribute is refused before ANYTHING is provis
 test('`requires` matches the attribute however it is spelled, and names the card key when it is missing', async () => {
   const { s, teardown } = await boot();
   try {
-    writeTemplate(s, 'needs-upper', [
+    writePlaybook(s, 'needs-upper', [
       '---', 'requires: [PR_URL, Repo-Slug]', '---', 'review {{ATTR_PR_URL}}', '',
     ].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Review it', id: 'shouty', brief: 'needs-upper',
+      title: 'Review it', id: 'shouty', playbook: 'needs-upper',
       attributes: { repo: 'proj', pr_url: 'https://github.com/o/r/pull/9' },
     }));
     const r = await s.api('POST', '/api/cards/shouty/start', { harness: 'fake' });
@@ -690,15 +690,15 @@ test('`requires` matches the attribute however it is spelled, and names the card
 // `requires` asks whether the card CARRIES the thing, which is a different
 // question from whether the thing renders: prs has no text form, and "this
 // card must have PRs recorded" is still a legitimate demand from a review
-// brief. And prs is the board's to write — so the refusal names it without
+// playbook. And prs is the board's to write — so the refusal names it without
 // handing out an --attr recipe that would flatten the recorded list.
 test('`requires` counts a recorded list as present, an empty one as missing, and offers no recipe for what the board owns', async () => {
   const { s, teardown } = await boot();
   try {
-    writeTemplate(s, 'needs-prs', ['---', 'requires: [prs]', '---', 'review the PRs', ''].join('\n'));
+    writePlaybook(s, 'needs-prs', ['---', 'requires: [prs]', '---', 'review the PRs', ''].join('\n'));
     const pr = { url: 'https://github.com/o/r/pull/11', state: 'open' };
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Has PRs', id: 'haspr', brief: 'needs-prs', attributes: { repo: 'proj', prs: [pr] },
+      title: 'Has PRs', id: 'haspr', playbook: 'needs-prs', attributes: { repo: 'proj', prs: [pr] },
     }));
     const ok = await s.api('POST', '/api/cards/haspr/start', { harness: 'fake' });
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
@@ -706,11 +706,11 @@ test('`requires` counts a recorded list as present, an empty one as missing, and
 
     // an empty list carries nothing
     await s.api('POST', '/api/cards', withOwner({
-      title: 'No PRs', id: 'nopr', brief: 'needs-prs', attributes: { repo: 'proj', prs: [] },
+      title: 'No PRs', id: 'nopr', playbook: 'needs-prs', attributes: { repo: 'proj', prs: [] },
     }));
     const r = await s.api('POST', '/api/cards/nopr/start', { harness: 'fake' });
     assert.strictEqual(r.status, 400, JSON.stringify(r.body));
-    // anchored on the attribute: a bare /prs/ would pass on the brief id alone
+    // anchored on the attribute: a bare /prs/ would pass on the playbook id alone
     assert.match(r.body.error, /requires the attribute prs\./, 'the refusal names the attribute');
     assert.doesNotMatch(r.body.error, /--attr prs=/, 'and never a recipe that would flatten the list');
     assert.match(r.body.error, /recorded by the board itself/);
@@ -718,13 +718,13 @@ test('`requires` counts a recorded list as present, an empty one as missing, and
   } finally { await teardown(); }
 });
 
-test('`branch: false` cuts no branch — the brief owns the delivery contract, not the card type', async () => {
+test('`branch: false` cuts no branch — the playbook owns the delivery contract, not the card type', async () => {
   const { s, teardown } = await boot();
   try {
-    writeTemplate(s, 'no-branch', ['---', 'branch: false', '---', 'read only: {{TASK}}', ''].join('\n'));
+    writePlaybook(s, 'no-branch', ['---', 'branch: false', '---', 'read only: {{TASK}}', ''].join('\n'));
     // an IMPLEMENTATION card — under the old rule its type alone would cut bc/<id>
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Just look', id: 'look', brief: 'no-branch', attributes: { repo: 'proj' },
+      title: 'Just look', id: 'look', playbook: 'no-branch', attributes: { repo: 'proj' },
     }));
     const r = await s.api('POST', '/api/cards/look/start', { harness: 'fake' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -734,14 +734,14 @@ test('`branch: false` cuts no branch — the brief owns the delivery contract, n
       'detached HEAD: there is nothing to push');
 
     // and with no `branch` key the card type still decides, exactly as before
-    writeTemplate(s, 'silent', ['# {{CARD_TITLE}}', ''].join('\n'));
+    writePlaybook(s, 'silent', ['# {{CARD_TITLE}}', ''].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Ship it', id: 'shipit', brief: 'silent', attributes: { repo: 'proj' },
+      title: 'Ship it', id: 'shipit', playbook: 'silent', attributes: { repo: 'proj' },
     }));
     const r2 = await s.api('POST', '/api/cards/shipit/start', { harness: 'fake' });
     assert.strictEqual(r2.body.worker.branch, 'bc/shipit');
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Why slow', id: 'why', type: 'investigation', brief: 'silent', attributes: { repo: 'proj' },
+      title: 'Why slow', id: 'why', type: 'investigation', playbook: 'silent', attributes: { repo: 'proj' },
     }));
     const r3 = await s.api('POST', '/api/cards/why/start', { harness: 'fake' });
     assert.strictEqual(r3.body.worker.branch, undefined);
@@ -752,7 +752,7 @@ test('`branch: false` cuts no branch — the brief owns the delivery contract, n
 // it is set: everything downstream (lifecycle hooks, the rendered brief) reads
 // the attribute, and a leftover from the last run points them at a branch that
 // this run never cut.
-test('a restart on a `branch: false` template clears the branch the previous run cut', async () => {
+test('a restart on a `branch: false` playbook clears the branch the previous run cut', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
   const repo = makeRepo(root);
   const wsDir = path.join(root, 'ws');
@@ -765,10 +765,10 @@ test('a restart on a `branch: false` template clears the branch the previous run
   let s = await startServerWithLieutenant({ dir: wsDir, env });
   try {
     await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
-    writeTemplate(s, 'cuts-one', ['# {{CARD_TITLE}}', ''].join('\n'));
-    writeTemplate(s, 'cuts-none', ['---', 'branch: false', '---', 'read only', ''].join('\n'));
+    writePlaybook(s, 'cuts-one', ['# {{CARD_TITLE}}', ''].join('\n'));
+    writePlaybook(s, 'cuts-none', ['---', 'branch: false', '---', 'read only', ''].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Two ways', id: 'twoways', brief: 'cuts-one', attributes: { repo: 'proj' },
+      title: 'Two ways', id: 'twoways', playbook: 'cuts-one', attributes: { repo: 'proj' },
     }));
     let r = await s.api('POST', '/api/cards/twoways/start', { harness: 'fake' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -782,7 +782,7 @@ test('a restart on a `branch: false` template clears the branch the previous run
     fs.rmSync(path.join(fdir, workerKey(wsDir, 'twoways') + '.json'), { force: true });
     s = await startServerWithLieutenant({ dir: wsDir, env });
 
-    await s.api('PATCH', '/api/cards/twoways', { brief: 'cuts-none' });
+    await s.api('PATCH', '/api/cards/twoways', { playbook: 'cuts-none' });
     r = await s.api('POST', '/api/cards/twoways/start', { harness: 'fake' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     assert.strictEqual(r.body.worker.branch, undefined);
@@ -798,9 +798,9 @@ test('a restart on a `branch: false` template clears the branch the previous run
 test('a malformed frontmatter block refuses the start and names the line', async () => {
   const { s, teardown } = await boot();
   try {
-    writeTemplate(s, 'broken', ['---', 'harness: codex', 'hrness: claude', '---', 'body', ''].join('\n'));
+    writePlaybook(s, 'broken', ['---', 'harness: codex', 'hrness: claude', '---', 'body', ''].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Bad template', id: 'bad-fm', brief: 'broken', attributes: { repo: 'proj' },
+      title: 'Bad playbook', id: 'bad-fm', playbook: 'broken', attributes: { repo: 'proj' },
     }));
     const r = await s.api('POST', '/api/cards/bad-fm/start', { harness: 'fake' });
     assert.strictEqual(r.status, 400, JSON.stringify(r.body));
@@ -811,28 +811,28 @@ test('a malformed frontmatter block refuses the start and names the line', async
 
 // An unknown harness names the file that asked for it: the person starting the
 // card is rarely the person who typed the name, and a workspace holds several
-// templates to hunt through.
-test('an unknown harness from the frontmatter names the template it came from', async () => {
+// playbooks to hunt through.
+test('an unknown harness from the frontmatter names the playbook it came from', async () => {
   const { s, teardown } = await boot();
   try {
-    writeTemplate(s, 'typo-harness', ['---', 'harness: codx', '---', 'body', ''].join('\n'));
+    writePlaybook(s, 'typo-harness', ['---', 'harness: codx', '---', 'body', ''].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Typo', id: 'typo-h', brief: 'typo-harness', attributes: { repo: 'proj' },
+      title: 'Typo', id: 'typo-h', playbook: 'typo-harness', attributes: { repo: 'proj' },
     }));
     let r = await s.api('POST', '/api/cards/typo-h/start', {});
     assert.strictEqual(r.status, 400, JSON.stringify(r.body));
     assert.match(r.body.error, /codx/);
-    assert.match(r.body.error, /from brief template .*typo-harness\.md/);
+    assert.match(r.body.error, /from playbook .*typo-harness\.md/);
 
-    // the flag won, so the template did not ask: no template named back
+    // the flag won, so the playbook did not ask: none named back
     r = await s.api('POST', '/api/cards/typo-h/start', { harness: 'nosuchharness' });
     assert.strictEqual(r.status, 400, JSON.stringify(r.body));
-    assert.doesNotMatch(r.body.error, /brief template/);
+    assert.doesNotMatch(r.body.error, /from playbook/);
     assert.deepStrictEqual(boardOnDisk(s).workers, []);
   } finally { await teardown(); }
 });
 
-// There is ONE way for a card to start: the brief template, read on every
+// There is ONE way for a card to start: the card's playbook, read on every
 // start. `--command` was the second one, and it is gone — the flag has to fail
 // at the CLI's own front door rather than slide in as a positional.
 test('--command is gone: the CLI refuses the flag outright', async () => {
@@ -852,7 +852,7 @@ test('--command is gone: the CLI refuses the flag outright', async () => {
 
 // The wire has no unknown-flag guard, so it says it itself. A caller that asks
 // for the second way must not quietly get the first one: spawning an agent on
-// the brief is not what it asked for, and silence would let old callers keep
+// the playbook is not what it asked for, and silence would let old callers keep
 // believing the launcher is there.
 test('--command is gone: the API refuses the field by name', async () => {
   const { s, teardown } = await boot();
@@ -861,7 +861,7 @@ test('--command is gone: the API refuses the field by name', async () => {
     const r = await s.api('POST', '/api/cards/apirunner/start', { command: 'node bin/thing.js' });
     assert.strictEqual(r.status, 400, JSON.stringify(r.body));
     assert.match(r.body.error, /--command was removed/);
-    assert.match(r.body.error, /--brief/);
+    assert.match(r.body.error, /--playbook/);
     assert.deepStrictEqual(boardOnDisk(s).workers, []);
   } finally {
     await teardown();

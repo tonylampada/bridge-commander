@@ -1,53 +1,53 @@
 'use strict';
-// brief — the worker launch prompt. NOT assembled here: a brief is a markdown
-// template the USER owns, and this file only finds it and renders it against
-// the card (docs/api/overview.md: Brief = the task handed to the worker at
-// card.start).
+// playbooks — the repeatable procedures a card is run by, and the briefs they
+// render into. A playbook is a markdown template the USER owns; this file only
+// finds it and renders it against the card. What comes out is the BRIEF: the
+// task handed to the worker at card.start (docs/api/overview.md).
 //
-// Templates live in `<workspace>/.bridge-commander/briefs/`, one markdown file
-// per template, and the file name is the id. A card carries `brief` = that id
-// — a pointer, never text — so the template is resolved and rendered at
+// Playbooks live in `<workspace>/.bridge-commander/playbooks/`, one markdown
+// file per playbook, and the file name is the id. A card carries `playbook` =
+// that id — a pointer, never text — so the playbook is resolved and rendered at
 // card.start and only there: title, body, thread and attributes all keep
 // changing until then, and the worker must read the latest.
 //
-// The packaged set (this repo's `briefs/`) seeds a fresh workspace and is the
-// fallback: a workspace file of the same name always wins, so an upgrade never
-// overwrites an edit and a workspace that predates a new packaged template
-// still gets it.
+// The packaged set (this repo's `playbooks/`) seeds a fresh workspace and is
+// the fallback: a workspace file of the same name always wins, so an upgrade
+// never overwrites an edit and a workspace that predates a new packaged
+// playbook still gets it.
 const fs = require('fs');
 const path = require('path');
 
-const PACKAGED_BRIEFS_DIR = path.join(__dirname, '..', 'briefs');
+const PACKAGED_PLAYBOOKS_DIR = path.join(__dirname, '..', 'playbooks');
 // README.md documents the folder for whoever is editing it — it is not a
-// flavour of SDLC, so it never lists and never resolves as an id.
-const NOT_A_TEMPLATE = /^readme$/i;
+// playbook, so it never lists and never resolves as an id.
+const NOT_A_PLAYBOOK = /^readme$/i;
 const ID_RE = /^[\w][\w.-]*$/;
 
-// briefsDir(stateDir) — the workspace's own templates, the ones the user edits.
-function briefsDir(stateDir) { return path.join(stateDir, 'briefs'); }
+// playbooksDir(stateDir) — the workspace's own playbooks, the ones the user edits.
+function playbooksDir(stateDir) { return path.join(stateDir, 'playbooks'); }
 
 function idsIn(dir) {
   let names;
-  try { names = fs.readdirSync(dir); } catch (e) { return []; } // absent dir = no templates, not an error
+  try { names = fs.readdirSync(dir); } catch (e) { return []; } // absent dir = no playbooks, not an error
   return names.filter((n) => n.endsWith('.md'))
     .map((n) => n.slice(0, -3))
-    .filter((id) => ID_RE.test(id) && !NOT_A_TEMPLATE.test(id));
+    .filter((id) => ID_RE.test(id) && !NOT_A_PLAYBOOK.test(id));
 }
 
-// listBriefs(stateDir) -> sorted ids: the workspace's templates ∪ the packaged
+// listPlaybooks(stateDir) -> sorted ids: the workspace's playbooks ∪ the packaged
 // ones. What the dropdown shows and what an error names.
-function listBriefs(stateDir) {
-  const ids = new Set(idsIn(briefsDir(stateDir)));
-  for (const id of idsIn(PACKAGED_BRIEFS_DIR)) ids.add(id);
+function listPlaybooks(stateDir) {
+  const ids = new Set(idsIn(playbooksDir(stateDir)));
+  for (const id of idsIn(PACKAGED_PLAYBOOKS_DIR)) ids.add(id);
   return [...ids].sort();
 }
 
-// resolveBrief(stateDir, id) -> the file that wins for that id, or '' when the
-// id names no template. Workspace first — an edit always beats the package.
-function resolveBrief(stateDir, id) {
+// resolvePlaybook(stateDir, id) -> the file that wins for that id, or '' when the
+// id names no playbook. Workspace first — an edit always beats the package.
+function resolvePlaybook(stateDir, id) {
   const s = String(id || '').trim();
-  if (!ID_RE.test(s) || NOT_A_TEMPLATE.test(s)) return '';
-  for (const dir of [briefsDir(stateDir), PACKAGED_BRIEFS_DIR]) {
+  if (!ID_RE.test(s) || NOT_A_PLAYBOOK.test(s)) return '';
+  for (const dir of [playbooksDir(stateDir), PACKAGED_PLAYBOOKS_DIR]) {
     const f = path.join(dir, s + '.md');
     if (fs.existsSync(f)) return f;
   }
@@ -56,7 +56,7 @@ function resolveBrief(stateDir, id) {
 
 // ---------- frontmatter ----------
 //
-// A template MAY open with a fenced header block naming how the card runs:
+// A playbook MAY open with a fenced header block naming how the card runs:
 //
 //   ---
 //   harness: codex
@@ -65,9 +65,9 @@ function resolveBrief(stateDir, id) {
 //   branch: false
 //   ---
 //
-// A flavour of SDLC includes what runs it, and prose in the brief cannot act —
-// the worker reads "start this on codex" only once it is already on claude.
-// Four keys, all optional, no template without the block behaving any
+// A playbook includes what runs it, and prose in the brief cannot act — the
+// worker reads "start this on codex" only once it is already on claude.
+// Four keys, all optional, no playbook without the block behaving any
 // differently. The parser is hand-written and covers only what those
 // four keys need — a general markup language is exactly what this must not
 // grow into — and anything else in the block is an error naming its line,
@@ -119,19 +119,19 @@ function fmCheck(key, val, at) {
   return val.trim();
 }
 
-// parseBrief(text) -> { meta, body }. No opening `---` line = no frontmatter:
-// meta is empty and the body is the text untouched, which is every template
+// parsePlaybook(text) -> { meta, body }. No opening `---` line = no frontmatter:
+// meta is empty and the body is the text untouched, which is every playbook
 // that predates this. A block that opens and never closes, or holds anything
 // but the four keys, THROWS with the offending line named.
 //
 // A first line of `---` is genuinely ambiguous — an opening delimiter to us, a
-// horizontal rule to a template written before this existed — so when the
+// horizontal rule to a playbook written before this existed — so when the
 // block fails, the error names the way out of the ambiguity too, not just the
 // line that broke.
 const RULE_HINT = ' If that first `---` was meant as a horizontal rule, put a heading or a '
-  + 'blank line above it and the file reads as a plain brief again.';
+  + 'blank line above it and the file reads as a plain playbook again.';
 
-function parseBrief(text) {
+function parsePlaybook(text) {
   const src = String(text == null ? '' : text);
   const lines = src.split('\n');
   if (lines[0].trim() !== '---') return { meta: {}, body: src };
@@ -149,7 +149,7 @@ function parseBrief(text) {
     const key = m[1];
     if (!FM_KEYS.includes(key)) {
       throw new Error(at + 'unknown key "' + key + '" — the block takes ' + FM_KEYS.join(', ')
-        + ' and nothing else (prose belongs in the brief, below the ---)');
+        + ' and nothing else (prose belongs in the playbook body, below the ---)');
     }
     if (key in meta) throw new Error(at + '"' + key + '" is set twice');
     const raw = m[2].trim();
@@ -160,7 +160,7 @@ function parseBrief(text) {
     + RULE_HINT);
 }
 
-// The captain ↔ lieutenant card thread as one block, or '' — templates drop
+// The captain ↔ lieutenant card thread as one block, or '' — playbooks drop
 // {{THREAD}} on its own line, so it carries its own heading or nothing at all.
 function threadBlock(thread) {
   const msgs = (thread || []).filter((m) => m && String(m.text || '').trim());
@@ -172,7 +172,7 @@ function threadBlock(thread) {
 
 // attrVar(name) -> the placeholder a card attribute is reachable by. ONE
 // definition with two callers — the table below and the `requires` check at
-// card.start — so the name a template asks for and the name it can actually
+// card.start — so the name a playbook asks for and the name it can actually
 // read can never drift: pr_url, PR_URL and pr-url are the same attribute.
 function attrVar(name) {
   return 'ATTR_' + String(name).toUpperCase().replace(/[^A-Z0-9_]/g, '_');
@@ -225,38 +225,39 @@ function render(template, vars) {
     (m, k) => (Object.prototype.hasOwnProperty.call(vars, k) ? vars[k] : m));
 }
 
-// workerBrief(b) -> the rendered brief. `b.template` is the template text;
-// callers that have a card id use resolveBrief() to find it first.
+// workerBrief(b) -> the rendered brief. `b.template` is the playbook body;
+// callers that have a card id use resolvePlaybook() to find it first.
 function workerBrief(b) {
   return render(b.template, briefVars(b));
 }
 
-// seedBriefsAndDuties(stateDir, home) — the two halves of "how we ask for work",
+// seedPlaybooksAndDuties(stateDir, home) — the two halves of "how we ask for work",
 // installed together at workspace.init because they are one thing split by
 // ownership:
 //
-//   briefs/  COPIES of the packaged templates, and only the ones missing. They
-//            are the USER's to edit, so an upgrade must never overwrite one.
-//   skill    a SYMLINK to the packaged bridge-commander-worker skill. The
-//            duties are OURS, so upgrading bridge-commander upgrades them with
-//            no copy going stale in someone's skills dir.
+//   playbooks/  COPIES of the packaged playbooks, and only the ones missing.
+//               They are the USER's to edit, so an upgrade must never
+//               overwrite one.
+//   skill       a SYMLINK to the packaged bridge-commander-worker skill. The
+//               duties are OURS, so upgrading bridge-commander upgrades them
+//               with no copy going stale in someone's skills dir.
 //
 // Returns what it did, for init to print. Never throws: a workspace whose
-// briefs/ is unwritable still runs off the packaged templates, and a skills dir
+// playbooks/ is unwritable still runs off the packaged playbooks, and a skills dir
 // we may not write is the user's business, not a reason to fail init.
 const PACKAGED_SKILL_DIR = path.join(__dirname, '..', 'skills', 'bridge-commander-worker');
 
-function seedBriefsAndDuties(stateDir, home) {
-  const out = { briefs: [], skill: '' };
-  const dst = briefsDir(stateDir);
+function seedPlaybooksAndDuties(stateDir, home) {
+  const out = { playbooks: [], skill: '' };
+  const dst = playbooksDir(stateDir);
   try {
     fs.mkdirSync(dst, { recursive: true });
-    for (const f of fs.readdirSync(PACKAGED_BRIEFS_DIR)) {
+    for (const f of fs.readdirSync(PACKAGED_PLAYBOOKS_DIR)) {
       if (!f.endsWith('.md') || fs.existsSync(path.join(dst, f))) continue;
-      fs.copyFileSync(path.join(PACKAGED_BRIEFS_DIR, f), path.join(dst, f));
-      out.briefs.push(f);
+      fs.copyFileSync(path.join(PACKAGED_PLAYBOOKS_DIR, f), path.join(dst, f));
+      out.playbooks.push(f);
     }
-  } catch (e) { /* unwritable briefs dir — the packaged templates still resolve */ }
+  } catch (e) { /* unwritable playbooks dir — the packaged playbooks still resolve */ }
 
   const skillDst = path.join(home || require('os').homedir(), '.claude', 'skills', 'bridge-commander-worker');
   try {
@@ -271,11 +272,11 @@ function seedBriefsAndDuties(stateDir, home) {
     }
     fs.symlinkSync(PACKAGED_SKILL_DIR, skillDst, 'dir');
     out.skill = skillDst;
-  } catch (e) { /* no skills dir we may write — the template says to load it, the user installs it */ }
+  } catch (e) { /* no skills dir we may write — the playbook says to load it, the user installs it */ }
   return out;
 }
 
 module.exports = {
-  PACKAGED_BRIEFS_DIR, PACKAGED_SKILL_DIR, briefsDir, listBriefs, resolveBrief,
-  parseBrief, attrVar, attrCardKey, briefVars, render, workerBrief, seedBriefsAndDuties,
+  PACKAGED_PLAYBOOKS_DIR, PACKAGED_SKILL_DIR, playbooksDir, listPlaybooks, resolvePlaybook,
+  parsePlaybook, attrVar, attrCardKey, briefVars, render, workerBrief, seedPlaybooksAndDuties,
 };

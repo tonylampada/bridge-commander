@@ -22,7 +22,7 @@
 //      - body rewritten, mentioning the change
 //      - branch bc/<card> holds greeting.txt == 'ahoy'
 //   If the lieutenant stalls, ONE captain nudge is allowed; needing a second
-//   one fails the test (that is a doctrine/brief bug — fix it, don't nudge).
+//   one fails the test (that is a doctrine/playbook bug — fix it, don't nudge).
 // On failure: dumps the lieutenant pane + its queue/ack state for diagnosis.
 // Cleanup: all sessions, the private tmux server, the workspace server, tmp.
 'use strict';

@@ -14,7 +14,7 @@ import { renderFilterUI, filterPanelOpen, closeFilterPanel } from './filterpop.j
 import { renderChat, onOpenCard as chatOnOpenCard, openCardConversation, openLieutenantChat, onQuoteSource } from './chat.js';
 import { onModeSwitch, forgetFile, fileOpen, fileName, fileQuote } from './filepane.js';
 import { renderLtSwitcher, ltSwitcherOpen, closeLtSwitcher, ltSettingsOpen, closeLtSettings } from './ltswitcher.js';
-import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen, closeBriefMenu, briefMenuOpen, artifactWritten } from './detail.js';
+import { renderDetail, openDetail, closeDetail, detailOpen, closeArtifact, artifactOpen, onArtifactClose, closeOwnerMenu, ownerMenuOpen, closePlaybookMenu, playbookMenuOpen, artifactWritten } from './detail.js';
 import { closePane, paneOpen } from './pane.js';
 import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
@@ -193,7 +193,7 @@ document.addEventListener('keydown', (e) => {
     else if (filterPanelOpen()) closeFilterPanel();
     else if (ltSwitcherOpen()) closeLtSwitcher();
     else if (ownerMenuOpen()) closeOwnerMenu(); // just the menu — keep the detail open
-    else if (briefMenuOpen()) closeBriefMenu();
+    else if (playbookMenuOpen()) closePlaybookMenu();
     else if (S.notifOpen) { S.notifOpen = false; render(); }
     else if (selectionOn()) { exitSelection(); render(); } // leave selection mode
     else if (!spEl.hidden) { spEl.hidden = true; gearBtn.classList.remove('on'); }

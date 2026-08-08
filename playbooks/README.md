@@ -1,25 +1,27 @@
-# Brief templates
+# Playbooks
 
-Each file here is a **flavour of SDLC** — how much ceremony a piece of work gets. `default` is
-implement and ship. `no-mistakes` adds a review gate and CI. The card picks one, so the
-bureaucracy is a per-card choice rather than a property of the repository.
+Each file here is a **playbook** — a repeatable procedure for a recurring kind of work, and how
+much ceremony that work gets. `default` is implement and ship. `no-mistakes` adds a review gate
+and CI. The card picks one, so the bureaucracy is a per-card choice rather than a property of
+the repository.
 
-One markdown file per template; the file name is the id. A card's `brief` is that id, and
-`card start` renders the file against the card as it stands at that moment — so the body you
-edited five seconds ago is the body the worker reads. A card with no brief does not start.
+One markdown file per playbook; the file name is the id. A card's `playbook` is that id, and
+`card start` renders the file against the card as it stands at that moment into the worker's
+**brief** — so the body you edited five seconds ago is the body the worker reads. A card with no
+playbook does not start.
 
 These are workspace-wide, one list for every project. Add one when a kind of work recurs and
 none of these fit. Expect ten of them, not fifty — past that nobody remembers which is which,
 and the dropdown stops being a decision.
 
-A `codereview` template is the classic one to write here and the reason it ships with nothing:
+A `codereview` playbook is the classic one to write here and the reason it ships with nothing:
 its whole value is the pointer at a review methodology, and that methodology is yours, not
 bridge-commander's.
 
 ## Frontmatter — what runs the card
 
-A template MAY open with a block naming how the card starts. Everything below the closing `---`
-is the brief. A template without the block behaves exactly as it always has.
+A playbook MAY open with a block naming how the card starts. Everything below the closing `---`
+is what renders into the brief. A playbook without the block behaves exactly as it always has.
 
 ```yaml
 ---
@@ -34,17 +36,17 @@ branch: false
 |---|---|
 | `harness` | what the worker session runs on (`claude`, `codex`, …) |
 | `model` | the model that session starts with |
-| `requires` | card attributes this template cannot work without — `card start` refuses before provisioning anything and names the missing one |
+| `requires` | card attributes this playbook cannot work without — `card start` refuses before provisioning anything and names the missing one |
 | `branch` | `false` = detached HEAD, no branch cut, nothing to push. Omitted, the card type decides as before (an investigation gets no branch) |
 
 All four are optional. **An explicit CLI flag beats the frontmatter, which beats the config
-default** — so `--harness claude` still overrides a template that says `codex`.
+default** — so `--harness claude` still overrides a playbook that says `codex`.
 
 This is not YAML and does not want to be: `key: value`, `key: [a, b, c]`, `true`/`false`, and
 those four keys. Anything else in the block is an error naming the line, because a guess here
-silently starts the wrong worker. A template that wants a conditional wants to be two templates.
+silently starts the wrong worker. A playbook that wants a conditional wants to be two playbooks.
 
-`requires` is how a template says "this placeholder is not a typo": an unknown `{{NAME}}` stays
+`requires` is how a playbook says "this placeholder is not a typo": an unknown `{{NAME}}` stays
 literal on purpose, so a `codereview` brief with no `pr_url` would otherwise launch a worker to
 discover that for itself.
 
@@ -54,7 +56,7 @@ The duties are a skill, `bridge-commander-worker`, shipped inside bridge-command
 symlinked into your skills dir — so an upgrade to the tool updates the duties, without a copy
 going stale in a workspace.
 
-The **order to load it** is a line in the template, and that line is yours. Every template
+The **order to load it** is a line in the playbook, and that line is yours. Every playbook
 here opens with it. Delete it and the worker runs without the duties; that is your call to
 make, not the server's.
 
@@ -81,8 +83,8 @@ brief rather than vanishing.
 ## Editing
 
 These are yours. Change one and the next card started uses it — no release, no restart. They
-are versioned with the workspace, so `git log .bridge-commander/briefs/` is the history of how
-work has been asked for here.
+are versioned with the workspace, so `git log .bridge-commander/playbooks/` is the history of
+how work has been asked for here.
 
 The packaged copies ship inside bridge-commander and seed this folder on init. A file here
 always wins over the packaged one, so an upgrade never overwrites an edit.

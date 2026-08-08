@@ -85,7 +85,7 @@ document.addEventListener('click', (e) => {
     t.closest('#lt-overlay') ||               // new-lieutenant modal
     t.closest('#move-menu') ||                // transient popovers dismiss on their own
     t.closest('#owner-menu') ||
-    t.closest('#brief-menu') ||
+    t.closest('#playbook-menu') ||
     t.closest('#notif-panel') ||
     t.closest('#settings-panel') ||
     t.closest('#label-picker') ||
@@ -665,41 +665,41 @@ export function closeOwnerMenu() { omEl.hidden = true; }
 export function ownerMenuOpen() { return !omEl.hidden; }
 document.addEventListener('click', (e) => { if (!omEl.hidden && !omEl.contains(e.target)) closeOwnerMenu(); });
 
-// ---------- brief menu (pick the template card.start renders) ----------
+// ---------- playbook menu (pick the playbook card.start renders) ----------
 // Same popover as the owner menu. The list is fetched on every open, never
-// cached: briefs/ is a folder the captain edits, and a template dropped in a
+// cached: playbooks/ is a folder the captain edits, and a playbook dropped in a
 // minute ago must be pickable now. "none" is offered on purpose — clearing the
-// brief is a real state, it just means the card cannot start.
-const bmEl = document.getElementById('brief-menu');
-async function openBriefMenu(cardId, x, y) {
+// playbook is a real state, it just means the card cannot start.
+const bmEl = document.getElementById('playbook-menu');
+async function openPlaybookMenu(cardId, x, y) {
   const c = card(cardId);
   if (!c) return;
   bmEl.textContent = '';
   const head = document.createElement('div');
   head.className = 'mm-head';
-  head.textContent = 'brief template';
+  head.textContent = 'playbook';
   bmEl.appendChild(head);
   bmEl.hidden = false;
   bmEl.style.left = Math.max(8, Math.min(x, window.innerWidth - 200)) + 'px';
   bmEl.style.top = Math.max(8, y) + 'px';
   let ids = [];
-  try { ids = (await api.briefs()).briefs || []; }
+  try { ids = (await api.playbooks()).playbooks || []; }
   catch (e) { ids = []; }
   if (bmEl.hidden) return; // closed while the fetch was in flight
   if (!ids.length) {
     const none = document.createElement('div');
     none.className = 'mm-none';
-    none.textContent = 'no templates in briefs/';
+    none.textContent = 'no playbooks in playbooks/';
     bmEl.appendChild(none);
   }
   for (const id of ['', ...ids]) {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = id || '— none';
-    if (id === (c.brief || '')) b.className = 'cur';
+    if (id === (c.playbook || '')) b.className = 'cur';
     b.onclick = async () => {
-      closeBriefMenu();
-      try { await api.patchCard(cardId, { brief: id }); }
+      closePlaybookMenu();
+      try { await api.patchCard(cardId, { playbook: id }); }
       catch (e) { alert(e.message); }
     };
     bmEl.appendChild(b);
@@ -709,9 +709,9 @@ async function openBriefMenu(cardId, x, y) {
   bmEl.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + 'px';
   bmEl.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + 'px';
 }
-export function closeBriefMenu() { bmEl.hidden = true; }
-export function briefMenuOpen() { return !bmEl.hidden; }
-document.addEventListener('click', (e) => { if (!bmEl.hidden && !bmEl.contains(e.target)) closeBriefMenu(); });
+export function closePlaybookMenu() { bmEl.hidden = true; }
+export function playbookMenuOpen() { return !bmEl.hidden; }
+document.addEventListener('click', (e) => { if (!bmEl.hidden && !bmEl.contains(e.target)) closePlaybookMenu(); });
 
 // Opening the card clears its unread: level-1 events and lieutenant replies both
 // derive from the same per-card read marker server-side, so one POST covers
@@ -796,13 +796,13 @@ export function renderDetail() {
     // Frozen snapshots never offer it: nothing about them is editable.
     (worker || arch ? '' : '<button type="button" class="owner-edit" title="change owner (only while no worker is bound)">✎</button>') +
     '</span>' +
-    // brief: which template card.start renders. Shown always — a card with
+    // playbook: which one card.start renders. Shown always — a card with
     // none does not start, and that has to be visible before the drag, not
     // discovered as an error after it. Frozen snapshots show it, never edit it.
     (c.type === 'plan' ? '' :
-      '<span class="attr attr-brief' + (c.brief ? '' : ' none') + '" data-card="' + esc(c.id) + '">' +
-      '<span class="k">brief</span><span class="v">' + esc(c.brief || 'none — cannot start') + '</span>' +
-      (arch ? '' : '<button type="button" class="owner-edit" title="pick the brief template">✎</button>') +
+      '<span class="attr attr-playbook' + (c.playbook ? '' : ' none') + '" data-card="' + esc(c.id) + '">' +
+      '<span class="k">playbook</span><span class="v">' + esc(c.playbook || 'none — cannot start') + '</span>' +
+      (arch ? '' : '<button type="button" class="owner-edit" title="pick the playbook">✎</button>') +
       '</span>') +
     (c.pendingOrder ? '<span class="attr"><span class="k">pending</span><span class="v">⏳ ' + esc(c.pendingOrder.kind) + '</span></span>' : '') +
     Object.entries(at)
@@ -821,11 +821,11 @@ export function renderDetail() {
     };
   }
   if (attrsChanged) {
-    const briefEdit = attrsEl.querySelector('.attr-brief .owner-edit');
-    if (briefEdit) briefEdit.onclick = (e) => {
+    const playbookEdit = attrsEl.querySelector('.attr-playbook .owner-edit');
+    if (playbookEdit) playbookEdit.onclick = (e) => {
       e.stopPropagation();
-      const r = briefEdit.getBoundingClientRect();
-      openBriefMenu(c.id, r.left, r.bottom + 4);
+      const r = playbookEdit.getBoundingClientRect();
+      openPlaybookMenu(c.id, r.left, r.bottom + 4);
     };
   }
 

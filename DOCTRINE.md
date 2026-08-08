@@ -105,27 +105,27 @@ blockers.
 Work happens in registered projects. `bc-axi project add <git-url|path>` clones a repo into
 the workspace and registers it. A card must carry `repo: <project-name>` (`--attr repo=…`)
 before it can start. How finished work reaches main is not a property of the repo — it is
-the card's brief.
+the card's playbook.
 
-## Briefs
+## Playbooks
 
-A brief is a markdown template the captain owns, in `<workspace>/.bridge-commander/briefs/`.
-One file per template, and the file name is its id: `default` implements and ships,
-`no-mistakes` adds a review gate and CI, `investigation` asks for a report. `bc-axi brief
-list` prints them.
+A playbook is a markdown file the captain owns, in
+`<workspace>/.bridge-commander/playbooks/`. One file per playbook, and the file name is its
+id: `default` implements and ships, `no-mistakes` adds a review gate and CI, `investigation`
+asks for a report. `bc-axi playbook list` prints them.
 
-A card points at one — `card create --brief <id>`, `card patch --brief <id>` — and `card
-start` renders that template against the card **at that moment**: title, body, thread and
-attributes as they stand, through `{{CARD_TITLE}}`, `{{TASK}}`, `{{THREAD}}`, `{{BRANCH}}`,
-`{{ATTR_<NAME>}}` and the rest (see the folder's README). So sharpening the body a second
-before starting is a sharper brief, and editing a template changes the next card started on
-it with no restart.
+A card points at one — `card create --playbook <id>`, `card patch --playbook <id>` — and
+`card start` renders that playbook against the card **at that moment** into the worker's
+brief: title, body, thread and attributes as they stand, through `{{CARD_TITLE}}`, `{{TASK}}`,
+`{{THREAD}}`, `{{BRANCH}}`, `{{ATTR_<NAME>}}` and the rest (see the folder's README). So
+sharpening the body a second before starting is a sharper brief, and editing a playbook
+changes the next card started on it with no restart.
 
-**A card with no brief does not start**, and nothing picks one on its behalf: `card start`
-refuses and names the templates. Cards created before briefs existed have none — set one
-with `card patch --brief <id>` when you get to them.
+**A card with no playbook does not start**, and nothing picks one on its behalf: `card start`
+refuses and names the playbooks. Cards created before playbooks existed have none — set one
+with `card patch --playbook <id>` when you get to them.
 
-A template orders only what a worker can run: the Skill tool refuses a `disable-model-invocation`
+A playbook orders only what a worker can run: the Skill tool refuses a `disable-model-invocation`
 skill to an agent — `writing-great-skills` is one — so that step is yours, at handoff.
 
 ## Starting work
@@ -161,7 +161,7 @@ rework restart with an updated brief.
 
 ### Ruling on an escalated finding
 
-A worker on the `no-mistakes` brief drives its own review gate and signals when a finding comes
+A worker on the `no-mistakes` playbook drives its own review gate and signals when a finding comes
 back `ask-user` — the class that challenges what the card asked for. It is parked on that
 finding until your ruling reaches it by `bc-axi worker send` — a line the worker carries out,
 not flags for a tool:

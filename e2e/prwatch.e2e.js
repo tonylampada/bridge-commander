@@ -170,7 +170,7 @@ async function stepCase(name, fn) {
       // The CLI refuses --id (the owner mints it); the readable e2e id comes in
       // through the API, which still takes an explicit one.
       const created = await api('POST', '/api/cards', {
-        id: CARD, title: 'PR watch e2e ' + RUN, owner: 'ada', brief: 'default',
+        id: CARD, title: 'PR watch e2e ' + RUN, owner: 'ada', playbook: 'default',
         attributes: { repo: 'scratch' }, body: cardBody,
       });
       assert.strictEqual(created.status, 200, JSON.stringify(created.body));

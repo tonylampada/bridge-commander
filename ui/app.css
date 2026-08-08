@@ -816,15 +816,15 @@ a.a-uri { color: var(--accent); }
 #mmd-close { position: fixed; top: 10px; right: 12px; z-index: 1; color: var(--dim); font-size: 20px; padding: 6px 10px; }
 #mmd-close:hover { color: var(--text); }
 
-/* ---------- move menu (owner + brief menus share the look) ---------- */
-#move-menu, #owner-menu, #brief-menu {
+/* ---------- move menu (owner + playbook menus share the look) ---------- */
+#move-menu, #owner-menu, #playbook-menu {
   position: fixed; z-index: 80; min-width: 190px; display: flex; flex-direction: column;
   background: var(--bg2); border: 1px solid var(--line2); border-radius: 10px; padding: 5px;
   box-shadow: var(--shadow); animation: pop-in .12s ease-out;
 }
-#move-menu .mm-head, #owner-menu .mm-head, #brief-menu .mm-head { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 5px 10px 3px; }
-#move-menu button, #owner-menu button, #brief-menu button { text-align: left; font-size: 12.5px; padding: 7px 10px; border-radius: 7px; }
-#move-menu button:hover, #owner-menu button:hover, #brief-menu button:hover { background: var(--panel2); }
+#move-menu .mm-head, #owner-menu .mm-head, #playbook-menu .mm-head { color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 5px 10px 3px; }
+#move-menu button, #owner-menu button, #playbook-menu button { text-align: left; font-size: 12.5px; padding: 7px 10px; border-radius: 7px; }
+#move-menu button:hover, #owner-menu button:hover, #playbook-menu button:hover { background: var(--panel2); }
 #move-menu button.cur { color: var(--faint); cursor: default; }
 #move-menu button.danger { color: var(--danger); }
 #move-menu button.danger:hover { background: rgba(239, 100, 97, .1); }
@@ -832,11 +832,11 @@ a.a-uri { color: var(--accent); }
 #owner-menu button { display: flex; align-items: center; gap: 7px; }
 #owner-menu button .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
 #owner-menu .mm-none { color: var(--faint); font-size: 12.5px; padding: 7px 10px; }
-#brief-menu button.cur { color: var(--accent); }
-#brief-menu .mm-none { color: var(--faint); font-size: 12.5px; padding: 7px 10px; }
-.attr-owner .owner-edit, .attr-brief .owner-edit { border: none; background: none; cursor: pointer; padding: 0 2px; font-size: 11px; opacity: .6; }
-.attr-owner .owner-edit:hover, .attr-brief .owner-edit:hover { opacity: 1; }
-.attr-brief.none .v { color: var(--faint); font-style: italic; }
+#playbook-menu button.cur { color: var(--accent); }
+#playbook-menu .mm-none { color: var(--faint); font-size: 12.5px; padding: 7px 10px; }
+.attr-owner .owner-edit, .attr-playbook .owner-edit { border: none; background: none; cursor: pointer; padding: 0 2px; font-size: 11px; opacity: .6; }
+.attr-owner .owner-edit:hover, .attr-playbook .owner-edit:hover { opacity: 1; }
+.attr-playbook.none .v { color: var(--faint); font-style: italic; }
 
 /* ---------- new card modal ---------- */
 #nc-overlay {

@@ -32,7 +32,7 @@
     {
       "ts": "T-400000", "actor": "user", "reason": "merged",
       "card": {
-        "id": "onboarding-checklist", "title": "First-run onboarding checklist", "type": "implementation", "brief": "default",
+        "id": "onboarding-checklist", "title": "First-run onboarding checklist", "type": "implementation", "playbook": "default",
         "owner": "quill", "column": "review", "labels": ["ux", "docs"],
         "attributes": { "repo": "bridge-commander", "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/30", "state": "merged" }] },
         "body": "A first-run checklist in the empty board: create a lieutenant → register a project → make a card. Landed in PR #30.",
@@ -49,7 +49,7 @@
     {
       "ts": "T-350000", "actor": "user", "reason": "killed", "note": "superseded by the SSE approach",
       "card": {
-        "id": "websocket-transport-spike", "title": "Spike: websocket transport", "type": "investigation", "brief": "investigation",
+        "id": "websocket-transport-spike", "title": "Spike: websocket transport", "type": "investigation", "playbook": "investigation",
         "owner": "rex", "column": "working", "labels": ["spike", "infra"],
         "attributes": { "repo": "bridge-commander" },
         "body": "Would websockets beat SSE for the board push? (Answer: no — SSE + refetch-on-open is simpler and reconnects for free.)",
@@ -159,7 +159,7 @@
   ],
   "cards": [
     {
-      "id": "refactor-queue-backoff", "title": "Refactor queue drain backoff", "type": "implementation", "brief": "default",
+      "id": "refactor-queue-backoff", "title": "Refactor queue drain backoff", "type": "implementation", "playbook": "default",
       "owner": "monica", "column": "backlog", "labels": ["infra"],
       "attributes": { "repo": "bridge-commander" },
       "body": "The drain retry backoff is linear; make it exponential with jitter, cap at 90s.\n\n- keep the wake TTL semantics\n- `test/queue.test.js` must stay green",
@@ -174,7 +174,7 @@
       "threadStart": "T-96000"
     },
     {
-      "id": "voice-input-spike", "title": "Spike: voice input for the composer", "type": "investigation", "brief": "investigation",
+      "id": "voice-input-spike", "title": "Spike: voice input for the composer", "type": "investigation", "playbook": "investigation",
       "owner": "quill", "column": "backlog", "labels": ["ux", "spike"],
       "attributes": { "repo": "bridge-commander" },
       "body": "Can the chat composer take dictation? Timebox: one day.\n\nQuestions:\n1. WebSpeech API vs whisper.cpp sidecar\n2. does it survive the zero-dep rule? (browser-side only would)",
@@ -228,7 +228,7 @@
       "threadStart": "T-105000"
     },
     {
-      "id": "oauth-token-refresh", "title": "OAuth token refresh", "type": "implementation", "brief": "default",
+      "id": "oauth-token-refresh", "title": "OAuth token refresh", "type": "implementation", "playbook": "default",
       "owner": "monica", "column": "working", "labels": ["auth"],
       "attributes": {
         "repo": "bridge-commander", "session": "bc-w-oauth",
@@ -253,7 +253,7 @@
       "threadStart": "T-84500"
     },
     {
-      "id": "ci-sharding", "title": "Migrate CI to sharded tests", "type": "implementation", "brief": "default",
+      "id": "ci-sharding", "title": "Migrate CI to sharded tests", "type": "implementation", "playbook": "default",
       "owner": "rex", "column": "working", "labels": ["ci"],
       "attributes": { "repo": "bridge-commander", "session": "bc-w-ci" },
       "body": "Split the 325-test suite into 4 shards; gate on all four.\n\nWatch out: the coverage gate must merge shard reports before comparing to the threshold.",
@@ -272,7 +272,7 @@
       "threadStart": "T-4000"
     },
     {
-      "id": "fix-flaky-sysload", "title": "Fix flaky sysload test", "type": "investigation", "brief": "investigation",
+      "id": "fix-flaky-sysload", "title": "Fix flaky sysload test", "type": "investigation", "playbook": "investigation",
       "owner": "rex", "column": "working", "labels": ["tests", "flake"],
       "attributes": { "repo": "bridge-commander", "session": "bc-w-flaky" },
       "body": "`test/sysload.test.js` fails ~1/400 locally, more in CI shard 3. Find it, pin it, fix it.",
@@ -290,7 +290,7 @@
       "threadStart": "T-1200"
     },
     {
-      "id": "dashboard-dark-mode", "title": "Dashboard dark mode", "type": "implementation", "brief": "default",
+      "id": "dashboard-dark-mode", "title": "Dashboard dark mode", "type": "implementation", "playbook": "default",
       "owner": "ada", "column": "working", "labels": ["ux"],
       "attributes": { "repo": "bridge-commander" },
       "body": "Palette tokens + `prefers-color-scheme` + the theme toggle. Ada's card — her session died mid-turn (fixture gnarly state: expired worker lease, dead lieutenant).",
@@ -307,7 +307,7 @@
       "threadStart": "T-90000"
     },
     {
-      "id": "lifecycle-hooks-polish", "title": "Card-lifecycle hooks polish", "type": "implementation", "brief": "default",
+      "id": "lifecycle-hooks-polish", "title": "Card-lifecycle hooks polish", "type": "implementation", "playbook": "default",
       "owner": "monica", "column": "review", "labels": ["hooks"],
       "attributes": {
         "repo": "bridge-commander",
@@ -339,7 +339,7 @@
       "threadStart": "T-129000"
     },
     {
-      "id": "archive-sweep-cron", "title": "Archive sweep cron", "type": "implementation", "brief": "default",
+      "id": "archive-sweep-cron", "title": "Archive sweep cron", "type": "implementation", "playbook": "default",
       "owner": "quill", "column": "review", "labels": ["infra"],
       "attributes": {
         "repo": "bridge-commander",

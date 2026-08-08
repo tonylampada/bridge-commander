@@ -433,11 +433,11 @@ function createDevServer(opts) {
         if (ttsUrl) cfg.tts = { enabled: true, url: ttsUrl, lang: 'pt', voice: null, params: {} };
         return sendJson(res, 200, cfg);
       }
-      // brief templates — the playground serves the PACKAGED ids, which is what
+      // playbooks — the playground serves the PACKAGED ids, which is what
       // a fresh workspace gets seeded with.
-      if (route === 'GET /api/briefs') {
-        const { listBriefs } = require(path.join(__dirname, '..', 'server', 'brief.js'));
-        return sendJson(res, 200, { briefs: listBriefs('/fake/ws/.bridge-commander'), dir: '/fake/ws/.bridge-commander/briefs' });
+      if (route === 'GET /api/playbooks') {
+        const { listPlaybooks } = require(path.join(__dirname, '..', 'server', 'playbooks.js'));
+        return sendJson(res, 200, { playbooks: listPlaybooks('/fake/ws/.bridge-commander'), dir: '/fake/ws/.bridge-commander/playbooks' });
       }
       if (route === 'GET /api/status') {
         return sendJson(res, 200, {
@@ -578,7 +578,7 @@ function createDevServer(opts) {
         const card = {
           id: slug(title), title, type: ['plan', 'implementation', 'investigation'].includes(body.type) ? body.type : 'implementation',
           owner: body.owner, column: COLUMNS.some((k) => k.id === body.column) ? body.column : 'backlog',
-          brief: String(body.brief || ''),
+          playbook: String(body.playbook || ''),
           labels: [], attributes: Object.assign({ repo: 'bridge-commander' }, body.attributes || {}),
           body: String(body.body || ''), created: now(), updated: now(),
           events: [], thread: [],
@@ -593,7 +593,7 @@ function createDevServer(opts) {
         const card = findCard(decodeURIComponent(m[1]));
         if (!card) return sendJson(res, 404, { error: 'unknown card' });
         const body = JSON.parse(await readBody(req) || '{}');
-        for (const k of ['title', 'body', 'brief']) if (typeof body[k] === 'string') card[k] = body[k];
+        for (const k of ['title', 'body', 'playbook']) if (typeof body[k] === 'string') card[k] = body[k];
         if (typeof body.owner === 'string' && findLt(body.owner)) card.owner = body.owner;
         if (['plan', 'implementation', 'investigation'].includes(body.type)) card.type = body.type;
         if (Array.isArray(body.labels)) {

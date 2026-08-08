@@ -1,21 +1,21 @@
 'use strict';
-// brief.js — the brief is a markdown template the USER owns, rendered against
-// the card at card.start. These tests pin the renderer: which template wins,
-// what a placeholder resolves to, and what happens to one that resolves to
-// nothing.
+// playbooks.js — a playbook is a markdown file the USER owns, rendered against
+// the card at card.start into the worker's brief. These tests pin the
+// renderer: which playbook wins, what a placeholder resolves to, and what
+// happens to one that resolves to nothing.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  workerBrief, render, listBriefs, resolveBrief, briefsDir, seedBriefsAndDuties, parseBrief,
-  PACKAGED_BRIEFS_DIR, PACKAGED_SKILL_DIR,
-} = require('../server/brief.js');
+  workerBrief, render, listPlaybooks, resolvePlaybook, playbooksDir, seedPlaybooksAndDuties, parsePlaybook,
+  PACKAGED_PLAYBOOKS_DIR, PACKAGED_SKILL_DIR,
+} = require('../server/playbooks.js');
 
 function tmpState(files) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-briefs-'));
-  const bd = path.join(dir, 'briefs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-playbooks-'));
+  const bd = path.join(dir, 'playbooks');
   fs.mkdirSync(bd, { recursive: true });
   for (const [name, body] of Object.entries(files || {})) fs.writeFileSync(path.join(bd, name), body);
   return dir;
@@ -35,57 +35,58 @@ function brief(template, overrides = {}) {
   }, overrides));
 }
 
-// ---------- the template list ----------
+// ---------- the playbook list ----------
 
-test('templates come from the workspace first, packaged second; README is not one', () => {
-  const dir = tmpState({ 'house-style.md': '# ours\n', 'README.md': 'docs, not a template\n' });
-  const ids = listBriefs(dir);
-  assert.ok(ids.includes('house-style'), 'the workspace template lists');
-  assert.ok(ids.includes('default'), 'a packaged template the workspace never seeded still lists');
+test('playbooks come from the workspace first, packaged second; README is not one', () => {
+  const dir = tmpState({ 'house-style.md': '# ours\n', 'README.md': 'docs, not a playbook\n' });
+  const ids = listPlaybooks(dir);
+  assert.ok(ids.includes('house-style'), 'the workspace playbook lists');
+  assert.ok(ids.includes('default'), 'a packaged playbook the workspace never seeded still lists');
   assert.ok(ids.includes('no-mistakes'));
-  assert.ok(!ids.includes('README'), 'README documents the folder — it is not a flavour of SDLC');
+  assert.ok(!ids.includes('README'), 'README documents the folder — it is not a playbook');
   assert.deepStrictEqual(ids, [...ids].sort(), 'sorted, so the dropdown is stable');
-  assert.strictEqual(resolveBrief(dir, 'README'), '', 'and it never resolves as an id either');
+  assert.strictEqual(resolvePlaybook(dir, 'README'), '', 'and it never resolves as an id either');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('a workspace file wins over the packaged one of the same name — an upgrade never overwrites an edit', () => {
   const dir = tmpState({ 'default.md': 'MY default\n' });
-  assert.strictEqual(resolveBrief(dir, 'default'), path.join(briefsDir(dir), 'default.md'));
-  assert.strictEqual(fs.readFileSync(resolveBrief(dir, 'default'), 'utf8'), 'MY default\n');
+  assert.strictEqual(resolvePlaybook(dir, 'default'), path.join(playbooksDir(dir), 'default.md'));
+  assert.strictEqual(fs.readFileSync(resolvePlaybook(dir, 'default'), 'utf8'), 'MY default\n');
   // one it has NOT overridden still resolves, to the packaged copy
-  assert.strictEqual(resolveBrief(dir, 'investigation'),
-    path.join(PACKAGED_BRIEFS_DIR, 'investigation.md'));
+  assert.strictEqual(resolvePlaybook(dir, 'investigation'),
+    path.join(PACKAGED_PLAYBOOKS_DIR, 'investigation.md'));
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('an unknown id resolves to nothing, and so does a path dressed up as one', () => {
   const dir = tmpState({});
-  assert.strictEqual(resolveBrief(dir, 'nope'), '');
-  assert.strictEqual(resolveBrief(dir, ''), '');
-  assert.strictEqual(resolveBrief(dir, '../../etc/passwd'), '');
-  assert.strictEqual(resolveBrief(dir, 'sub/dir'), '');
+  assert.strictEqual(resolvePlaybook(dir, 'nope'), '');
+  assert.strictEqual(resolvePlaybook(dir, ''), '');
+  assert.strictEqual(resolvePlaybook(dir, '../../etc/passwd'), '');
+  assert.strictEqual(resolvePlaybook(dir, 'sub/dir'), '');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ---------- frontmatter ----------
 //
-// A brief is a flavour of SDLC, and part of that flavour is what RUNS it. The
-// block is four optional keys and deliberately not yaml — what is pinned here
-// is that a template without one is untouched, and that everything the parser
-// does not understand becomes an error naming the line rather than a guess.
+// A playbook is a repeatable procedure, and part of the procedure is what RUNS
+// it. The block is four optional keys and deliberately not yaml — what is
+// pinned here is that a playbook without one is untouched, and that everything
+// the parser does not understand becomes an error naming the line rather than
+// a guess.
 
 test('no frontmatter = the body is the file, untouched', () => {
   const md = '# Title\n\nnot frontmatter: this is prose\n';
-  assert.deepStrictEqual(parseBrief(md), { meta: {}, body: md });
-  assert.deepStrictEqual(parseBrief(''), { meta: {}, body: '' });
+  assert.deepStrictEqual(parsePlaybook(md), { meta: {}, body: md });
+  assert.deepStrictEqual(parsePlaybook(''), { meta: {}, body: '' });
   // a --- that is not on line 1 is a horizontal rule, not an opening delimiter
   const rule = 'intro\n\n---\nharness: codex\n---\n';
-  assert.deepStrictEqual(parseBrief(rule), { meta: {}, body: rule });
+  assert.deepStrictEqual(parsePlaybook(rule), { meta: {}, body: rule });
 });
 
 test('the four keys parse to their types, and the body starts after the closing ---', () => {
-  const { meta, body } = parseBrief([
+  const { meta, body } = parsePlaybook([
     '---',
     'harness: codex',
     'model: gpt-5.6-sol',
@@ -105,7 +106,7 @@ test('the four keys parse to their types, and the body starts after the closing 
 });
 
 test('the small mercies: blank lines, quotes, an empty list, a lone required name', () => {
-  const { meta } = parseBrief([
+  const { meta } = parsePlaybook([
     '---',
     'harness: claude',
     '',
@@ -116,11 +117,11 @@ test('the small mercies: blank lines, quotes, an empty list, a lone required nam
     'body',
   ].join('\n'));
   assert.deepStrictEqual(meta, { harness: 'claude', model: 'claude-opus-5', requires: [], branch: true });
-  assert.deepStrictEqual(parseBrief('---\nrequires: pr_url\n---\nb').meta.requires, ['pr_url']);
+  assert.deepStrictEqual(parsePlaybook('---\nrequires: pr_url\n---\nb').meta.requires, ['pr_url']);
 });
 
 test('a malformed block fails with the offending line named', () => {
-  const bad = (lines, re) => assert.throws(() => parseBrief(lines.join('\n')), re);
+  const bad = (lines, re) => assert.throws(() => parsePlaybook(lines.join('\n')), re);
   bad(['---', 'harness: codex', 'this is prose', '---', 'b'], /line 3: expected `key: value`.*this is prose/);
   bad(['---', 'hraness: codex', '---', 'b'], /line 2: unknown key "hraness"/);
   bad(['---', 'branch: nope', '---', 'b'], /line 2: branch takes true or false/);
@@ -144,18 +145,18 @@ test('a malformed block fails with the offending line named', () => {
 });
 
 // A first line of `---` is an opening delimiter here and a horizontal rule in
-// every template written before this existed, so both ways the block can fail
+// every playbook written before this existed, so both ways the block can fail
 // have to name the way out — the line alone leaves the author guessing.
 test('a block opened by a first-line --- says how to make it a rule again', () => {
   const hint = /horizontal rule.*heading or a blank line above it/;
-  assert.throws(() => parseBrief(['---', 'harness: codex'].join('\n')), hint);
-  assert.throws(() => parseBrief(['---', '***', '---', 'b'].join('\n')), hint);
+  assert.throws(() => parsePlaybook(['---', 'harness: codex'].join('\n')), hint);
+  assert.throws(() => parsePlaybook(['---', '***', '---', 'b'].join('\n')), hint);
 });
 
-test('every packaged template has a parseable block, and investigation is the one that cuts no branch', () => {
-  for (const f of fs.readdirSync(PACKAGED_BRIEFS_DIR)) {
+test('every packaged playbook has a parseable block, and investigation is the one that cuts no branch', () => {
+  for (const f of fs.readdirSync(PACKAGED_PLAYBOOKS_DIR)) {
     if (!f.endsWith('.md') || f === 'README.md') continue;
-    const { meta } = parseBrief(fs.readFileSync(path.join(PACKAGED_BRIEFS_DIR, f), 'utf8'));
+    const { meta } = parsePlaybook(fs.readFileSync(path.join(PACKAGED_PLAYBOOKS_DIR, f), 'utf8'));
     const want = f === 'investigation.md' ? { branch: false } : {};
     assert.deepStrictEqual(meta, want, f + ' frontmatter');
   }
@@ -177,10 +178,10 @@ test('every documented placeholder resolves, and nothing is left unrendered', ()
   assert.doesNotMatch(out, /\{\{/);
 });
 
-test('the packaged templates render with no {{ left in them', () => {
-  for (const f of fs.readdirSync(PACKAGED_BRIEFS_DIR)) {
+test('the packaged playbooks render with no {{ left in them', () => {
+  for (const f of fs.readdirSync(PACKAGED_PLAYBOOKS_DIR)) {
     if (!f.endsWith('.md') || f === 'README.md') continue;
-    const out = brief(fs.readFileSync(path.join(PACKAGED_BRIEFS_DIR, f), 'utf8'), {
+    const out = brief(fs.readFileSync(path.join(PACKAGED_PLAYBOOKS_DIR, f), 'utf8'), {
       card: {
         id: 'MON-9', title: 'Demo card', type: 'implementation', body: 'do the thing',
         attributes: { pr_url: 'https://x/1', pr_number: '1', repo_slug: 'o/r' },
@@ -237,7 +238,7 @@ test('{{BRANCH}} is empty for a card with no branch (an investigation), not the 
   assert.strictEqual(brief('[{{BRANCH}}]', { branch: '' }), '[]');
 });
 
-test('{{CLI}} carries --workspace, so a template can paste it in front of any verb', () => {
+test('{{CLI}} carries --workspace, so a playbook can paste it in front of any verb', () => {
   const out = brief('{{CLI}} worker done {{CARD_ID}} --outcome "x"');
   assert.strictEqual(out, 'bc-axi --workspace /ws worker done MON-9 --outcome "x"');
 });
@@ -249,19 +250,19 @@ test('render() substitutes only what it was given, and leaves the rest alone', (
 
 // ---------- seeding a workspace (workspace.init) ----------
 
-test('init seeds COPIES of the templates and never overwrites one the user edited', () => {
+test('init seeds COPIES of the playbooks and never overwrites one the user edited', () => {
   const dir = tmpState({ 'default.md': 'MY default, do not touch\n' });
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const first = seedBriefsAndDuties(dir, home);
+  const first = seedPlaybooksAndDuties(dir, home);
   // the edited one is left alone; the rest arrive
-  assert.ok(!first.briefs.includes('default.md'), 'an existing file is not re-seeded');
-  assert.ok(first.briefs.includes('no-mistakes.md'));
-  assert.strictEqual(fs.readFileSync(path.join(briefsDir(dir), 'default.md'), 'utf8'), 'MY default, do not touch\n');
+  assert.ok(!first.playbooks.includes('default.md'), 'an existing file is not re-seeded');
+  assert.ok(first.playbooks.includes('no-mistakes.md'));
+  assert.strictEqual(fs.readFileSync(path.join(playbooksDir(dir), 'default.md'), 'utf8'), 'MY default, do not touch\n');
   // copies, not symlinks: editing one must not write into the install
-  assert.ok(!fs.lstatSync(path.join(briefsDir(dir), 'no-mistakes.md')).isSymbolicLink());
+  assert.ok(!fs.lstatSync(path.join(playbooksDir(dir), 'no-mistakes.md')).isSymbolicLink());
 
   // idempotent — a re-run (an upgrade, a second init) copies nothing
-  assert.deepStrictEqual(seedBriefsAndDuties(dir, home).briefs, []);
+  assert.deepStrictEqual(seedPlaybooksAndDuties(dir, home).playbooks, []);
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -271,26 +272,26 @@ test('init SYMLINKS the worker-duties skill, repoints a stale link, and leaves a
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
   const skillDst = path.join(home, '.claude', 'skills', 'bridge-commander-worker');
 
-  const r = seedBriefsAndDuties(dir, home);
+  const r = seedPlaybooksAndDuties(dir, home);
   assert.strictEqual(r.skill, skillDst);
   assert.ok(fs.lstatSync(skillDst).isSymbolicLink(), 'a symlink, so an upgrade upgrades the duties');
   assert.strictEqual(fs.readlinkSync(skillDst), PACKAGED_SKILL_DIR);
   assert.match(fs.readFileSync(path.join(skillDst, 'SKILL.md'), 'utf8'), /name: bridge-commander-worker/);
 
   // already ours and pointing right: nothing to do
-  assert.strictEqual(seedBriefsAndDuties(dir, home).skill, '');
+  assert.strictEqual(seedPlaybooksAndDuties(dir, home).skill, '');
 
   // a link left by an older checkout is repointed at the current one
   fs.unlinkSync(skillDst);
   fs.symlinkSync(path.join(home, 'somewhere-else'), skillDst, 'dir');
-  assert.strictEqual(seedBriefsAndDuties(dir, home).skill, skillDst);
+  assert.strictEqual(seedPlaybooksAndDuties(dir, home).skill, skillDst);
   assert.strictEqual(fs.readlinkSync(skillDst), PACKAGED_SKILL_DIR);
 
   // a REAL directory is someone's own install — never clobbered
   fs.unlinkSync(skillDst);
   fs.mkdirSync(skillDst);
   fs.writeFileSync(path.join(skillDst, 'SKILL.md'), 'hand-rolled\n');
-  assert.strictEqual(seedBriefsAndDuties(dir, home).skill, '');
+  assert.strictEqual(seedPlaybooksAndDuties(dir, home).skill, '');
   assert.strictEqual(fs.readFileSync(path.join(skillDst, 'SKILL.md'), 'utf8'), 'hand-rolled\n');
 
   fs.rmSync(dir, { recursive: true, force: true });

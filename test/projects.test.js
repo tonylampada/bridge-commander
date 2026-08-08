@@ -2,7 +2,7 @@
 // F6 — the project registry: workspace.addProject clones into
 // <workspace>/projects/<name> and records {name, path}; the registry is board
 // state (survives restarts) and gates card.start. There is no delivery mode on
-// a project — how finished work leaves the worktree is the CARD's brief.
+// a project — how finished work leaves the worktree is the CARD's playbook.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

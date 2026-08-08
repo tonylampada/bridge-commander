@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, listBriefs, resolveBrief, parseBrief, attrVar, attrCardKey } = require(path.join(__dirname, 'brief.js'));
+const { workerBrief, listPlaybooks, resolvePlaybook, parsePlaybook, attrVar, attrCardKey } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -285,7 +285,7 @@ function normalizeBoard(doc) {
   // projects: the registered-repo registry; workers: the live worker-ref registry
   // (both survive restarts — board is truth). Odd shapes are dropped. A `mode`
   // left over from delivery modes is ignored and dropped on the next write:
-  // the card's brief chooses the delivery contract now.
+  // the card's playbook chooses the delivery contract now.
   if (!Array.isArray(b.projects)) b.projects = [];
   b.projects = b.projects.filter((p) => p && typeof p === 'object'
     && typeof p.name === 'string' && p.name
@@ -299,9 +299,9 @@ function normalizeBoard(doc) {
     if (!Array.isArray(c.labels)) c.labels = [];
     if (!c.attributes || typeof c.attributes !== 'object') c.attributes = {};
     if (!CARD_TYPES.includes(c.type)) c.type = 'implementation';
-    // brief: the id of a template in briefs/, or '' — cards that predate it
-    // have none and cannot start until one is set (card patch --brief <id>).
-    if (typeof c.brief !== 'string') c.brief = '';
+    // playbook: the id of a file in playbooks/, or '' — cards that predate it
+    // have none and cannot start until one is set (card patch --playbook <id>).
+    if (typeof c.playbook !== 'string') c.playbook = '';
     if (!b.columns.some((k) => k.id === c.column)) c.column = 'backlog';
     if (c.pendingOrder && !(typeof c.pendingOrder === 'object' && c.pendingOrder.kind)) c.pendingOrder = null;
     // status: keep only a valid persisted worker lease; an absent status stays
@@ -1426,21 +1426,22 @@ function notificationItems(user) {
 }
 
 // ---------- card mutations ----------
-// A card's `brief` is the id of a markdown template under briefs/ — a pointer,
-// never text. Validated where it is SET so a typo is caught at the keyboard
-// rather than at card.start; '' clears it (and a card with none never starts).
-function briefsHint() {
-  const ids = listBriefs(STATE_DIR);
+// A card's `playbook` is the id of a markdown file under playbooks/ — a
+// pointer, never text. Validated where it is SET so a typo is caught at the
+// keyboard rather than at card.start; '' clears it (and a card with none never
+// starts).
+function playbooksHint() {
+  const ids = listPlaybooks(STATE_DIR);
   return ids.length ? ids.join(', ') : '(none — seed them with bc-axi init)';
 }
-function checkBrief(raw) {
+function checkPlaybook(raw) {
   const id = String(raw || '').trim();
-  if (!id) return { brief: '' };
-  if (!resolveBrief(STATE_DIR, id)) {
-    return { error: 'unknown brief: ' + id + ' — templates in ' + path.join(STATE_DIR, 'briefs')
-      + ': ' + briefsHint() };
+  if (!id) return { playbook: '' };
+  if (!resolvePlaybook(STATE_DIR, id)) {
+    return { error: 'unknown playbook: ' + id + ' — playbooks in ' + path.join(STATE_DIR, 'playbooks')
+      + ': ' + playbooksHint() };
   }
-  return { brief: id };
+  return { playbook: id };
 }
 function createCard(body, actorDefault) {
   const title = String(body.title || '').trim();
@@ -1451,8 +1452,8 @@ function createCard(body, actorDefault) {
   if (!lt) return { error: 'unknown lieutenant: ' + owner };
   const type = body.type ? String(body.type) : 'implementation';
   if (!CARD_TYPES.includes(type)) return { error: 'bad type (use ' + CARD_TYPES.join('|') + ')' };
-  const bc = checkBrief(body.brief);
-  if (bc.error) return { error: bc.error };
+  const pb = checkPlaybook(body.playbook);
+  if (pb.error) return { error: pb.error };
   // No id given: the owner mints the next one from its own counter. The counter
   // advances only when the card is actually born (below).
   const minted = body.id ? 0 : (Number.isInteger(lt.cardSeq) ? lt.cardSeq : 0) + 1;
@@ -1479,7 +1480,7 @@ function createCard(body, actorDefault) {
   if (column !== 'backlog') return { error: 'cards are born in Backlog only — create it there and move it after' };
   const actor = String(body.actor || actorDefault || 'agent').slice(0, 60);
   const card = {
-    id, title: title.slice(0, 200), type, owner, column, brief: bc.brief,
+    id, title: title.slice(0, 200), type, owner, column, playbook: pb.playbook,
     labels: Array.isArray(body.labels) ? body.labels.filter((l) => typeof l === 'string' && l) : [],
     attributes: (body.attributes && typeof body.attributes === 'object') ? body.attributes : {},
     body: typeof body.body === 'string' ? body.body : '',
@@ -1572,10 +1573,10 @@ function patchCard(card, body) {
         { actor: body.actor, text: 'owner: ' + prev + ' → ' + newOwner }, { kind: 'moved' }));
     }
   }
-  if (body.brief !== undefined) {
-    const bc = checkBrief(body.brief);
-    if (bc.error) return { error: bc.error };
-    card.brief = bc.brief;
+  if (body.playbook !== undefined) {
+    const pb = checkPlaybook(body.playbook);
+    if (pb.error) return { error: pb.error };
+    card.playbook = pb.playbook;
   }
   if (body.title !== undefined) card.title = String(body.title).slice(0, 200);
   if (body.body !== undefined) card.body = String(body.body);
@@ -1704,7 +1705,7 @@ function restoreCard(id, body) {
   if (!Array.isArray(card.labels)) card.labels = [];
   if (!card.attributes || typeof card.attributes !== 'object') card.attributes = {};
   if (!CARD_TYPES.includes(card.type)) card.type = 'implementation';
-  if (typeof card.brief !== 'string') card.brief = ''; // frozen before briefs existed
+  if (typeof card.playbook !== 'string') card.playbook = ''; // frozen before playbooks existed
   card.status = { worker: null }; // the lease starts absent until the next status.set
   card.pendingOrder = null;
   // Working ⇔ live worker: a frozen Working snapshot restores workerless, so
@@ -1728,7 +1729,7 @@ function restoreCard(id, body) {
 // workspace.addProject: clone the repo into <workspace>/projects/<name> and
 // record {name, path}. A card's `repo` attribute must name a registered
 // project for card.start to provision its worker a worktree. How finished work
-// leaves the worktree is the CARD's brief, not a property of the repo.
+// leaves the worktree is the CARD's playbook, not a property of the repo.
 function findProject(name) { return board.projects.find((p) => p.name === name); }
 const addingProjects = new Set(); // names with a clone in flight (async clone opens racing duplicate adds)
 async function addProject(body) {
@@ -1944,10 +1945,10 @@ async function doStartCard(card, body) {
   if (card.type === 'plan') return { error: 'plan cards never start (no worker is spawned for a plan)' };
   // The second way a card could start is GONE, not merely unsupported. A wire
   // caller that still asks for it gets told so — silently spawning an agent on
-  // the brief instead would be the opposite of what it asked for.
+  // the playbook instead would be the opposite of what it asked for.
   if (body && body.command !== undefined) {
-    return { error: '--command was removed: a card starts one way, from its brief. '
-      + 'Pick one with: bc-axi card patch ' + card.id + ' --brief <id>', code: 400 };
+    return { error: '--command was removed: a card starts one way, from its playbook. '
+      + 'Pick one with: bc-axi card patch ' + card.id + ' --playbook <id>', code: 400 };
   }
 
   const existing = findWorker(card.id);
@@ -2000,42 +2001,42 @@ async function doStartCard(card, body) {
   const project = findProject(String(repoAttr));
   if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path>)' };
 
-  // The brief template is resolved and read HERE — at start, and only here, so
-  // the worker gets the card as it stands and the template as it stands. Every
+  // The playbook is resolved and read HERE — at start, and only here, so the
+  // worker gets the card as it stands and the playbook as it stands. Every
   // start reads it: there is no second way for a card to begin. No fallback
-  // either — a card with no brief does not start.
-  // A template MAY open with frontmatter (server/brief.js) naming what runs it:
-  // harness, model, the attributes it cannot work without, whether it gets a
-  // branch. Parsed here, honored below.
-  const briefId = String(card.brief || '').trim();
-  if (!briefId) {
-    return { error: 'card ' + card.id + ' has no brief — pick a template before starting it: '
-      + 'bc-axi card patch ' + card.id + ' --brief <id>. Available: ' + briefsHint() };
+  // either — a card with no playbook does not start.
+  // A playbook MAY open with frontmatter (server/playbooks.js) naming what runs
+  // it: harness, model, the attributes it cannot work without, whether it gets
+  // a branch. Parsed here, honored below.
+  const playbookId = String(card.playbook || '').trim();
+  if (!playbookId) {
+    return { error: 'card ' + card.id + ' has no playbook — pick one before starting it: '
+      + 'bc-axi card patch ' + card.id + ' --playbook <id>. Available: ' + playbooksHint() };
   }
-  const briefFile = resolveBrief(STATE_DIR, briefId);
-  if (!briefFile) {
-    return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
-      + 'matches. Available: ' + briefsHint() };
+  const playbookFile = resolvePlaybook(STATE_DIR, playbookId);
+  if (!playbookFile) {
+    return { error: 'card ' + card.id + ' points at playbook "' + playbookId + '", which no file '
+      + 'matches. Available: ' + playbooksHint() };
   }
   let raw;
-  try { raw = fs.readFileSync(briefFile, 'utf8'); }
-  catch (e) { return { error: 'brief template unreadable (' + briefFile + '): ' + String((e && e.message) || e), code: 502 }; }
+  try { raw = fs.readFileSync(playbookFile, 'utf8'); }
+  catch (e) { return { error: 'playbook unreadable (' + playbookFile + '): ' + String((e && e.message) || e), code: 502 }; }
   let template = '';
   let meta = {};
-  try { ({ meta, body: template } = parseBrief(raw)); }
-  catch (e) { return { error: 'brief template ' + briefFile + ': ' + String((e && e.message) || e) }; }
-  // `requires` — the attributes this flavour of SDLC cannot work without.
-  // Refused HERE, before a worktree or a session exists: a review brief with
+  try { ({ meta, body: template } = parsePlaybook(raw)); }
+  catch (e) { return { error: 'playbook ' + playbookFile + ': ' + String((e && e.message) || e) }; }
+  // `requires` — the attributes this playbook cannot work without.
+  // Refused HERE, before a worktree or a session exists: a review playbook with
   // no pr_url otherwise renders its unresolved placeholder literally — the
   // right call for a typo — and spawns a worker to discover that for itself.
-  // Matched through brief.js's attrVar(), the same normalisation the
-  // placeholder table uses, so a template asking for PR_URL is answered by
+  // Matched through playbooks.js's attrVar(), the same normalisation the
+  // placeholder table uses, so a playbook asking for PR_URL is answered by
   // the card's pr_url — asking for a name the brief could not have read back
   // is not a requirement anyone means to write.
   //
   // The question here is whether the card CARRIES the thing, not whether it
   // has a text form to render — that second question is briefVars', and it
-  // is why the two rules differ: a review brief demanding "this card has PRs
+  // is why the two rules differ: a review playbook demanding "this card has PRs
   // recorded" is a real requirement even though the recorded list renders
   // into nothing. An empty list, though, carries nothing.
   const have = new Set();
@@ -2054,7 +2055,7 @@ async function doStartCard(card, body) {
   if (missing.length) {
     const ours = missing.filter((k) => BOARD_OWNED_ATTRS.has(k));
     const settable = missing.filter((k) => !BOARD_OWNED_ATTRS.has(k));
-    let err = 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
+    let err = 'card ' + card.id + ' cannot start on playbook "' + playbookId + '": that playbook '
       + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ') + '.';
     if (settable.length) {
       err += ' Set ' + (settable.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch '
@@ -2063,22 +2064,22 @@ async function doStartCard(card, body) {
     if (ours.length) {
       err += ' ' + ours.join(' and ') + ' ' + (ours.length > 1 ? 'are' : 'is')
         + ' recorded by the board itself and never set by hand — the card has to earn '
-        + (ours.length > 1 ? 'them' : 'it') + ' before this brief can run.';
+        + (ours.length > 1 ? 'them' : 'it') + ' before this playbook can run.';
     }
     return { error: err };
   }
-  // Harness precedence: explicit CLI --harness wins, then the template's
+  // Harness precedence: explicit CLI --harness wins, then the playbook's
   // frontmatter, then config/default.
-  const harnessFromTemplate = !(body && body.harness) && !!meta.harness;
+  const harnessFromPlaybook = !(body && body.harness) && !!meta.harness;
   const harnessName = String((body && body.harness)
     || meta.harness || readConfig().harness || 'claude');
   let impl;
-  // A name the template asked for names the template back: otherwise a typo in
-  // one of several templates sends whoever started the card hunting for it.
+  // A name the playbook asked for names the playbook back: otherwise a typo in
+  // one of several playbooks sends whoever started the card hunting for it.
   try { impl = getHarness(harnessName); }
   catch (e) {
     return { error: String((e && e.message) || e)
-      + (harnessFromTemplate ? ' (from brief template ' + briefFile + ')' : '') };
+      + (harnessFromPlaybook ? ' (from playbook ' + playbookFile + ')' : '') };
   }
 
   // A finished previous worker (rework restart): its session must be gone
@@ -2107,7 +2108,7 @@ async function doStartCard(card, body) {
 
   const session = ownerSession(card);
   const window = names.workerWindow(card.id);
-  // Whether the work gets a branch is a DELIVERY contract, so the brief owns
+  // Whether the work gets a branch is a DELIVERY contract, so the playbook owns
   // it: `branch: false` = detached HEAD, nothing to push. With no key, the card
   // type decides as it always has (an investigation delivers a report).
   const cuts = typeof meta.branch === 'boolean' ? meta.branch : card.type !== 'investigation';
@@ -2120,7 +2121,7 @@ async function doStartCard(card, body) {
   const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
   const extraArgs = [];
   // Model precedence mirrors harness: explicit --model wins, else the
-  // template's frontmatter.
+  // playbook's frontmatter.
   const modelHint = (body && body.model) || meta.model;
   if (modelHint) extraArgs.push('--model', String(modelHint));
   if (body && body.effort) extraArgs.push('--effort', String(body.effort));
@@ -3201,12 +3202,12 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, { ok: true, project: r.project });
     }
 
-    // ----- brief templates (the card's `brief` picks one by id) -----
+    // ----- playbooks (the card's `playbook` picks one by id) -----
     // Read off the filesystem on every call, never cached: editing a template
     // (or dropping a new one in) changes the next card started, with no
     // restart, and the dropdown has to say so too.
-    if (route === 'GET /api/briefs') {
-      return sendJson(res, 200, { briefs: listBriefs(STATE_DIR), dir: path.join(STATE_DIR, 'briefs') });
+    if (route === 'GET /api/playbooks') {
+      return sendJson(res, 200, { playbooks: listPlaybooks(STATE_DIR), dir: path.join(STATE_DIR, 'playbooks') });
     }
 
     // ----- board-level events (free-form notify) -----
