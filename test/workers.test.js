@@ -850,6 +850,24 @@ test('--command is gone: the CLI refuses the flag outright', async () => {
   }
 });
 
+// The wire has no unknown-flag guard, so it says it itself. A caller that asks
+// for the second way must not quietly get the first one: spawning an agent on
+// the brief is not what it asked for, and silence would let old callers keep
+// believing the launcher is there.
+test('--command is gone: the API refuses the field by name', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Runner', id: 'apirunner', attributes: { repo: 'proj' } }));
+    const r = await s.api('POST', '/api/cards/apirunner/start', { command: 'node bin/thing.js' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /--command was removed/);
+    assert.match(r.body.error, /--brief/);
+    assert.deepStrictEqual(boardOnDisk(s).workers, []);
+  } finally {
+    await teardown();
+  }
+});
+
 // Finished workers from the retired delivery pipeline ride a `command` ref the
 // registry can no longer resolve. They normalize to DEAD BUT INTACT, and the
 // intact half is the point: the registry entry is the only thing that knows
@@ -908,6 +926,12 @@ test('a retired-harness worker record survives load as dead-but-intact, and its 
     execFileSync('git', ['-C', clone, 'worktree', 'remove', wt.path], { stdio: ['ignore', 'pipe', 'pipe'] });
     oldrunRec.worktree = { path: away, tool: 'git', base: 'origin/main' };
     oldrunRec.ref.cwd = away;
+    // Written LIVE-looking on purpose: `done: false`. Load must not touch it —
+    // a normalization that writes a terminal flag can never be undone, so a
+    // harness that fails to load for one boot would bury a real worker's record.
+    // Dead-ness is derived at the read points, and this row proves the row
+    // itself is left alone.
+    oldrunRec.done = false;
     fs.writeFileSync(bfile, JSON.stringify(b, null, 2));
 
     const s2 = await startServer({
@@ -922,8 +946,8 @@ test('a retired-harness worker record survives load as dead-but-intact, and its 
       await s2.api('POST', '/api/cards/oldrun/events', { text: 'poke', actor: 'test' });
       const kept = boardOnDisk(s).workers.find((w) => w.card === 'oldrun');
       assert.ok(kept, 'the record is KEPT, not dropped');
-      assert.strictEqual(kept.retiredHarness, true, 'marked: its harness retired');
-      assert.strictEqual(kept.done, true, 'and it reads as finished work');
+      assert.ok(!('retiredHarness' in kept), 'and not MARKED either — nothing is written to the row');
+      assert.strictEqual(kept.done, false, 'done is exactly what was on disk: load rewrites nothing');
       assert.strictEqual(kept.worktree.path, away, 'the worktree handle survives — the whole point');
       assert.strictEqual(kept.worktree.tool, 'git', 'tool and all: the card attribute holds only a bare path');
 
@@ -932,12 +956,21 @@ test('a retired-harness worker record survives load as dead-but-intact, and its 
       await sleep(300);
       assert.ok(!(await s2.api('GET', '/api/cards/oldrun')).body.events.some((e) => e.kind === 'worker-died'),
         'the sweep never mistakes a retired record for a crash');
+      assert.strictEqual(boardOnDisk(s).workers.find((w) => w.card === 'oldrun').flagged, undefined,
+        'the sweep wrote nothing to the row either');
       assert.strictEqual((await s2.api('GET', '/api/cards/oldrun')).body.status.worker.state, 'absent');
 
       // resume refuses by name rather than discovering it at the registry
       const r = await s2.api('POST', '/api/cards/oldrun/start', { resume: true });
       assert.strictEqual(r.status, 409, JSON.stringify(r.body));
       assert.match(r.body.error, /retired "command" harness/);
+
+      // and so does a send — pointing at --resume would be a circle, since the
+      // line above is the board refusing exactly that
+      const snd = await s2.api('POST', '/api/cards/oldrun/worker/send', { text: 'carry on' });
+      assert.strictEqual(snd.status, 409, JSON.stringify(snd.body));
+      assert.match(snd.body.error, /retired "command" harness/);
+      assert.doesNotMatch(snd.body.error, /--resume/);
 
       // THE RELEASE. A restart on the card hands releaseWorktree the RECORDED
       // worktree — path, tool and base — which is exactly what a dropped record

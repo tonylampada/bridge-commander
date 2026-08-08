@@ -170,8 +170,8 @@ function getHarness(name) {
 // nothing: a probe that loads tmux machinery to say "yes" is not a probe, and
 // the callers who need this are the ones avoiding a lookup that would throw.
 // A persisted ref naming a harness that has since retired is the case in point —
-// the board marks those dead on load instead of asking the registry for a name
-// it no longer has.
+// the board reads those as dead instead of asking the registry for a name it no
+// longer has, and reads them live again the moment it does.
 function knownHarness(name) {
   return typeof name === 'string' && name.length > 0
     && (registry.has(name) || Object.prototype.hasOwnProperty.call(BUILTINS, name));
