@@ -111,6 +111,26 @@ export function artifactsHtml(arts) {
     }).join('') + '</tbody></table></div>';
 }
 
+// The PLAYBOOK chip on the card detail screen: which playbook card.start
+// renders into the worker's brief. Shown on every card that can start — a card
+// with none does not start, and that has to be visible before the drag, not
+// discovered as an error after it. Plan cards never start, so they have none.
+// `editable` buys the ✎ (the picker over /api/playbooks). It belongs to Backlog
+// and only to Backlog: choosing the playbook is a decision made BEFORE the work,
+// and a card that already started rendered its brief from the playbook it had —
+// repointing it afterwards changes nothing about the running worker while
+// reading as though it did. Outside Backlog (and on frozen snapshots) the chip
+// shows the pointer and offers no editor.
+// Lives here, not in detail.js, for the same reason artifactsHtml does.
+export function playbookAttrHtml(card, editable) {
+  if (card.type === 'plan') return '';
+  return '<span class="attr attr-playbook' + (card.playbook ? '' : ' none') + '" data-card="' + esc(card.id) + '"' +
+    (editable ? '' : ' title="the playbook is picked in Backlog, before the card starts"') + '>' +
+    '<span class="k">playbook</span><span class="v">' + esc(card.playbook || 'none — cannot start') + '</span>' +
+    (editable ? '<button type="button" class="owner-edit" title="pick the playbook">✎</button>' : '') +
+    '</span>';
+}
+
 // Which lines of `next` the other hand touched, as 0-BASED line numbers: trim
 // the identical head and the identical tail, and what is left in the middle is
 // the change. Deliberately not a real diff — nothing here needs to know which

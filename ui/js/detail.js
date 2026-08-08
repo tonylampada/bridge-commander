@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, uriBasename, setHtmlIfChanged, isImageMime } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, uriBasename, setHtmlIfChanged, isImageMime, playbookAttrHtml } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -673,7 +673,9 @@ document.addEventListener('click', (e) => { if (!omEl.hidden && !omEl.contains(e
 const bmEl = document.getElementById('playbook-menu');
 async function openPlaybookMenu(cardId, x, y) {
   const c = card(cardId);
-  if (!c) return;
+  // Backlog only, the same rule the ✎ is drawn by — a card that moved while the
+  // panel was open must not pick up an editor through a stale button.
+  if (!c || c.column !== 'backlog') return;
   bmEl.textContent = '';
   const head = document.createElement('div');
   head.className = 'mm-head';
@@ -796,14 +798,11 @@ export function renderDetail() {
     // Frozen snapshots never offer it: nothing about them is editable.
     (worker || arch ? '' : '<button type="button" class="owner-edit" title="change owner (only while no worker is bound)">✎</button>') +
     '</span>' +
-    // playbook: which one card.start renders. Shown always — a card with
-    // none does not start, and that has to be visible before the drag, not
-    // discovered as an error after it. Frozen snapshots show it, never edit it.
-    (c.type === 'plan' ? '' :
-      '<span class="attr attr-playbook' + (c.playbook ? '' : ' none') + '" data-card="' + esc(c.id) + '">' +
-      '<span class="k">playbook</span><span class="v">' + esc(c.playbook || 'none — cannot start') + '</span>' +
-      (arch ? '' : '<button type="button" class="owner-edit" title="pick the playbook">✎</button>') +
-      '</span>') +
+    // playbook: which one card.start renders. Shown always, editable only in
+    // Backlog — see playbookAttrHtml. The column is in the innerHTML signature
+    // through the chip's own markup, so the ✎ appears and disappears with the
+    // move without a special case here.
+    playbookAttrHtml(c, !arch && c.column === 'backlog') +
     (c.pendingOrder ? '<span class="attr"><span class="k">pending</span><span class="v">⏳ ' + esc(c.pendingOrder.kind) + '</span></span>' : '') +
     Object.entries(at)
       .filter(([k]) => k !== 'emoji' && k !== 'prs' && k !== 'artifacts')
