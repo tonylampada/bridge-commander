@@ -10,7 +10,7 @@ const os = require('node:os');
 const path = require('node:path');
 const {
   workerBrief, render, listPlaybooks, resolvePlaybook, playbooksDir, seedPlaybooksAndDuties, parsePlaybook,
-  PACKAGED_PLAYBOOKS_DIR, PACKAGED_SKILL_DIR,
+  briefVars, PACKAGED_PLAYBOOKS_DIR, PACKAGED_SKILL_DIR, FM_KEYS, PLACEHOLDERS, FRONTMATTER,
 } = require('../server/playbooks.js');
 
 function tmpState(files) {
@@ -299,4 +299,29 @@ test('init SYMLINKS the worker-duties skill, repoints a stale link, and leaves a
 
   fs.rmSync(dir, { recursive: true, force: true });
   fs.rmSync(home, { recursive: true, force: true });
+});
+
+// ---------- the reference the workspace screen shows ----------
+//
+// Two lists documenting the two vocabularies, and the whole point of them is
+// that they cannot drift: they are checked against the code that implements
+// them, so a new placeholder or a new frontmatter key without a line of prose
+// is a red suite, not a stale panel.
+
+test('the documented placeholders are exactly the ones briefVars fills, plus ATTR_<NAME>', () => {
+  const sample = {
+    card: { id: 'MON-9', title: 'Demo card', body: 'do the thing', attributes: {} },
+    thread: [], project: { name: 'proj', path: '/repos/proj' },
+    worktree: '/wt/MON-9', branch: 'bc/MON-9', workspace: '/ws',
+    stateDir: '/ws/.bridge-commander', cli: 'bc-axi',
+  };
+  const documented = PLACEHOLDERS.map((p) => p.name);
+  assert.deepStrictEqual(documented, [...Object.keys(briefVars(sample)), 'ATTR_<NAME>'],
+    'every placeholder the brief renders is documented, in the order it is filled');
+  for (const p of PLACEHOLDERS) assert.ok(p.desc && p.desc.trim(), p.name + ' has a description');
+});
+
+test('the documented frontmatter keys are exactly FM_KEYS', () => {
+  assert.deepStrictEqual(FRONTMATTER.map((f) => f.key), FM_KEYS);
+  for (const f of FRONTMATTER) assert.ok(f.desc && f.desc.trim(), f.key + ' has a description');
 });

@@ -56,6 +56,22 @@ test('GET /api/playbooks says where each playbook comes from and which file won'
   } finally { await s.stop(); }
 });
 
+// Writing a playbook takes two vocabularies — the placeholders and the five
+// frontmatter keys — and the screen can only show them if the answer carries
+// them. They come from server/playbooks.js, which is where the test that keeps
+// them honest lives (playbooks.test.js).
+test('GET /api/playbooks carries the reference the playbooks screen renders', async () => {
+  const { s } = await boot({});
+  try {
+    const { placeholders, frontmatter } = (await s.api('GET', '/api/playbooks')).body.reference;
+    assert.ok(placeholders.length && frontmatter.length, 'both lists are there');
+    assert.ok(placeholders.some((p) => p.name === 'CARD_ID'));
+    assert.ok(frontmatter.some((f) => f.key === 'harness'));
+    for (const p of placeholders) assert.ok(p.name && p.desc.trim(), p.name + ' is described');
+    for (const f of frontmatter) assert.ok(f.key && f.desc.trim(), f.key + ' is described');
+  } finally { await s.stop(); }
+});
+
 test('a workspace playbook reads and writes through the artifact routes, version check and all', async () => {
   const { s, dir } = await boot({ 'default.md': 'first draft\n' });
   try {

@@ -626,6 +626,16 @@ body.resizing { user-select: none; cursor: col-resize; }
   border: 1px solid var(--line); border-radius: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pb-name:hover { color: var(--accent); border-color: var(--accent2); }
 .pb-tag { flex: none; color: var(--faint); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+/* the reference: tight rows, and it scrolls on its own so the playbook list
+   above it keeps its place on a phone */
+#pb-ref { display: flex; flex-direction: column; gap: 2px; max-height: 34vh; overflow-y: auto;
+  border-top: 1px solid var(--line); padding-top: 8px; margin-top: 4px; }
+#pb-ref .ss-title { margin-top: 6px; }
+#pb-ref .ss-title:first-child { margin-top: 0; }
+.pb-ref-note { font-family: inherit; margin-bottom: 2px; }
+.pb-ref-row { display: flex; gap: 6px; align-items: baseline; font-size: 11px; line-height: 1.35; }
+.pb-ref-k { flex: none; font-family: var(--mono); color: var(--accent); }
+.pb-ref-d { color: var(--faint); min-width: 0; overflow-wrap: anywhere; }
 
 #lm-list { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
 .lm-row { display: flex; gap: 6px; align-items: center; }

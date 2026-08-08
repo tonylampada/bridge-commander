@@ -256,3 +256,16 @@ test('…and does exactly what it always did while a switcher mode is up', () =>
     assert.strictEqual(renders.length, before + 1, 'one repaint, as before');
   }
 });
+
+// The panel that says what a playbook may contain: markup here, text on the
+// server (server/playbooks.js), so there is only ever one copy of it.
+test('the playbooks section holds the reference panel, and does not restate its text', () => {
+  const sec = element('ss-playbooks');
+  assert.ok(sec.includes('id="pb-ref"'), 'the reference panel sits in the playbooks section');
+  assert.ok(sec.indexOf('id="pb-list"') < sec.indexOf('id="pb-ref"'), 'under the list');
+  assert.ok(!/CARD_ID|keep_worktree/.test(html), 'the names live on the server, not in the markup');
+
+  const pb = fs.readFileSync(ui('js', 'pbmanager.js'), 'utf8');
+  assert.match(pb, /r\.reference/, 'the section renders what /api/playbooks sent');
+  assert.ok(!/CARD_ID|keep_worktree/.test(pb), 'and holds no second copy of the list');
+});

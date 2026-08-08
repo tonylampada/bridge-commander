@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey } = require(path.join(__dirname, 'playbooks.js'));
+const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -3382,7 +3382,10 @@ const server = http.createServer(async (req, res) => {
         const file = resolvePlaybook(STATE_DIR, id);
         return { id, file, source: path.dirname(file) === dir ? 'workspace' : 'packaged' };
       });
-      return sendJson(res, 200, { playbooks: ids, items, dir });
+      // `reference` is the two vocabularies a playbook is written in, straight
+      // off playbooks.js — the screen renders it, never restates it.
+      return sendJson(res, 200, { playbooks: ids, items, dir,
+        reference: { placeholders: PLACEHOLDERS, frontmatter: FRONTMATTER } });
     }
 
     // ----- board-level events (free-form notify) -----

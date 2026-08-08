@@ -188,6 +188,11 @@
         <div class="ss-title">playbooks</div>
         <div id="pb-list"></div>
         <div id="pb-dir" class="ss-note"></div>
+        <!-- the two vocabularies a playbook is written in, rendered from
+             /api/playbooks `reference` (server/playbooks.js owns the text).
+             Visible without a click, and scrolling on its own so it never
+             pushes the list off a phone screen. -->
+        <div id="pb-ref"></div>
       </section>
     </div>
   </section>

@@ -16,9 +16,11 @@ import { fileNotice } from './filepane.js';
 
 const listEl = document.getElementById('pb-list');
 const dirEl = document.getElementById('pb-dir');
+const refEl = document.getElementById('pb-ref');
 
 let items = null;  // [{id, source, file}] — last answer from the server
 let dir = '';      // where a copy lands
+let reference = null; // {placeholders, frontmatter} — written in server/playbooks.js
 let loading = false;
 
 // Paints from the last answer and fetches when there isn't one. `reload` is
@@ -35,6 +37,7 @@ export async function renderPlaybooks(reload) {
     const r = await api.playbooks();
     items = r.items || [];
     dir = r.dir || '';
+    reference = r.reference || null;
   } catch (e) {
     listEl.textContent = '⚠ ' + e.message;
     return;
@@ -65,6 +68,42 @@ function paint() {
   }
   if (!items.length) listEl.textContent = 'no playbooks';
   dirEl.textContent = dir;
+  paintRef();
+}
+
+// The reference: two blocks of `name — one line`, from the server's own text.
+// One loop, no markdown, nothing restated here — an added placeholder shows up
+// the moment playbooks.js names it.
+function paintRef() {
+  refEl.textContent = '';
+  if (!reference) return;
+  block('placeholders', '{{NAME}} in the playbook, filled at card start. A name that is not one of '
+    + 'these is left in the brief exactly as written.', reference.placeholders, 'name');
+  block('frontmatter', 'an optional --- block at the very top, read by the code that starts the '
+    + 'card. All keys optional.', reference.frontmatter, 'key');
+}
+
+function block(title, note, rows, field) {
+  if (!rows || !rows.length) return;
+  const h = document.createElement('div');
+  h.className = 'ss-title';
+  h.textContent = title;
+  const n = document.createElement('div');
+  n.className = 'ss-note pb-ref-note';
+  n.textContent = note;
+  refEl.append(h, n);
+  for (const r of rows) {
+    const row = document.createElement('div');
+    row.className = 'pb-ref-row';
+    const k = document.createElement('code');
+    k.className = 'pb-ref-k';
+    k.textContent = r[field];
+    const d = document.createElement('span');
+    d.className = 'pb-ref-d';
+    d.textContent = r.desc;
+    row.append(k, d);
+    refEl.appendChild(row);
+  }
 }
 
 async function open(p) {

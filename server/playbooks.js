@@ -220,6 +220,38 @@ function briefVars(b) {
   return vars;
 }
 
+// ---------- the reference the workspace screen shows ----------
+//
+// Editing a playbook takes two vocabularies — the placeholders briefVars()
+// fills and the keys FM_KEYS accepts — and neither is readable from the UI.
+// They live HERE, beside the code that implements them, and go out on
+// GET /api/playbooks. A test pins PLACEHOLDERS to briefVars()'s own keys and
+// FRONTMATTER to FM_KEYS, so adding either without a line here goes red.
+const PLACEHOLDERS = [
+  { name: 'CARD_ID', desc: "the card's id, e.g. MNC-42" },
+  { name: 'CARD_TITLE', desc: "the card's title" },
+  { name: 'TASK', desc: 'the card body; the title when the body is empty' },
+  { name: 'THREAD', desc: "the card's conversation so far, quoted; empty when there is none" },
+  { name: 'PROJECT', desc: "the registered project named by the card's repo attribute" },
+  { name: 'PROJECT_PATH', desc: "the project clone. Not the worker's to touch" },
+  { name: 'WORKTREE', desc: "the worker's own checkout, made at start" },
+  { name: 'BRANCH', desc: "the branch this card's work belongs on" },
+  { name: 'WORKSPACE', desc: "this workspace's root" },
+  { name: 'CLI', desc: 'the full bc-axi --workspace <dir> invocation, to paste in front of any verb' },
+  { name: 'REPORT_FILE', desc: 'where a durable report goes: <state dir>/reports/<CARD_ID>.md' },
+  { name: 'ATTR_<NAME>', desc: 'any card attribute, uppercased: --attr repo=x fills {{ATTR_REPO}}. '
+    + 'Structured attributes (artifacts, prs) have no text form and stay literal' },
+];
+
+const FRONTMATTER = [
+  { key: 'harness', desc: "which agent runs the card (claude, codex); the workspace's own by default" },
+  { key: 'model', desc: 'the model that harness starts on' },
+  { key: 'requires', desc: 'attributes a card must carry, [a, b]. A card missing one is refused '
+    + 'before any worktree exists' },
+  { key: 'branch', desc: 'false for a playbook that ships no code: no branch, no PR' },
+  { key: 'keep_worktree', desc: "true keeps the worker's checkout after the card leaves Working" },
+];
+
 // render(template, vars) — {{NAME}} → its value. An unknown name is left
 // EXACTLY as written: a typo has to be visible in the brief, never silently
 // empty.
@@ -282,4 +314,5 @@ function seedPlaybooksAndDuties(stateDir, home) {
 module.exports = {
   PACKAGED_PLAYBOOKS_DIR, PACKAGED_SKILL_DIR, playbooksDir, listPlaybooks, resolvePlaybook,
   parsePlaybook, attrVar, attrCardKey, briefVars, render, workerBrief, seedPlaybooksAndDuties,
+  FM_KEYS, PLACEHOLDERS, FRONTMATTER,
 };
