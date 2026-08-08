@@ -1896,36 +1896,40 @@ async function fireHooks(event, card, w, opts) {
 // Never throws — every call site observes a lifecycle outcome it must not fail.
 async function releaseCardWorktree(card, w, opts = {}) {
   try {
-    if (opts.honorKeep && w && w.keepWorktree) return;
+    if (opts.honorKeep && w && w.keepWorktree) return null;
     const cur = findWorker(card.id);
-    if (cur && cur !== w) return; // a newer worker holds this card (and its path)
+    if (cur && cur !== w) return null; // a newer worker holds this card (and its path)
     const attrs = (card && card.attributes) || {};
     const wtRec = (w && w.worktree && w.worktree.path) ? w.worktree
       : (attrs.worktree ? { path: String(attrs.worktree), tool: 'git' } : null);
-    if (!wtRec) return;
+    if (!wtRec) return null;
     const project = findProject(String((w && w.project) || attrs.repo || ''));
-    if (!project) return; // no clone to release against — leave the directory alone
+    if (!project) return null; // no clone to release against — leave the directory alone
     const rel = await releaseWorktree(wtRec, project.path);
-    if (rel.released && rel.reason === 'already gone') return; // nothing happened, nothing to say
-    const text = rel.released
-      ? 'worktree released: ' + wtRec.path
-      : 'worktree kept (' + rel.reason + '): ' + wtRec.path;
-    if (!rel.released) console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
-    const ev = mkEvent({ text, actor: 'server' }, { level: 2 });
     const live = findCard(card.id); // archived in the meantime → the board stream carries it
-    if (live) {
-      live.events.push(ev);
-      live.updated = now();
-      // the attribute is a pointer at a directory: a released one has to stop
-      // pointing, or every reader downstream is sent to a path that is gone
-      if (rel.released && live.attributes) delete live.attributes.worktree;
-    } else {
-      ev.card = card.id; ev.cardTitle = card.title;
-      board.events.push(ev);
+    // the attribute is a pointer at a directory: a released one has to stop
+    // pointing, or every reader downstream is sent to a path that is gone —
+    // and `already gone` is the case where the directory is provably absent
+    if (rel.released && live && live.attributes) delete live.attributes.worktree;
+    if (!(rel.released && rel.reason === 'already gone')) { // nothing happened, nothing to say
+      const text = rel.released
+        ? 'worktree released: ' + wtRec.path
+        : 'worktree kept (' + rel.reason + '): ' + wtRec.path;
+      if (!rel.released) console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
+      const ev = mkEvent({ text, actor: 'server' }, { level: 2 });
+      if (live) {
+        live.events.push(ev);
+        live.updated = now();
+      } else {
+        ev.card = card.id; ev.cardTitle = card.title;
+        board.events.push(ev);
+      }
     }
     saveBoard(); broadcast();
+    return rel;
   } catch (e) {
     console.error(now() + ' worktree release for ' + card.id + ' failed: ' + String((e && e.message) || e));
+    return null;
   }
 }
 
@@ -2657,20 +2661,15 @@ async function prWatchTick() {
       const anyOpenLeft = prs.some((p) => p && p.state === 'open');
       if (merged.length && !anyOpenLeft) {
         const w = findWorker(card.id);
-        const project = findProject(w ? w.project : String((card.attributes && card.attributes.repo) || ''));
-        const wtRec = w ? w.worktree
-          : (card.attributes && card.attributes.worktree ? { path: card.attributes.worktree, tool: 'git' } : null);
         let note = merged.map((p) => p.url).join(' ');
         // card-archived hooks run — and finish or time out — BEFORE the
         // worktree release: a hook may need paths inside $BC_WORKTREE.
         await fireHooks('card-archived', card, w, { boardLevel: true });
-        if (wtRec && project) {
-          const rel = await releaseWorktree(wtRec, project.path);
-          if (!rel.released) {
-            note += ' (worktree NOT released: ' + rel.reason + ')';
-            console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
-          }
-        }
+        // the archive record is the only place a merged card's refusal is
+        // readable afterwards, so the reason rides the note as well as the
+        // timeline event the release lands
+        const rel = await releaseCardWorktree(card, w);
+        if (rel && !rel.released) note += ' (worktree NOT released: ' + rel.reason + ')';
         archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
       }
       saveBoard(); broadcast();
@@ -3275,7 +3274,7 @@ const server = http.createServer(async (req, res) => {
         saveBoard(); broadcast();
         // Hooks first, then the release — the ordering guarantee: a hook may
         // still need paths inside $BC_WORKTREE. The card is gone, so nothing
-        // is ever kept here; a worktree already released at `worker done` is a
+        // is ever kept here; a worktree already released at the handoff is a
         // no-op, and an unclean one stays exactly where it is.
         fireHooks('card-archived', card, w, { boardLevel: true })
           .then(() => releaseCardWorktree(card, w));

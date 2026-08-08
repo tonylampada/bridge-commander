@@ -654,7 +654,10 @@ async function cmdMove() {
   const body = { column, actor: opts.actor || 'agent' };
   if (opts.level) body.level = opts.level;
   if (opts.kind) body.kind = opts.kind;
-  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/move', body);
+  // the handoff out of Working awaits the worktree release, which queues behind
+  // whatever else holds the project clone's lock (a concurrent `card start`
+  // fetches and adds a worktree under the same lock) — same budget as start
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/move', body, 180000);
   if (r.ordered) console.log('ordered ' + r.ordered + ' for ' + id + ' (queue seq ' + r.seq + ')');
   else console.log(r.unchanged ? 'already in ' + column : 'moved ' + id + ' -> ' + column);
 }
