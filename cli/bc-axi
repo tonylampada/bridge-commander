@@ -558,14 +558,16 @@ async function cmdShow() {
 async function cmdThread() {
   const target = positional[0];
   if (!target || !TARGET_RE.test(target)) die('usage: bc-axi thread <lieutenant:ID|card:ID>');
-  const b = await request('GET', '/api/board');
   let msgs;
   const lt = /^lieutenant:(.+)$/.exec(target);
   if (lt) {
-    const l = b.lieutenants.find((x) => x.id === lt[1]);
-    if (!l) die('unknown lieutenant: ' + lt[1]);
-    msgs = l.chat || [];
+    // A main chat lives in its own append-only log, and the board payload only
+    // carries the newest slice of it — so the FULL conversation comes from the
+    // file, through /api/chat (limit=0 = all of it).
+    const r = await request('GET', '/api/chat?limit=0&target=' + encodeURIComponent(target));
+    msgs = r.messages || [];
   } else {
+    const b = await request('GET', '/api/board');
     const c = b.cards.find((x) => x.id === target.slice(5));
     if (!c) die('unknown card: ' + target.slice(5));
     msgs = c.thread || [];

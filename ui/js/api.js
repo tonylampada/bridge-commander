@@ -81,6 +81,12 @@ export const api = {
   // write from someone else's.
   saveArtifact: (uri, content, version) => j('PUT', '/api/artifact', { uri, content, version, client: CLIENT_ID }),
   board: () => j('GET', '/api/board'),
+  // older main-chat history, off the lieutenant's append-only log: the board
+  // payload carries only the newest slice, so scrolling up pages backwards from
+  // the oldest message on screen. {messages: [...]} oldest-first; empty past the
+  // beginning of the conversation.
+  chatBefore: (target, before, limit) => j('GET', '/api/chat?target=' + encodeURIComponent(target)
+    + '&before=' + encodeURIComponent(before) + '&limit=' + (limit || 50)),
   // archived (frozen) card snapshots, newest first, paged over the append-only
   // log: {archive: [...], total}; restore resurrects one
   archive: (limit, offset) => j('GET', '/api/archive?limit=' + (limit || 20) + '&offset=' + (offset || 0)),

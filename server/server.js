@@ -4,6 +4,7 @@
 // One workspace = one board. All state lives in <workspace>/.bridge-commander/:
 //   board.json     the board (canonical state of the world)
 //   archive.jsonl  append-only frozen card snapshots (reason: merged|killed)
+//   chat/<lieutenant>.jsonl  append-only lieutenant main chat (the truth; board.json holds none)
 //   config.json    { port, host?, voices?, tts? } — port default 4780, written on first boot
 //   queue/<lieutenant>.jsonl  durable per-lieutenant delivery queue (global seq)
 //   queue/<lieutenant>.ack    committed ack cursor (at-least-once; only ack removes)
@@ -12,7 +13,8 @@
 // Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
 //             columns: fixed frame (backlog | working | review | peer),
-//             lieutenants: [{id, name, color, prefix, cardSeq, avatar?: 0-63, voice?, charter, chat: [{author,text,ts}], created,
+//             lieutenants: [{id, name, color, prefix, cardSeq, avatar?: 0-63, voice?, charter, created,
+//                            chat: [{author,text,ts}]  — NOT stored: the newest CHAT_TAIL of chat/<id>.jsonl, served only,
 //                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
@@ -98,6 +100,7 @@ const BOARD_FILE = path.join(STATE_DIR, 'board.json');
 const ARCHIVE_FILE = path.join(STATE_DIR, 'archive.jsonl');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
 const QUEUE_DIR = path.join(STATE_DIR, 'queue');
+const CHAT_DIR = path.join(STATE_DIR, 'chat');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
 // Chat file uploads. Lives under the workspace .bridge-commander/ (already
 // git-ignored). NOTE: this dir grows unbounded — an upload is never garbage
@@ -112,6 +115,7 @@ const UI_DIR = path.join(__dirname, '..', 'ui');
 // machine must never share it. BC_HARNESS_STATE stays an explicit override.
 const HARNESS_STATE_DIR = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
 fs.mkdirSync(QUEUE_DIR, { recursive: true });
+fs.mkdirSync(CHAT_DIR, { recursive: true });
 fs.mkdirSync(HARNESS_STATE_DIR, { recursive: true });
 fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 
@@ -325,10 +329,23 @@ function loadBoard() {
   catch (e) { return defaultBoard(); }
 }
 let board = loadBoard();
+// What lands on disk: the board MINUS every lieutenant's chat. The main chat is
+// an append-only log of its own (chat/<id>.jsonl, below) — keeping a second copy
+// here is the drift bug, and it is what made every write rewrite megabytes of
+// conversation nobody scrolls to.
+function storedBoard() {
+  return Object.assign({}, board, {
+    lieutenants: board.lieutenants.map((l) => {
+      const copy = Object.assign({}, l);
+      delete copy.chat;
+      return copy;
+    }),
+  });
+}
 function saveBoard() {
   board.updated = now();
   const tmp = BOARD_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(board, null, 2));
+  fs.writeFileSync(tmp, JSON.stringify(storedBoard(), null, 2));
   fs.renameSync(tmp, BOARD_FILE);
 }
 
@@ -613,6 +630,8 @@ async function retireLieutenant(id, body) {
   try { fs.unlinkSync(queueFile(id)); } catch (e) { /* none */ }
   try { fs.unlinkSync(ackFile(id)); } catch (e) { /* none */ }
   try { fs.unlinkSync(drainedFile(id)); } catch (e) { /* none */ }
+  // …and so does its conversation, which used to leave with the record itself.
+  try { fs.unlinkSync(chatFile(id)); } catch (e) { /* none */ }
   const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' retired',
     actor: (body && body.actor) || 'user', level: 1 }, {});
   board.events.push(ev);
@@ -706,6 +725,70 @@ function commitAck(seq, ownerId) {
     return { ok: true, lieutenant: lt, ack: Math.max(cur, seq) };
   }
   return { error: 'unknown seq: ' + seq, code: 400 };
+}
+
+// ---------- lieutenant main chat (append-only files; the FILE is truth) ----------
+// One jsonl per lieutenant, written exactly the way archive.jsonl and the
+// delivery queues are: one message per line, appended, never rewritten. A
+// message is durable the moment the line lands — a crash before the next
+// saveBoard() loses nothing, because the board stores no chat at all.
+// The server keeps the newest CHAT_TAIL per lieutenant in memory (lt.chat, read
+// from the file at boot) and that is what GET /api/board ships; everything
+// older is paged in over GET /api/chat. No index, no compaction: reading the
+// whole file is a boot/paging cost, and the hot path (append) never reads it.
+// Card threads are NOT here — they die with their card, so board.json is still
+// the right home for them.
+const CHAT_TAIL = 50;
+function chatFile(lt) { return path.join(CHAT_DIR, lt + '.jsonl'); }
+function readChatLog(lt) {
+  try {
+    return fs.readFileSync(chatFile(lt), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  } catch (e) { return []; }
+}
+// The one writer. Appends the line, then extends the in-memory tail — so the
+// served board reflects the message without re-reading the file.
+function chatAppend(ltId, msg) {
+  fs.appendFileSync(chatFile(ltId), JSON.stringify(msg) + '\n');
+  const lt = findLieutenant(ltId);
+  if (lt) {
+    if (!Array.isArray(lt.chat)) lt.chat = [];
+    lt.chat.push(msg);
+    if (lt.chat.length > CHAT_TAIL) lt.chat.splice(0, lt.chat.length - CHAT_TAIL);
+  }
+  return msg;
+}
+// A page of history, oldest-last (the order the pane renders). `before` is the
+// ts of the oldest message the caller already has — strictly older messages are
+// returned, so paging walks backwards; past the beginning the page is empty.
+// limit <= 0 means the whole conversation (what `bc-axi thread` asks for).
+function chatPage(ltId, before, limit) {
+  let all = readChatLog(ltId);
+  if (before) all = all.filter((m) => m && m.ts && m.ts < before);
+  return limit > 0 ? all.slice(-limit) : all;
+}
+function chatTail(ltId, n) { return chatPage(ltId, '', n); }
+// Boot migration, once: a lieutenant that still carries `chat` in board.json
+// gets it appended to its file in order, and the key is dropped by the save
+// (storedBoard strips it). The second boot reads a board with no chat key at
+// all, so it appends nothing — normalizeBoard leaves an empty array behind.
+{
+  let migrated = 0, carried = false;
+  for (const lt of board.lieutenants) {
+    const stored = Array.isArray(lt.chat) ? lt.chat : [];
+    if (stored.length) carried = true;
+    // The file's existence IS the "already migrated" mark, and it appears whole
+    // (write + rename) or not at all — so a crash anywhere in here can never
+    // double his history on the next boot, and never truncate it either.
+    if (stored.length && !fs.existsSync(chatFile(lt.id))) {
+      const tmp = chatFile(lt.id) + '.tmp';
+      fs.writeFileSync(tmp, stored.map((m) => JSON.stringify(m) + '\n').join(''));
+      fs.renameSync(tmp, chatFile(lt.id));
+      migrated += stored.length;
+    }
+    lt.chat = chatTail(lt.id, CHAT_TAIL);
+  }
+  if (migrated) console.log('[bridge-commander] moved ' + migrated + ' lieutenant chat message(s) out of board.json');
+  if (carried) saveBoard(); // drops the key even when the file was already there
 }
 
 // ---------- wakes (the send half of delivery; the queue is truth) ----------
@@ -1175,6 +1258,9 @@ function resolveAttachments(list) {
 }
 function findCard(id) { return board.cards.find((c) => c.id === id); }
 // Chat targets: lieutenant:<id> (main chat) | card:<id> (card thread).
+// What a target's thread READS as. A card thread is the stored array itself; a
+// lieutenant's is the in-memory tail of its log — a view, never something to
+// push() to. Everything that adds a message goes through appendMessage below.
 function threadFor(target) {
   let m = /^lieutenant:(.+)$/.exec(target || '');
   if (m) {
@@ -1186,6 +1272,24 @@ function threadFor(target) {
   if (m) {
     const card = findCard(m[1]);
     if (card) return (card.thread = card.thread || []);
+  }
+  return null;
+}
+// The one door a chat message goes in by: a lieutenant main chat appends to its
+// own append-only log, a card thread pushes to the card. Returns the message,
+// or null when the target does not exist.
+function appendMessage(target, msg) {
+  let m = /^lieutenant:(.+)$/.exec(target || '');
+  if (m) {
+    const lt = findLieutenant(m[1]);
+    return lt ? chatAppend(lt.id, msg) : null;
+  }
+  m = /^card:(.+)$/.exec(target || '');
+  if (m) {
+    const card = findCard(m[1]);
+    if (!card) return null;
+    (card.thread = card.thread || []).push(msg);
+    return msg;
   }
   return null;
 }
@@ -1288,14 +1392,14 @@ async function resetLieutenant(id) {
 // command and its reply land in the thread — nothing rides the delivery queue
 // (no wake, no owed). Unknown commands and missing sessions answer in-thread
 // too (a composer conversation, not an HTTP failure).
-async function runChatCommand(target, thread, text) {
+async function runChatCommand(target, text) {
   // command messages carry `cmd` metadata the UI keys off for its console-style
   // rendering: the request (cmd.name only) and its reply (cmd.reply true). The
   // /status reply additionally carries the structured `status` payload so the UI
   // renders a real progress bar instead of regex-parsing the formatted prose.
   const stamp = (author, t, cmd, extra) => {
     const msg = Object.assign({ author, text: t, ts: now(), cmd }, extra || {});
-    thread.push(msg);
+    appendMessage(target, msg);
     const m = /^card:(.+)$/.exec(target);
     if (m) {
       const card = findCard(m[1]);
@@ -3491,11 +3595,28 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- chat -----
+    // Older history, straight off the append-only log: the board payload carries
+    // only the newest CHAT_TAIL, so the pane pages backwards through here as the
+    // captain scrolls up. `before` = the ts of the oldest message he already has;
+    // the answer is oldest-first (render order) and EMPTY past the beginning —
+    // running out of conversation is not an error. `limit=0` = the whole thing
+    // (what `bc-axi thread` prints). Card threads ride the board payload and
+    // have nothing to page.
+    if (route === 'GET /api/chat') {
+      const target = String(url.searchParams.get('target') || '');
+      const m = /^lieutenant:(.+)$/.exec(target);
+      if (!m) return sendJson(res, 400, { error: 'target must be lieutenant:<id> (card threads ride the board payload)' });
+      const lt = findLieutenant(m[1]);
+      if (!lt) return sendJson(res, 404, { error: 'unknown target: ' + target });
+      const raw = url.searchParams.get('limit');
+      const limit = raw == null ? CHAT_TAIL : (parseInt(raw, 10) || 0);
+      const before = String(url.searchParams.get('before') || '');
+      return sendJson(res, 200, { target, before: before || null, messages: chatPage(lt.id, before, limit) });
+    }
     if (route === 'POST /api/message') { // lieutenant -> captain (chat.say, lieutenant side)
       const body = JSON.parse(await readBody(req) || '{}');
       const target = String(body.target || '');
-      const thread = threadFor(target);
-      if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
+      if (!threadFor(target)) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text_md || body.text || '');
       const attachments = resolveAttachments(body.attachments);
       if (!text.trim() && !attachments.length) return sendJson(res, 400, { error: 'text or attachments required' });
@@ -3509,7 +3630,7 @@ const server = http.createServer(async (req, res) => {
       const caller = sess ? board.lieutenants.find((l) => l.ref && l.ref.session === sess) : null;
       const msg = { author: String(body.author || (caller && caller.name) || (lt && lt.name) || 'agent').slice(0, 60), text, ts: now() };
       if (attachments.length) msg.attachments = attachments;
-      thread.push(msg);
+      appendMessage(target, msg);
       const m = /^card:(.+)$/.exec(target);
       if (m) {
         const card = findCard(m[1]);
@@ -3554,8 +3675,7 @@ const server = http.createServer(async (req, res) => {
         if (!holder) return sendJson(res, 404, { error: 'nobody is on the line — this board has no lieutenant' });
         target = 'lieutenant:' + holder.id;
       }
-      const thread = threadFor(target);
-      if (!thread) return sendJson(res, 404, { error: 'unknown target: ' + target });
+      if (!threadFor(target)) return sendJson(res, 404, { error: 'unknown target: ' + target });
       const text = String(body.text || '');
       const attachments = resolveAttachments(body.attachments);
       if (!text.trim() && !attachments.length) return sendJson(res, 400, { error: 'text or attachments required' });
@@ -3563,7 +3683,7 @@ const server = http.createServer(async (req, res) => {
       // not a say: it routes to the target harness's runCommand and both the
       // command and its reply land in the thread — no QueueItem, no wake.
       if (text.trim().startsWith('/') && !attachments.length) {
-        const r = await runChatCommand(target, thread, text.trim());
+        const r = await runChatCommand(target, text.trim());
         if (r.error) return sendJson(res, r.code || 400, { error: r.error });
         saveBoard(); broadcast();
         return sendJson(res, 200, r);
@@ -3580,7 +3700,7 @@ const server = http.createServer(async (req, res) => {
         overLine ? { via: 'line' } : null));
       const msg = { author: 'user', text, ts: now() };
       if (attachments.length) msg.attachments = attachments;
-      thread.push(msg);
+      appendMessage(target, msg);
       const m = /^card:(.+)$/.exec(target);
       if (m) {
         const card = findCard(m[1]);

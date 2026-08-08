@@ -261,7 +261,9 @@ function mainFeedMsgs() {
   // their source card (_card/_cardTitle/_cardEmoji) so the bubble renders the
   // clickable chip; main-chat messages carry none.
   const l = S.chatMode && S.chatMode.mode === 'lieutenant' ? lieutenant(S.chatMode.id) : null;
-  const msgs = ((l && l.chat) || []).slice();
+  // the board payload carries only the newest slice of the main chat; whatever
+  // scrolling up has paged in off the log sits in front of it
+  const msgs = (l ? olderLoaded('lieutenant:' + l.id) : []).concat((l && l.chat) || []);
   if (l) {
     for (const c of cards()) {
       if (c.owner !== l.id) continue;
@@ -283,6 +285,46 @@ function mainFeedMsgs() {
 const COLLAPSE_KEEP = 30;
 let mainExpanded = false;
 let collapsedHidden = -1; // -1 = recompute on next render (conversation switch)
+
+// ---------- older history, paged off the lieutenant's append-only log ----------
+// A main chat's older messages are not on the board — GET /api/board carries
+// only its newest slice — so scrolling to the top of the feed fetches the page
+// before the oldest message on screen and merges it in ahead. Client-side only,
+// dropped on a conversation switch (like the collapse state above); the log is
+// the truth, this is just how much of it is on screen.
+const OLDER_PAGE = 50;
+const older = { target: null, msgs: [], done: false, loading: false };
+function olderLoaded(target) { return older.target === target ? older.msgs : []; }
+function resetOlder() { older.target = null; older.msgs = []; older.done = false; older.loading = false; }
+function loadOlder(target) {
+  if (older.target !== target) resetOlder();
+  if (older.loading || older.done) return;
+  const l = lieutenant(target.slice('lieutenant:'.length));
+  const have = older.msgs.length ? older.msgs : ((l && l.chat) || []);
+  if (!have.length || !have[0].ts) return; // nothing on screen to page back from
+  older.target = target;
+  older.loading = true;
+  api.chatBefore(target, have[0].ts, OLDER_PAGE).then((r) => {
+    if (older.target !== target) return; // he switched conversations mid-flight
+    older.loading = false;
+    const got = (r && r.messages) || [];
+    if (!got.length) { older.done = true; return; } // the beginning of the conversation
+    older.msgs = got.concat(older.msgs);
+    // content lands ABOVE the reader — keep his place by the height delta, the
+    // same way the expander does
+    const prevH = feedEl.scrollHeight, prevTop = feedEl.scrollTop;
+    renderChat();
+    feedEl.scrollTop = prevTop + (feedEl.scrollHeight - prevH);
+  }).catch(() => { older.loading = false; older.done = true; });
+}
+// Scroll-up is the whole gesture: at the top of a main chat with nothing left
+// collapsed locally, page in what came before.
+feedEl.addEventListener('scroll', () => {
+  if (feedEl.scrollTop > 40) return;
+  if (!mainExpanded && collapsedHidden > 0) return; // the expander still has local history to give
+  const target = currentTarget();
+  if (target && target.startsWith('lieutenant:')) loadOlder(target);
+});
 
 // What the feed currently shows: per-block html (a block = one message with
 // its day divider merged in, or the history expander) plus the trailing typing
@@ -385,7 +427,7 @@ export function renderChat() {
   const viewKey = target + '|' + (window.innerWidth <= 760 ? S.view : 'desktop');
   const switched = viewKey !== lastViewKey;
   lastViewKey = viewKey;
-  if (target !== feed.key) { mainExpanded = false; collapsedHidden = -1; closeSlash(); } // each conversation starts collapsed (and drops the slash picker)
+  if (target !== feed.key) { mainExpanded = false; collapsedHidden = -1; resetOlder(); closeSlash(); } // each conversation starts collapsed (and drops the slash picker)
   const pinned = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
 
   const blocks = []; // {html, msg?} — msg only on lieutenant bubbles, for speak wiring
