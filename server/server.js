@@ -3251,13 +3251,20 @@ const server = http.createServer(async (req, res) => {
         const r = moveCard(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, r.code || 400, { error: r.error });
         // The handoff IS the end of the work: the lieutenant has read the diff
-        // and the card left Working, so the worktree goes back. Awaited, so the
-        // move reports the board as it really stands. A worker that has not
-        // reported done keeps its checkout — a card moved out from under a live
-        // or crashed worker is the one case where that directory is still the
-        // only copy of anything.
+        // and the card left Working, so the worktree goes back. A worker that
+        // has not reported done keeps its checkout — a card moved out from under
+        // a live or crashed worker is the one case where that directory is still
+        // the only copy of anything.
+        //
+        // NOT awaited. The release queues behind the per-clone lock, which a
+        // concurrent `card start` holds across `git fetch` + `git worktree add`
+        // — seconds, minutes on a big repo — and the move used to sit there with
+        // it while the card stayed visibly in Working. The move answers as soon
+        // as the card has left; the release lands on the timeline when it lands,
+        // and its own saveBoard/broadcast carries it (including a refusal) to
+        // every screen. Same shape archive already uses.
         if (wasWorking && card.column !== 'working' && (!w || w.done)) {
-          await releaseCardWorktree(card, w, { honorKeep: true });
+          releaseCardWorktree(card, w, { honorKeep: true }); // never throws
         }
         saveBoard(); broadcast();
         return sendJson(res, 200, r);

@@ -836,16 +836,53 @@ test('the handoff releases the worktree — `worker done` leaves it for the lieu
     assert.ok(fs.existsSync(w.worktree.path),
       'done starts the lieutenant\'s half: verifying the work means reading the diff in there');
 
-    // the handoff out of Working is the end of the work
+    // the handoff out of Working is the end of the work — the move answers as
+    // soon as the card has left, and the release follows on the timeline
     assert.strictEqual((await s.api('POST', '/api/cards/goes/move', { column: 'review', actor: 'agent' })).status, 200);
-    assert.ok(!fs.existsSync(w.worktree.path), 'released at the handoff, before the move even answers');
-    const ev = (await cardEvents(s, 'goes')).find((e) => /worktree released/.test(e.text));
-    assert.ok(ev, 'the timeline says the worktree went');
+    await until('worktree released after the handoff', async () => !fs.existsSync(w.worktree.path));
+    const ev = await until('the timeline says the worktree went',
+      async () => (await cardEvents(s, 'goes')).find((e) => /worktree released/.test(e.text)));
     assert.match(ev.text, rx(w.worktree.path));
-    assert.strictEqual((await s.api('GET', '/api/cards/goes')).body.attributes.worktree, undefined,
-      'the attribute stops pointing at a directory that is gone');
+    await until('the attribute stops pointing at a directory that is gone',
+      async () => (await s.api('GET', '/api/cards/goes')).body.attributes.worktree === undefined);
     // the clone knows too: a stale registration would block the next add
     assert.strictEqual(git(path.join(s.dir, 'projects', 'proj'), 'worktree', 'list').split('\n').filter(Boolean).length, 1);
+  } finally { await teardown(); }
+});
+
+// ...and it does NOT wait for it. The release queues behind the per-clone lock,
+// which a concurrent `card start` holds across `git fetch` + `git worktree add`
+// — seconds, minutes on a big repo. The move used to sit inside that wait with
+// the card still visibly in Working, which reads as a frozen board.
+test('a concurrent start holding the clone lock does not hold up the move', async () => {
+  const { s, teardown } = await boot();
+  try {
+    const proj = path.join(s.dir, 'projects', 'proj');
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Handed off', id: 'handoff', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/handoff/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/handoff/worker/done', { outcome: 'shipped' });
+
+    // a fetch that takes its time, so the lock is provably still held when the
+    // move arrives (the fetch fails after it; freshBase falls back to origin/HEAD)
+    git(proj, 'config', 'protocol.ext.allow', 'always');
+    git(proj, 'remote', 'set-url', 'origin', 'ext::sleep 4');
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Next one', id: 'slowstart', attributes: { repo: 'proj' },
+    }));
+    const starting = s.api('POST', '/api/cards/slowstart/start', { harness: 'fake' });
+    await sleep(300); // the start is inside the fetch by now, holding the lock
+
+    const t0 = Date.now();
+    const mv = await s.api('POST', '/api/cards/handoff/move', { column: 'review', actor: 'agent' });
+    const took = Date.now() - t0;
+    assert.strictEqual(mv.status, 200, JSON.stringify(mv.body));
+    assert.ok(took < 1500, 'the move answered in ' + took + 'ms — it queued behind the lock');
+    assert.strictEqual((await s.api('GET', '/api/cards/handoff')).body.column, 'review');
+
+    assert.strictEqual((await starting).status, 200);
+    await until('the release lands once the lock frees', async () => !fs.existsSync(w.worktree.path));
   } finally { await teardown(); }
 });
 
@@ -893,8 +930,8 @@ test('a dirty worktree survives the handoff, and the timeline says why', async (
     await s.api('POST', '/api/cards/dirty/worker/done', { outcome: 'done, sort of' });
 
     await s.api('POST', '/api/cards/dirty/move', { column: 'review', actor: 'agent' });
-    const ev = (await cardEvents(s, 'dirty')).find((e) => /worktree kept/.test(e.text));
-    assert.ok(ev, 'the refusal is on the timeline');
+    const ev = await until('the refusal is on the timeline',
+      async () => (await cardEvents(s, 'dirty')).find((e) => /worktree kept/.test(e.text)));
     assert.match(ev.text, /uncommitted changes/); // the reason
     assert.match(ev.text, rx(w.worktree.path)); // the path
     assert.strictEqual(ev.level, 2, 'a refused release is not an alarm');
@@ -922,8 +959,8 @@ test('commits on a HEAD no ref holds keep the worktree, exactly like uncommitted
     await s.api('POST', '/api/cards/dangling/worker/done', { outcome: 'committed, no branch' });
 
     await s.api('POST', '/api/cards/dangling/move', { column: 'review', actor: 'agent' });
-    const ev = (await cardEvents(s, 'dangling')).find((e) => /worktree kept/.test(e.text));
-    assert.ok(ev, 'the refusal is on the timeline');
+    const ev = await until('the refusal is on the timeline',
+      async () => (await cardEvents(s, 'dangling')).find((e) => /worktree kept/.test(e.text)));
     assert.match(ev.text, /no branch or tag holds/);
     assert.match(ev.text, rx(sha.slice(0, 8)));
     assert.strictEqual(git(w.worktree.path, 'rev-parse', 'HEAD'), sha, 'the commit is still reachable');
@@ -939,6 +976,7 @@ test('archiving a card whose worktree is already gone is a no-op, not an error',
     const w = (await s.api('POST', '/api/cards/twice/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/twice/worker/done', { outcome: 'shipped' });
     await s.api('POST', '/api/cards/twice/move', { column: 'review', actor: 'agent' });
+    await until('released at the handoff', async () => !(await s.api('GET', '/api/cards/twice')).body.attributes.worktree);
     assert.ok(!fs.existsSync(w.worktree.path));
 
     const r = await s.api('POST', '/api/cards/twice/archive', { reason: 'killed' });
@@ -961,6 +999,7 @@ test('resume and worker send both refuse a worker whose worktree was released', 
     const w = (await s.api('POST', '/api/cards/noback/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/noback/worker/done', { outcome: 'shipped' });
     await s.api('POST', '/api/cards/noback/move', { column: 'review', actor: 'agent' });
+    await until('released at the handoff', async () => !(await s.api('GET', '/api/cards/noback')).body.attributes.worktree);
     assert.ok(!fs.existsSync(w.worktree.path));
 
     // its session is still alive, so send would otherwise reopen the turn in place

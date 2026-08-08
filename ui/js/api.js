@@ -23,6 +23,15 @@ async function j(method, url, body) {
 // Per page load, thrown away with it — never persisted, never an identity.
 const CLIENT_ID = 'c' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 
+// Moves currently posted, by card id — see api.moveCard. The entry is dropped
+// the moment the request settles, so the next drag on that card is a real move.
+const movesInFlight = new Map();
+function track(id, p) {
+  const done = p.finally(() => movesInFlight.delete(id));
+  movesInFlight.set(id, done);
+  return done;
+}
+
 export const api = {
   clientId: CLIENT_ID,
   createLieutenant: (lt) => j('POST', '/api/lieutenants', Object.assign({ actor: 'user' }, lt)),
@@ -32,8 +41,14 @@ export const api = {
   // A captain move may come back as {ordered: 'start-order'|'rework-order'}
   // instead of an applied move — any→working and review→backlog are orders.
   // `text` rides on the order QueueItem as the captain's comment.
-  moveCard: (id, column, text) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/move',
-    Object.assign({ column, actor: 'user' }, text ? { text } : {})),
+  //
+  // One move per card in flight. The board only redraws when the move's SSE
+  // broadcast arrives, so until then the card sits visibly where it was — and a
+  // second drag in that gap posted a second move. The duplicate rides the answer
+  // of the move already going instead of issuing its own.
+  moveCard: (id, column, text) => movesInFlight.get(id) || track(id,
+    j('POST', '/api/cards/' + encodeURIComponent(id) + '/move',
+      Object.assign({ column, actor: 'user' }, text ? { text } : {}))),
   patchCard: (id, patch) => j('PATCH', '/api/cards/' + encodeURIComponent(id), patch),
   archiveCard: (id, reason) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/archive', { actor: 'user', reason }),
   feedback: (target, text, attachments) => j('POST', '/api/feedback',

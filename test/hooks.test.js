@@ -314,7 +314,8 @@ test('card-archived hooks on a handed-off card: BC_WORKTREE is empty, not a rele
     const w = (await s.api('POST', '/api/cards/handed/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/handed/worker/done', { outcome: 'shipped' });
     await s.api('POST', '/api/cards/handed/move', { column: 'review', actor: 'agent' });
-    assert.ok(!fs.existsSync(w.worktree.path), 'the handoff released it');
+    // the move answers before the release lands — it queues behind the per-clone lock
+    await until('the handoff released it', async () => !fs.existsSync(w.worktree.path));
 
     const r = await s.api('POST', '/api/cards/handed/archive', { reason: 'merged', actor: 'user' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
