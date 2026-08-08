@@ -30,11 +30,12 @@ function element(id) {
   assert.fail('#' + id + ' is never closed');
 }
 
-test('the label manager markup lives in the settings screen, not the gear panel', () => {
+test('the label manager markup lives in the workspace screen, not the gear panel', () => {
   const panel = element('settings-panel');
   assert.ok(!panel.includes('id="lm-list"'), 'the gear dropdown no longer holds the label list');
   assert.ok(!panel.includes('id="lm-new"'), 'nor the new-label form');
-  assert.ok(panel.includes('id="labels-open"'), 'it holds the row that opens the screen instead');
+  assert.ok(panel.includes('id="workspace-open"'), 'it holds the row that opens the screen instead');
+  assert.ok(!panel.includes('id="labels-open"'), 'and the row is no longer called labels');
 
   const screen = element('settings-screen');
   assert.ok(screen.includes('id="lm-list"'), 'the screen owns the label list');
@@ -43,9 +44,39 @@ test('the label manager markup lives in the settings screen, not the gear panel'
   assert.ok(element('board-wrap').includes('id="settings-screen"'));
 });
 
-test('the labels row hands off to the screen the way monitoring hands off to the monitor', () => {
-  assert.match(mainSrc, /getElementById\('labels-open'\)\.onclick[\s\S]*?setBoardMode\('settings'\)/);
-  assert.match(mainSrc, /getElementById\('labels-open'\)\.onclick[\s\S]*?spEl\.hidden = true/);
+// The gear row is THIS BROWSER's list; the screen it opens is the WORKSPACE —
+// the board everyone shares. The row said "labels" while the screen held one
+// section; it holds two now, so the row names the screen instead of its first
+// section, and the screen says what it is.
+test('the workspace row and heading name the workspace, and playbooks are a section of it', () => {
+  const panel = element('settings-panel');
+  assert.match(panel, /<button id="workspace-open"[^>]*>🗂 workspace<\/button>/);
+  const screen = element('settings-screen');
+  assert.match(screen, /class="ss-head">workspace</, 'the screen is headed workspace');
+  assert.ok(screen.includes('id="ss-playbooks"'), 'the screen has a playbooks section');
+  assert.ok(screen.includes('id="pb-list"'), 'with the list the section renders into');
+  assert.ok(screen.includes('id="ss-labels"'), 'and the labels section is still there');
+  assert.match(element('ss-labels'), /class="ss-title">labels</, 'keeping its own section title');
+  assert.match(element('ss-playbooks'), /class="ss-title">playbooks</);
+});
+
+test('the workspace row hands off to the screen the way monitoring hands off to the monitor', () => {
+  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?setBoardMode\('settings'\)/);
+  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?spEl\.hidden = true/);
+  // …and re-reads the playbooks off disk on the way in
+  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?renderPlaybooks\(true\)/);
+});
+
+// The one rule that keeps this from becoming a second editor: the playbooks
+// section opens files through the artifact routes and the file screen, the same
+// pair a card artifact opens through.
+test('the playbooks section reuses the file screen and the artifact routes', () => {
+  const pb = fs.readFileSync(ui('js', 'pbmanager.js'), 'utf8');
+  assert.match(pb, /import \{ openArtifactFile \} from '\.\/detail\.js'/);
+  assert.match(pb, /api\.saveArtifact\(/, 'copy to workspace goes through the guarded write');
+  assert.ok(!/mountFileEditor|CodeMirror/.test(pb), 'and never mounts an editor of its own');
+  const detail = fs.readFileSync(ui('js', 'detail.js'), 'utf8');
+  assert.match(detail, /export async function openArtifactFile/);
 });
 
 // setBoardMode, lifted with MODE_BTN and run against stubs

@@ -19,6 +19,7 @@ import { closePane, paneOpen } from './pane.js';
 import { openMonitor, closeMonitor, monitorOpen } from './monitor.js';
 import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js';
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
+import { renderPlaybooks } from './pbmanager.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 
@@ -85,12 +86,14 @@ document.getElementById('mon-open').onclick = () => {
   gearBtn.classList.remove('on');
   openMonitor();
 };
-// ⚙️ → labels: same handoff, to the settings screen in the board region (so the
-// chat stays at its side). Mobile lives in the board tab, like the file screen.
-document.getElementById('labels-open').onclick = () => {
+// ⚙️ → workspace: same handoff, to the workspace screen in the board region (so
+// the chat stays at its side). Mobile lives in the board tab, like the file
+// screen. The dropdown is this browser; the screen is the board everyone shares.
+document.getElementById('workspace-open').onclick = () => {
   spEl.hidden = true;
   gearBtn.classList.remove('on');
   S.view = 'board';
+  renderPlaybooks(true); // read the playbooks off disk on the way in
   setBoardMode('settings');
 };
 
@@ -236,7 +239,7 @@ onRender(() => {
   // The file screen owns its own DOM and is never repainted from here: a render
   // under the captain's cursor would eat what he is typing.
   if (S.boardMode === 'file') { /* nothing to repaint */ }
-  else if (S.boardMode === 'settings') renderLabelManager();
+  else if (S.boardMode === 'settings') { renderLabelManager(); renderPlaybooks(); }
   else if (S.boardMode === 'archive') renderArchive();
   else if (S.boardMode === 'table') renderTable();
   else renderBoard();

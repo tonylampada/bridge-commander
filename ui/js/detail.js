@@ -471,6 +471,32 @@ export async function artifactWritten(ev) {
     ]);
 }
 
+// Open any file the artifact routes will serve on the file screen, through the
+// SAME drafts, versions and 409 handling a card artifact gets — which is what
+// makes the workspace screen's playbooks an editing surface without a second
+// editor, a second file API or a second lost-update story behind them.
+// `opts` adds what the caller knows: `crumb` (where this came from) and
+// `readOnly` — the line a save is refused with, for a file that has to be
+// copied somewhere writable first.
+export async function openArtifactFile(uri, name, opts) {
+  const o = opts || {};
+  const r = await api.artifact(uri);
+  if (!drafts.has(uri)) versions.set(uri, r.version || '');
+  openFile({
+    key: uri,
+    name,
+    markdown: MD_EXT.test(name),
+    content: drafts.has(uri) ? drafts.get(uri) : r.content,
+    saved: r.content, // a restored draft is still unsaved typing
+    crumb: o.crumb,
+    onChange: (text) => drafts.set(uri, text),
+    onSave: o.readOnly
+      ? () => Promise.reject(new Error(o.readOnly))
+      : (text) => saveArtifactText(uri, text, null, null),
+  });
+  return r;
+}
+
 // An artifact entry may carry a content-type hint ({uri, label, type}) — e.g.
 // the auto-attached worker brief is markdown in a `.prompt` file. The hint
 // wins; the extension regex is the fallback.

@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, listPlaybooks, resolvePlaybook, parsePlaybook, attrVar, attrCardKey } = require(path.join(__dirname, 'playbooks.js'));
+const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -2740,6 +2740,37 @@ function serveStatic(res, rel) {
   res.end(data);
 }
 
+// The one uri the artifact routes accept that is not listed on a card: a
+// playbook. The workspace screen edits them in the same editor a card artifact
+// opens in, which means the same GET, the same version check and the same 409 —
+// a second file API would be a second place to get all of that wrong. So the
+// widening is exactly one shape and nothing else: `<playbooks dir>/<name>.md`,
+// one level deep, no symlink. The directory is DERIVED here, never taken from
+// the client.
+//
+// Returns 'workspace' | 'packaged' | '' — the same two populations
+// resolvePlaybook picks between, and the difference is what may be written.
+// The packaged set is a git checkout of this repo: readable, so the captain can
+// open one and copy it, and never written in place.
+function playbookSource(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return '';
+  const file = uri.slice('file://'.length);
+  // path.resolve is idempotent on a clean absolute path — a `..` segment or a
+  // relative path changes it, so `<dir>/../../board.json` never gets this far.
+  if (path.resolve(file) !== file) return '';
+  if (path.extname(file) !== '.md') return '';
+  const dir = path.dirname(file);
+  const source = dir === playbooksDir(STATE_DIR) ? 'workspace'
+    : dir === PACKAGED_PLAYBOOKS_DIR ? 'packaged' : '';
+  if (!source) return '';
+  // A symlink IN the dir is not a file in the dir: what it points at is what
+  // would be read or written. Refused here rather than followed. (ENOENT is
+  // fine — that is the copy-to-workspace create, and PUT guards the dir itself.)
+  try { if (fs.lstatSync(file).isSymbolicLink()) return ''; }
+  catch (e) { if (e.code !== 'ENOENT') return ''; }
+  return source;
+}
+
 // ---------- server ----------
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -2824,7 +2855,7 @@ const server = http.createServer(async (req, res) => {
       const uri = url.searchParams.get('uri') || '';
       const raw = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri));
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri);
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
       // A promoted chat attachment (attachment://id) resolves to its stored file
       // via the sidecar; file:// / bare paths read directly.
@@ -2894,9 +2925,10 @@ const server = http.createServer(async (req, res) => {
     // narrow: this is an artifact editor, not remote arbitrary-file write on
     // this machine. The board has no auth of its own (the network boundary is
     // the auth boundary), so every guard below is load-bearing:
-    //   - the uri must ALREADY be listed on a live card — the same allowlist
-    //     the GET uses. Anything else is 403, and there is no flag to turn it
-    //     off;
+    //   - the uri must ALREADY be listed on a live card, or be a WORKSPACE
+    //     playbook (playbookSource) — the GET's allowlist minus the packaged
+    //     playbooks, which are read-only. Anything else is 403, and there is no
+    //     flag to turn it off;
     //   - file:// only, absolute, no `..` (path.resolve is idempotent on a
     //     clean absolute path), and no symlink anywhere along it (realpath must
     //     come back unchanged), so a listed artifact can never be a door to
@@ -2919,9 +2951,17 @@ const server = http.createServer(async (req, res) => {
       const body = JSON.parse(raw || '{}');
       const uri = String(body.uri || '');
       if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
+      const pbSource = playbookSource(uri);
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri));
-      if (!listed) return sendJson(res, 403, { error: 'not an artifact of any card — refusing to write' });
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace';
+      if (!listed) {
+        // A packaged playbook is readable and never writable: it is a git
+        // checkout of this repo, so the edit is a copy into the workspace.
+        if (pbSource === 'packaged') {
+          return sendJson(res, 403, { error: 'a packaged playbook is never written — copy it to the workspace first' });
+        }
+        return sendJson(res, 403, { error: 'not an artifact of any card — refusing to write' });
+      }
       if (!uri.startsWith('file://')) return sendJson(res, 403, { error: 'only file:// artifacts are writable' });
       const file = uri.slice('file://'.length);
       if (path.resolve(file) !== file) return sendJson(res, 403, { error: 'unsafe artifact path' });
@@ -3331,7 +3371,18 @@ const server = http.createServer(async (req, res) => {
     // (or dropping a new one in) changes the next card started, with no
     // restart, and the dropdown has to say so too.
     if (route === 'GET /api/playbooks') {
-      return sendJson(res, 200, { playbooks: listPlaybooks(STATE_DIR), dir: path.join(STATE_DIR, 'playbooks') });
+      const dir = playbooksDir(STATE_DIR);
+      const ids = listPlaybooks(STATE_DIR);
+      // `playbooks` stays the plain id list the picker and the CLI read.
+      // `items` says WHERE each one comes from — resolvePlaybook already decides
+      // which file wins, so where it landed is the answer, not a second guess at
+      // the same rule. That is what lets the workspace screen open a workspace
+      // playbook for editing and offer to copy a packaged one first.
+      const items = ids.map((id) => {
+        const file = resolvePlaybook(STATE_DIR, id);
+        return { id, file, source: path.dirname(file) === dir ? 'workspace' : 'packaged' };
+      });
+      return sendJson(res, 200, { playbooks: ids, items, dir });
     }
 
     // ----- board-level events (free-form notify) -----
