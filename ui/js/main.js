@@ -146,6 +146,24 @@ function setBoardMode(mode) {
   }
   render();
 }
+// The way out of a screen: back to the switcher mode this browser remembers,
+// kanban when it remembers none. Both exits — the workspace ⟵ and the mobile
+// Board tab — ask the question here, so they can never disagree.
+function lastSwitcherMode() {
+  let m = null;
+  try { m = localStorage.getItem('bc-board-mode'); } catch (e) {}
+  return MODE_BTN[m] ? m : 'board';
+}
+function leaveScreen() { setBoardMode(lastSwitcherMode()); }
+// On a phone the board tab IS the main area, so tapping it while that area
+// holds a screen means "give me the board back" — the switcher has collapsed to
+// a button the screens do not have.
+function tapBoardTab() {
+  S.view = 'board';
+  if (SCREENS.includes(S.boardMode)) leaveScreen(); // renders
+  else render();
+}
+document.getElementById('ss-back').onclick = leaveScreen;
 onModeSwitch(setBoardMode);   // the file screen flips the mode through this one owner
 onQuoteSource(fileQuote);     // …and is where every message's file context comes from
 // Mobile collapses the switcher to just the active mode's button; tapping it
@@ -186,7 +204,7 @@ try { setBoardMode(localStorage.getItem('bc-board-mode') || 'board'); } catch (e
 const tabChat = document.getElementById('tab-chat');
 const tabBoard = document.getElementById('tab-board');
 tabChat.onclick = () => { S.view = 'chat'; render(); };
-tabBoard.onclick = () => { S.view = 'board'; render(); };
+tabBoard.onclick = tapBoardTab;
 function renderTabs() {
   document.body.dataset.view = S.view;
   // The board tab IS the main area, so when that area holds a file it says so.

@@ -162,7 +162,11 @@
            same segmented look as the ▦☰🧊 switcher. data-tab pairs with the
            section's data-sec — that pairing IS the switching logic, so a new
            section is a section element and a button, nothing else. -->
+      <!-- the way out, on every viewport: on a phone the ▦☰🧊 switcher has
+           collapsed to the active mode's button and this screen has none, so
+           without the ⟵ there is no exit. Wears the file screen's crumb look. -->
       <div class="ss-headrow">
+        <button type="button" id="ss-back" class="fs-back" title="back to the board">⟵</button>
         <div class="ss-head">workspace</div>
         <span id="ss-tabs" role="group" aria-label="workspace section">
           <button type="button" data-tab="labels" class="on">labels</button>

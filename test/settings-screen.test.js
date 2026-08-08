@@ -187,3 +187,72 @@ test('an unknown mode still falls back to the kanban', () => {
   setBoardMode('nonsense');
   assert.strictEqual(S.boardMode, 'board');
 });
+
+// ---------- the way out of a screen ----------
+// On a phone the ▦☰🧊 switcher collapses to the active mode's button, and the
+// screens have none — so a screen used to be a dead end you left by reloading.
+// Two exits now, both answering one question: which switcher mode do we go back
+// to? Lifted the same way setBoardMode is, with tapBoardTab along for the ride.
+function loadScreenExits(remembered) {
+  const start = mainSrc.indexOf('const MODE_BTN');
+  const fnAt = mainSrc.indexOf('function tapBoardTab', start);
+  const end = mainSrc.indexOf('\n}\n', fnAt) + 3;
+  assert.ok(start > -1 && fnAt > start && end > fnAt, 'tapBoardTab found in main.js');
+  const localStorage = { getItem: () => remembered, setItem() {} };
+  const document = { getElementById: () => ({ classList: { toggle() {} } }) };
+  const S = {};
+  const renders = [];
+  const make = new Function('document', 'localStorage', 'S', 'forgetFile', 'render',
+    mainSrc.slice(start, end) + '\nreturn { setBoardMode, leaveScreen, tapBoardTab };');
+  return { S, renders, ...make(document, localStorage, S, () => {}, () => renders.push(1)) };
+}
+
+test('the workspace heading row carries a back control', () => {
+  const row = /<div class="ss-headrow">[\s\S]*?<\/div>/.exec(element('settings-screen'))[0];
+  assert.match(row, /id="ss-back"/, 'the ⟵ is in the heading row');
+  assert.ok(row.indexOf('id="ss-back"') < row.indexOf('class="ss-head"'), 'left of the title');
+  assert.match(row, /id="ss-back"[^>]*>⟵</);
+  assert.match(mainSrc, /getElementById\('ss-back'\)\.onclick = leaveScreen/);
+});
+
+test('the ⟵ leaves the screen for the remembered switcher mode', () => {
+  for (const mode of ['table', 'archive', 'board']) {
+    const { S, setBoardMode, leaveScreen } = loadScreenExits(mode);
+    setBoardMode('settings');
+    leaveScreen();
+    assert.strictEqual(S.boardMode, mode);
+  }
+});
+
+test('…and the kanban when nothing is remembered', () => {
+  for (const remembered of [null, 'settings', 'file', 'nonsense']) {
+    const { S, setBoardMode, leaveScreen } = loadScreenExits(remembered);
+    setBoardMode('settings');
+    leaveScreen();
+    assert.strictEqual(S.boardMode, 'board', String(remembered) + ' is not a switcher mode');
+  }
+});
+
+test('the mobile board tab is that same exit while a screen is up', () => {
+  for (const screen of ['settings', 'file']) {
+    const { S, setBoardMode, tapBoardTab } = loadScreenExits('table');
+    setBoardMode(screen);
+    S.view = 'chat';
+    tapBoardTab();
+    assert.strictEqual(S.view, 'board');
+    assert.strictEqual(S.boardMode, 'table', 'tapping ▦ Board left ' + screen);
+  }
+});
+
+test('…and does exactly what it always did while a switcher mode is up', () => {
+  for (const mode of ['board', 'table', 'archive']) {
+    const { S, renders, setBoardMode, tapBoardTab } = loadScreenExits('archive');
+    setBoardMode(mode);
+    S.view = 'chat';
+    const before = renders.length;
+    tapBoardTab();
+    assert.strictEqual(S.view, 'board');
+    assert.strictEqual(S.boardMode, mode, 'the mode is left alone');
+    assert.strictEqual(renders.length, before + 1, 'one repaint, as before');
+  }
+});
