@@ -39,8 +39,8 @@ export function sphereForArc(deg, distM) { return distM * Math.sin(deg * D / 2);
 // `wall` is not chosen, it is SOLVED, and the thing it is solved for is the
 // TITLE. Sized the other way round — cap height first, characters last — the
 // lane came out at sixteen characters against a median card title of fifty-
-// three, and every row on the wall read "Archon as the exe". A row you cannot
-// tell from its neighbour is not a row, whatever its cap height.
+// three, and every row on the wall was cut to the same opening words. A row
+// you cannot tell from its neighbour is not a row, whatever its cap height.
 //
 // So: the floor is 32 characters, the lane is what the arc has left once four
 // columns have taken theirs, and the em box is what fits. Characters and rows
@@ -183,8 +183,9 @@ export const PANEL_SLOTS = [-17.5, 17.5];
 // This is the correction that matters, and it was paid for by a rendered
 // frame: sized the other way round — cap height first, characters last — the
 // lane came out at sixteen characters against a median card title of FIFTY-
-// THREE, and every row on the wall read "Archon as the exe". A row you cannot
-// tell apart from its neighbour is not a row, whatever its cap height.
+// THREE, and every row on the wall was cut to the same opening words. A row
+// you cannot tell apart from its neighbour is not a row, whatever its cap
+// height.
 //
 // So the fixed numbers are now:
 //

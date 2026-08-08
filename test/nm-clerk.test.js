@@ -6,8 +6,8 @@
 // logs the argv it was handed.
 //
 // What is asserted: the three outcomes the pipeline routes on, read from
-// $ARTIFACTS_DIR/nm-outcome, and an exit status that is ALWAYS 0 — a non-zero
-// exit inside an Archon loop_group kills the whole run.
+// $ARTIFACTS_DIR/nm-outcome, and an exit status that is ALWAYS 0 — the outcome
+// travels in files, so a non-zero exit only kills whatever is driving the clerk.
 const test = require('node:test');
 const assert = require('node:assert');
 const { execFileSync } = require('node:child_process');

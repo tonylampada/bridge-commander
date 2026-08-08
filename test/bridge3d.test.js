@@ -421,8 +421,8 @@ test('the wall is a wall: fifty-odd cards at once, and every one of them legible
 
   // **The floor is the TITLE, and it is the thing this surface exists for.**
   // Sized the other way round — cap height first — the lane came out at 16
-  // characters against a median card title of 53, and every row read "Archon
-  // as the exe". This assertion is the one that stops that coming back.
+  // characters against a median card title of 53, and every row was cut to the
+  // same opening words. This assertion is the one that stops that coming back.
   assert.ok(W.wallChars() >= W.WALL_CHARS,
     `a lane holds ${W.wallChars()} characters of title, under the ${W.WALL_CHARS} floor`);
 

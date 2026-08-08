@@ -107,7 +107,7 @@ test('worker pause: deliberate stop — session killed, worker-paused event, NO 
   } finally { await teardown(); }
 });
 
-// The pipeline's half of the same lifecycle: an archon run holding on its
+// The pipeline's half of the same lifecycle: a long-lived driver holding on its
 // `answer` gate calls this from INSIDE the session that is about to end. Killing
 // would kill the caller mid-sentence, so --expect-exit records the stop and
 // touches nothing; the exit that follows a moment later reads as waiting.
@@ -122,8 +122,8 @@ test('worker pause --expect-exit: nothing killed, custom reason on the card, and
     // through the CLI: an unknown flag is silently swallowed as a positional,
     // so the flag is worth exercising end to end rather than posting the body.
     const cli = await runCli(['worker', 'pause', 'gate', '--expect-exit',
-      '--reason', 'waiting on the lieutenant — archon workflow approve r-42 "fix"',
-      '--actor', 'archon', '--workspace', s.dir, '--port', String(s.port)]);
+      '--reason', 'waiting on the lieutenant — runner approve r-42 "fix"',
+      '--actor', 'runner', '--workspace', s.dir, '--port', String(s.port)]);
     assert.strictEqual(cli.code, 0, cli.stderr);
     assert.match(cli.stdout, /exiting itself/);
     assert.ok(fs.existsSync(marker), 'the caller\'s own session is left alive');
@@ -131,12 +131,12 @@ test('worker pause --expect-exit: nothing killed, custom reason on the card, and
     const ev = (await s.api('GET', '/api/cards/gate')).body.events.find((e) => e.kind === 'worker-paused');
     assert.ok(ev, 'worker-paused event on the card');
     assert.match(ev.text, /waiting on the lieutenant/);
-    assert.match(ev.text, /archon workflow approve r-42/);
+    assert.match(ev.text, /runner approve r-42/);
     assert.doesNotMatch(ev.text, /card start/, 'the default resume hint is replaced, not appended');
     const rec = boardOnDisk(s).workers.find((x) => x.card === 'gate');
     assert.ok(rec.paused, 'marked paused');
     assert.strictEqual(rec.expectExit, true, 'the deliberate-exit stop is recorded as such');
-    assert.match(rec.pauseReason, /archon workflow approve r-42/, 'and the way back is recorded with it');
+    assert.match(rec.pauseReason, /runner approve r-42/, 'and the way back is recorded with it');
 
     // ...and now the run returns and its session really does go.
     fs.rmSync(marker);
@@ -158,14 +158,14 @@ test('card start --resume is REFUSED on an expect-exit worker, quoting the recor
     await s.api('POST', '/api/cards', withOwner({ title: 'Gate', id: 'gate2', attributes: { repo: 'proj' } }));
     assert.strictEqual((await s.api('POST', '/api/cards/gate2/start', { harness: 'fake' })).status, 200);
     assert.strictEqual((await s.api('POST', '/api/cards/gate2/worker/pause', {
-      expectExit: true, actor: 'archon',
-      reason: 'waiting on the lieutenant — archon workflow approve r-42 "<decision>"',
+      expectExit: true, actor: 'runner',
+      reason: 'waiting on the lieutenant — runner approve r-42 "<decision>"',
     })).status, 200);
 
     const r = await s.api('POST', '/api/cards/gate2/start', { resume: true });
     assert.strictEqual(r.status, 409, JSON.stringify(r.body));
     assert.match(r.body.error, /--expect-exit/);
-    assert.match(r.body.error, /archon workflow approve r-42/, 'the refusal names the door, not just the wall');
+    assert.match(r.body.error, /runner approve r-42/, 'the refusal names the door, not just the wall');
 
     // refused means nothing happened: the record is untouched, the card unmoved
     const w = boardOnDisk(s).workers.find((x) => x.card === 'gate2');
@@ -175,7 +175,7 @@ test('card start --resume is REFUSED on an expect-exit worker, quoting the recor
     // and through the CLI, where the lieutenant actually reaches for it
     const cli = await runCli(['card', 'start', 'gate2', '--resume', '--workspace', s.dir, '--port', String(s.port)]);
     assert.notStrictEqual(cli.code, 0);
-    assert.match(cli.stderr, /archon workflow approve r-42/);
+    assert.match(cli.stderr, /runner approve r-42/);
 
     // the worker reporting done puts the gate behind it: --resume is legal again
     await s.api('POST', '/api/cards/gate2/worker/done', { outcome: 'run finished' });

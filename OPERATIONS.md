@@ -91,9 +91,9 @@ retries on its own.
 Not part of the server. It drives `no-mistakes axi` through its gates with no model in the
 loop — fix the `auto-fix`, approve when only `no-op` remains, stop dead on `ask-user` — and it
 ALWAYS exits 0, reporting through `$ARTIFACTS_DIR/nm-outcome` and `escalation.md`, because it
-runs as a bash node inside an Archon `loop_group` where a non-zero exit kills the whole run.
-The `bc-card` Archon workflow calls it by absolute path (`<this repo>/bin/nm-clerk.sh`), so the
-path is an interface: moving the file breaks a pipeline that lives outside this repo.
+runs as a step inside a workflow loop where a non-zero exit kills the whole run. Callers reach
+it by absolute path (`<this repo>/bin/nm-clerk.sh`), so the path is an interface: moving the
+file breaks workflows that live outside this repo.
 
 `--respond <fix|approve|skip> [--findings id,id]` is the second door: it answers the gate the
 last invocation refused — the no-mistakes run is still open and still parked on it — and then

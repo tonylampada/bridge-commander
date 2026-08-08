@@ -21,9 +21,9 @@
 # it is the only way a wrong finding gets fixed the right way. no-mistakes takes
 # it on `--action fix` only, which is why nothing else here accepts it.
 #
-# ALWAYS EXITS 0. This runs as a bash node inside an Archon `loop_group`, where a
-# non-zero exit kills the whole run and a crashed run looks exactly like a broken
-# one. So the outcome travels in files:
+# ALWAYS EXITS 0. A non-zero exit kills whatever is driving the clerk, and to
+# that driver a crashed run looks exactly like a broken one. So the outcome
+# travels in files:
 #
 #
 #   $ARTIFACTS_DIR/nm-outcome     passed | escalated | refused | failed

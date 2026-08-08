@@ -42,7 +42,7 @@ test('wakeOwner queues the event to the card owner without ringing the captain',
     await s.api('POST', '/api/cards', withOwner({ title: 'Paged' }));
 
     let r = await s.api('POST', '/api/cards/paged/events',
-      { text: 'the gate needs a decision', kind: 'pipeline', actor: 'archon', wakeOwner: true });
+      { text: 'the gate needs a decision', kind: 'pipeline', actor: 'runner', wakeOwner: true });
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.event.level, 2); // waking the owner is not a captain bell
 
