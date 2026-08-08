@@ -126,7 +126,7 @@ refuses and names the templates. Cards created before briefs existed have none �
 with `card patch --brief <id>` when you get to them.
 
 A template orders only what a worker can run: the Skill tool refuses a `disable-model-invocation`
-skill to an agent — `/nobloat-pr-description` is one — so that step is yours, at handoff.
+skill to an agent — `writing-great-skills` is one — so that step is yours, at handoff.
 
 ## Starting work
 
