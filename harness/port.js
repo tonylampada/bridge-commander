@@ -52,8 +52,8 @@
 //       verifies empty — right for delivering a brief, wrong for a keystroke.
 //       A harness MAY offer paneInput while send() throws: "no composer for a
 //       brief" and "no way to press a key" are different claims.
-//       Implementations that also stream SHOULD speed their feed up
-//       briefly after input, so the echo is not stuck behind the poll.
+//       Implementations that also stream SHOULD speed their feed up briefly
+//       after input, so the echo is not stuck behind the poll.
 // — migration of a session-granular ref to window granularity (the lieutenant
 // whose session it turned out to cohabit with its worker windows):
 //   adoptWindow(ref, window, taken?) -> Promise<HarnessRef|null>

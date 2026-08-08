@@ -1784,10 +1784,10 @@ function findWorker(cardId) { return board.workers.find((w) => w.card === cardId
 // The worker lease (card.status.worker) is a WRITTEN signal — status.set is its
 // only writer — so a worker that never writes one reads `absent` while its
 // session is plainly alive, and its card reports an absent worker for the whole
-// run while that same run is emitting milestones.
-// On the SINGLE-card read (card show, status <card>)
-// the truth is one call away, so ask for it: alive() on the card's registry
-// entry, whatever harness it is. The board read stays lease-only and sync — one
+// run while that same run is emitting milestones. On the SINGLE-card read
+// (card show, status <card>) the truth is one call away, so ask for it: alive()
+// on the card's registry entry, whatever harness it is. The board read stays
+// lease-only and sync — one
 // alive() per card there would be a scan, not a read.
 // A written lease always wins; only `absent` is filled in, and only from a
 // session that answers. Dead-or-gone stays absent, which is the honest word.
@@ -1961,9 +1961,9 @@ async function doStartCard(card, body) {
     // A worker paused with --expect-exit is stopped ON PURPOSE and already told
     // the board the way back — and --resume is not it. Resuming spawns a SECOND
     // run against a path the first one still holds, and the new session dies on
-    // arrival. Refuse, and quote the
-    // recorded reason: the caller reached for this because it is the move the
-    // board teaches everywhere else, so name the door instead of just the wall.
+    // arrival. Refuse, and quote the recorded reason: the caller reached for
+    // this because it is the move the board teaches everywhere else, so name
+    // the door instead of just the wall.
     if (existing.expectExit) {
       return { error: 'refusing to resume ' + card.id + ': its worker stopped with --expect-exit — resuming '
         + 'would start a second run over the one already in flight. '
@@ -2271,8 +2271,8 @@ async function workerSend(card, body) {
 // hint, because how you revive one of those is not `card start --resume`.
 //
 // That replacement is not a nicety — `--resume` on an expect-exit worker is
-// ACTIVELY WRONG (it spawns a second run over the one the first is
-// still holding), so the stop is recorded on the registry entry as
+// ACTIVELY WRONG (it spawns a second run over the one the first is still
+// holding), so the stop is recorded on the registry entry as
 // {expectExit, pauseReason} and `card start --resume` refuses it by name. A
 // reason text alone only informs whoever reads it; the refusal is what stops
 // the lieutenant who reached for the move the board teaches everywhere else.
