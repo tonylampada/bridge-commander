@@ -137,6 +137,19 @@ test('a malformed block fails with the offending line named', () => {
   bad(['---', 'harness: codex'], /never closed/);
   // the everyday version of "never closed": the brief itself runs into the block
   bad(['---', 'harness: codex', '# the brief'], /line 3: expected `key: value`.*is that one missing/);
+  // a map is well-formed and simply unsupported — saying "unclosed list" would
+  // point the author at a fix for a problem they do not have
+  bad(['---', 'requires: {a: 1}', '---', 'b'], /line 2: a map is not supported here/);
+  bad(['---', 'requires: [pr_url', '---', 'b'], /line 2: unclosed list/);
+});
+
+// A first line of `---` is an opening delimiter here and a horizontal rule in
+// every template written before this existed, so both ways the block can fail
+// have to name the way out — the line alone leaves the author guessing.
+test('a block opened by a first-line --- says how to make it a rule again', () => {
+  const hint = /horizontal rule.*heading or a blank line above it/;
+  assert.throws(() => parseBrief(['---', 'harness: codex'].join('\n')), hint);
+  assert.throws(() => parseBrief(['---', '***', '---', 'b'].join('\n')), hint);
 });
 
 test('every packaged template has a parseable block, and investigation is the one that cuts no branch', () => {

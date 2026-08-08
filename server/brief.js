@@ -90,7 +90,11 @@ function fmValue(raw, at) {
     if (items.some((s) => !s)) throw new Error(at + 'empty item in the list: ' + raw);
     return items;
   }
-  if (/^[[{]/.test(raw)) throw new Error(at + 'unclosed list — write it as [a, b, c]: ' + raw);
+  if (/^\[/.test(raw)) throw new Error(at + 'unclosed list — write it as [a, b, c]: ' + raw);
+  if (/^\{/.test(raw)) {
+    throw new Error(at + 'a map is not supported here — this block takes a name, true/false, '
+      + 'or a [a, b, c] list: ' + raw);
+  }
   return unquote(raw);
 }
 
@@ -119,6 +123,14 @@ function fmCheck(key, val, at) {
 // meta is empty and the body is the text untouched, which is every template
 // that predates this. A block that opens and never closes, or holds anything
 // but the four keys, THROWS with the offending line named.
+//
+// A first line of `---` is genuinely ambiguous — an opening delimiter to us, a
+// horizontal rule to a template written before this existed — so when the
+// block fails, the error names the way out of the ambiguity too, not just the
+// line that broke.
+const RULE_HINT = ' If that first `---` was meant as a horizontal rule, put a heading or a '
+  + 'blank line above it and the file reads as a plain brief again.';
+
 function parseBrief(text) {
   const src = String(text == null ? '' : text);
   const lines = src.split('\n');
@@ -132,7 +144,7 @@ function parseBrief(text) {
     const m = /^([A-Za-z][\w-]*):[ \t]*(.*)$/.exec(line);
     if (!m) {
       throw new Error(at + 'expected `key: value`, got: ' + line.trim()
-        + ' (the block runs to the next `---` line — is that one missing?)');
+        + ' (the block runs to the next `---` line — is that one missing?)' + RULE_HINT);
     }
     const key = m[1];
     if (!FM_KEYS.includes(key)) {
@@ -144,7 +156,8 @@ function parseBrief(text) {
     if (!raw) throw new Error(at + '"' + key + '" has no value');
     meta[key] = fmCheck(key, fmValue(raw, at), at);
   }
-  throw new Error('frontmatter opened on line 1 and is never closed — end the block with a `---` line');
+  throw new Error('frontmatter opened on line 1 and is never closed — end the block with a `---` line.'
+    + RULE_HINT);
 }
 
 // The captain ↔ lieutenant card thread as one block, or '' — templates drop

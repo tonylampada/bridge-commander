@@ -2014,22 +2014,23 @@ async function doStartCard(card, body) {
   // branch. Parsed here, honored below.
   let template = '';
   let meta = {};
+  let briefFile = '';
   if (!command) {
     const briefId = String(card.brief || '').trim();
     if (!briefId) {
       return { error: 'card ' + card.id + ' has no brief — pick a template before starting it: '
         + 'bc-axi card patch ' + card.id + ' --brief <id>. Available: ' + briefsHint() };
     }
-    const file = resolveBrief(STATE_DIR, briefId);
-    if (!file) {
+    briefFile = resolveBrief(STATE_DIR, briefId);
+    if (!briefFile) {
       return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
         + 'matches. Available: ' + briefsHint() };
     }
     let raw;
-    try { raw = fs.readFileSync(file, 'utf8'); }
-    catch (e) { return { error: 'brief template unreadable (' + file + '): ' + String((e && e.message) || e), code: 502 }; }
+    try { raw = fs.readFileSync(briefFile, 'utf8'); }
+    catch (e) { return { error: 'brief template unreadable (' + briefFile + '): ' + String((e && e.message) || e), code: 502 }; }
     try { ({ meta, body: template } = parseBrief(raw)); }
-    catch (e) { return { error: 'brief template ' + file + ': ' + String((e && e.message) || e) }; }
+    catch (e) { return { error: 'brief template ' + briefFile + ': ' + String((e && e.message) || e) }; }
     // `requires` — the attributes this flavour of SDLC cannot work without.
     // Refused HERE, before a worktree or a session exists: a review brief with
     // no pr_url otherwise renders its unresolved placeholder literally — the
@@ -2077,10 +2078,17 @@ async function doStartCard(card, body) {
   // Harness precedence: explicit CLI --harness wins, then --command (which
   // names the harness by implication), then the template's frontmatter, then
   // config/default.
+  const harnessFromTemplate = !(body && body.harness) && !command && !!meta.harness;
   const harnessName = String((body && body.harness) || (command ? 'command' : '')
     || meta.harness || readConfig().harness || 'claude');
   let impl;
-  try { impl = getHarness(harnessName); } catch (e) { return { error: String((e && e.message) || e) }; }
+  // A name the template asked for names the template back: otherwise a typo in
+  // one of several templates sends whoever started the card hunting for it.
+  try { impl = getHarness(harnessName); }
+  catch (e) {
+    return { error: String((e && e.message) || e)
+      + (harnessFromTemplate ? ' (from brief template ' + briefFile + ')' : '') };
+  }
 
   // A finished previous worker (rework restart): its session must be gone
   // (a live one is resumed/steered, not spawned over), then its worktree is

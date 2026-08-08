@@ -809,6 +809,29 @@ test('a malformed frontmatter block refuses the start and names the line', async
   } finally { await teardown(); }
 });
 
+// An unknown harness names the file that asked for it: the person starting the
+// card is rarely the person who typed the name, and a workspace holds several
+// templates to hunt through.
+test('an unknown harness from the frontmatter names the template it came from', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'typo-harness', ['---', 'harness: codx', '---', 'body', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Typo', id: 'typo-h', brief: 'typo-harness', attributes: { repo: 'proj' },
+    }));
+    let r = await s.api('POST', '/api/cards/typo-h/start', {});
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /codx/);
+    assert.match(r.body.error, /from brief template .*typo-harness\.md/);
+
+    // the flag won, so the template did not ask: no template named back
+    r = await s.api('POST', '/api/cards/typo-h/start', { harness: 'nosuchharness' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.doesNotMatch(r.body.error, /brief template/);
+    assert.deepStrictEqual(boardOnDisk(s).workers, []);
+  } finally { await teardown(); }
+});
+
 // card.start --command: the SAME atomic op, except the session runs a command
 // line instead of an agent with a brief. The board stays generic — what the
 // command does is none of its business — so what is pinned here is only that
