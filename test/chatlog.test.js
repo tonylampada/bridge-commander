@@ -128,6 +128,28 @@ test('a message survives a crash before the next saveBoard — the file is truth
   }
 });
 
+test('a torn last line costs that line, not the conversation', async () => {
+  const dir = tmpWorkspace();
+  const msgs = fakeMessages(4);
+  seedBoardWithChat(dir, msgs);
+  let s = await startServer({ dir }); // migrates the seeded chat into the file
+  await s.stop();
+  const raw = fs.readFileSync(chatFile(dir, LT), 'utf8');
+  fs.writeFileSync(chatFile(dir, LT), raw + JSON.stringify(msgs[0]).slice(0, 20)); // crash mid-append
+  s = await startServer({ dir });
+  try {
+    const chat = (await s.api('GET', '/api/board')).body.lieutenants[0].chat;
+    assert.deepStrictEqual(chat.map((m) => m.text), msgs.map((m) => m.text), 'every whole line still reads');
+    const page = await s.api('GET', '/api/chat?limit=0&target=' + encodeURIComponent('lieutenant:' + LT));
+    assert.strictEqual(page.body.messages.length, 4);
+    // the file is never repaired — append-only means append-only
+    assert.ok(fs.readFileSync(chatFile(dir, LT), 'utf8').startsWith(raw));
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('GET /api/chat pages backwards, and answers past the beginning with an empty list and a 200', async () => {
   const dir = tmpWorkspace();
   const msgs = fakeMessages(120);
@@ -163,6 +185,12 @@ test('GET /api/chat pages backwards, and answers past the beginning with an empt
     // limit=0 is the whole conversation; a card target has nothing to page
     const all = await page('', 0);
     assert.strictEqual(all.body.messages.length, 120);
+    // ...but only an explicit 0. A limit that does not parse falls back to the
+    // default page instead of shipping the entire log.
+    for (const bad of ['abc', '']) {
+      const r = await page('', bad);
+      assert.strictEqual(r.body.messages.length, TAIL, 'limit=' + JSON.stringify(bad) + ' is not "everything"');
+    }
     assert.strictEqual((await s.api('GET', '/api/chat?target=card:x')).status, 400);
     assert.strictEqual((await s.api('GET', '/api/chat?target=lieutenant:ghost')).status, 404);
   } finally {

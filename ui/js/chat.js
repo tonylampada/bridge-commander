@@ -315,7 +315,9 @@ function loadOlder(target) {
     const prevH = feedEl.scrollHeight, prevTop = feedEl.scrollTop;
     renderChat();
     feedEl.scrollTop = prevTop + (feedEl.scrollHeight - prevH);
-  }).catch(() => { older.loading = false; older.done = true; });
+    // a failed page is not the beginning of the conversation — leave `done`
+    // alone so the next scroll-up retries
+  }).catch(() => { older.loading = false; });
 }
 // Scroll-up is the whole gesture: at the top of a main chat with nothing left
 // collapsed locally, page in what came before.

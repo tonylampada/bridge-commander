@@ -740,10 +740,18 @@ function commitAck(seq, ownerId) {
 // the right home for them.
 const CHAT_TAIL = 50;
 function chatFile(lt) { return path.join(CHAT_DIR, lt + '.jsonl'); }
+// A crash mid-append can leave one torn line behind. That line is skipped and
+// the rest of the conversation is served — the file is never rewritten to
+// repair it, because append-only means append-only.
 function readChatLog(lt) {
-  try {
-    return fs.readFileSync(chatFile(lt), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
-  } catch (e) { return []; }
+  let raw;
+  try { raw = fs.readFileSync(chatFile(lt), 'utf8'); } catch (e) { return []; }
+  const out = [];
+  for (const l of raw.split('\n')) {
+    if (!l) continue;
+    try { out.push(JSON.parse(l)); } catch (e) {}
+  }
+  return out;
 }
 // The one writer. Appends the line, then extends the in-memory tail — so the
 // served board reflects the message without re-reading the file.
@@ -3608,8 +3616,11 @@ const server = http.createServer(async (req, res) => {
       if (!m) return sendJson(res, 400, { error: 'target must be lieutenant:<id> (card threads ride the board payload)' });
       const lt = findLieutenant(m[1]);
       if (!lt) return sendJson(res, 404, { error: 'unknown target: ' + target });
+      // Only an explicit 0 means the whole conversation; anything unreadable
+      // falls back to the default page rather than shipping the entire log.
       const raw = url.searchParams.get('limit');
-      const limit = raw == null ? CHAT_TAIL : (parseInt(raw, 10) || 0);
+      const n = raw == null ? NaN : parseInt(raw, 10);
+      const limit = Number.isNaN(n) ? CHAT_TAIL : Math.max(0, n);
       const before = String(url.searchParams.get('before') || '');
       return sendJson(res, 200, { target, before: before || null, messages: chatPage(lt.id, before, limit) });
     }
