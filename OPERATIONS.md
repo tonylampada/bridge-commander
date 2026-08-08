@@ -46,8 +46,8 @@ Which update path applies depends on how the skill dir was installed — check f
   Update = re-run `npx skills add tonylampada/bridge-commander -g`, then restart the server.
 - **Dev checkout** (`.git` present): update via `git pull`, then follow the deploy section above.
 
-Then re-run `bc-axi init --name <that lieutenant>` **in each workspace**: seeding runs from
-`init` and nowhere else, so until it does, an upgraded workspace has neither the new brief
+Then re-run `bc-axi init --id <the existing lieutenant id>` **in each workspace**: seeding runs
+from `init` and nowhere else, so until it does, an upgraded workspace has neither the new brief
 templates nor the `~/.claude/skills/bridge-commander-worker` symlink — and its templates order a
 skill it does not have. Re-running is idempotent: it copies only the templates that are missing,
 repoints only a symlink of ours (a hand-installed real directory is left alone), and overwrites

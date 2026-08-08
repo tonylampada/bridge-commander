@@ -163,14 +163,18 @@ rework restart with an updated brief.
 
 A worker on the `no-mistakes` brief drives its own review gate and signals when a finding comes
 back `ask-user` — the class that challenges what the card asked for. It is parked on that
-finding until your `worker send` reaches it:
+finding until your ruling reaches it by `bc-axi worker send` — a line the worker carries out,
+not flags for a tool:
 
 | answer | means |
 |---|---|
 | `fix` / `fix id1,id2` | fix everything offered / exactly these |
 | `fix id1 : do X not Y` | fix these, and here is what the finding got wrong |
 | `approve` / `skip` | the findings stand / skip the step |
-| `abort <reason>` | stop; card parked, reason on the timeline, no PR |
+| `abort <reason>` | stop the work, reason on the timeline, no PR |
+
+After an `abort` you park the card — `card park <id>`, or `worker pause <id> --park` while the
+worker is still alive — to restore the Working invariant at the top of this file.
 
 Rule on a wrong finding by arguing with it — everything after the colon reaches the fixer, so
 disagreeing is its own answer rather than an approval around it. Every `ask-user` finding gets a
