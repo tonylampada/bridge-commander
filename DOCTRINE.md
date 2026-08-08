@@ -142,8 +142,9 @@ read the card, sharpen the brief, `card start`.
 ## Supervising workers
 
 Workers report through your queue: `worker-signal` items are milestones (note them),
-`worker-done` means verify the work in its worktree — read the actual diff or branch, never
-just trust the outcome text; **verified** means the exact end-user path was exercised, not a
+`worker-done` means verify the work — read the actual diff or branch from the project clone
+(the worker's worktree is released the moment it reports done, unless its playbook says
+`keep_worktree: true`), never just trust the outcome text; **verified** means the exact end-user path was exercised, not a
 proxy (a notification feature checked via typed events but never a real chat message is not
 verified) — require the done report to name the path it exercised — then rewrite the card body
 and hand off (`card move <id> review`) — the card never leaves Working by itself.

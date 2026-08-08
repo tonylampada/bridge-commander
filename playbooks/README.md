@@ -29,6 +29,7 @@ harness: codex
 model: gpt-5.6-sol
 requires: [pr_url, pr_number, repo_slug]
 branch: false
+keep_worktree: true
 ---
 ```
 
@@ -38,17 +39,26 @@ branch: false
 | `model` | the model that session starts with |
 | `requires` | card attributes this playbook cannot work without — `card start` refuses before provisioning anything and names the missing one |
 | `branch` | `false` = detached HEAD, no branch cut, nothing to push. Omitted, the card type decides as before (an investigation gets no branch) |
+| `keep_worktree` | `true` = the worker's worktree survives its `done`. Omitted, the board gives it back the moment the work ends |
 
-All four are optional. **An explicit CLI flag beats the frontmatter, which beats the config
+All five are optional. **An explicit CLI flag beats the frontmatter, which beats the config
 default** — so `--harness claude` still overrides a playbook that says `codex`.
 
 This is not YAML and does not want to be: `key: value`, `key: [a, b, c]`, `true`/`false`, and
-those four keys. Anything else in the block is an error naming the line, because a guess here
+those five keys. Anything else in the block is an error naming the line, because a guess here
 silently starts the wrong worker. A playbook that wants a conditional wants to be two playbooks.
 
 `requires` is how a playbook says "this placeholder is not a typo": an unknown `{{NAME}}` stays
 literal on purpose, so a `codereview` brief with no `pr_url` would otherwise launch a worker to
 discover that for itself.
+
+`keep_worktree` is the exception, not the habit: a worktree is a full checkout, and fifteen
+finished cards used to hold fifteen of them. Reach for it when the card is expected to be
+**reworked in place** — `worker send` for another turn, `card start --resume` — where throwing
+the checkout away costs a re-clone. Everything else gets its worktree back at `worker done`,
+and both ways back into a finished worker refuse rather than land an agent in a deleted
+directory. A worktree with uncommitted changes is never released, kept or not: the release is
+refused, the card timeline says so, and the directory stays exactly as it is.
 
 ## Worker duties
 

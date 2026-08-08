@@ -1048,7 +1048,7 @@ async function cmdDrain() {
       hint = 'read the thread (bc-axi thread card:' + it.card + ') and act; steer the worker: bc-axi worker send ' + it.card + ' --text-file <f|->';
     } else if (it.kind === 'worker-done') {
       head = 'WORKER DONE — ' + cardBit(it.card);
-      hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text), rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
+      hint = 'verify the work — the worktree is released at done (unless its playbook keeps it), so read the branch or the PR from the project clone (git -C <project> log -p main..bc/' + it.card + '), not just the outcome text; rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
     } else if (it.kind === 'worker-stopped') {
       const c = cards.find((x) => x.id === it.card);
       const sess = (c && c.attributes && c.attributes.session) || '<session>';

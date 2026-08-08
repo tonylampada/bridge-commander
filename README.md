@@ -80,7 +80,8 @@ rest, all listed in the folder's own README. Sharpen the body a second before st
 worker reads the sharpened one.
 
 A playbook may also open with a small frontmatter block naming how the card runs — `harness`,
-`model`, `requires` (attributes it cannot start without), `branch` — all optional, all in
+`model`, `requires` (attributes it cannot start without), `branch`, `keep_worktree` (hold the
+checkout past `worker done`, for a card reworked in place) — all optional, all in
 [playbooks/README.md](playbooks/README.md).
 
 They are **yours**. Edit one and the next card started on it uses the edit — no restart, no

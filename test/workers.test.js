@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
+const { startServerWithLieutenant, withOwner, runCli, sleep, LT } = require('./helper');
 const { lieutenantSession, workerWindow } = require('../server/names.js');
 
 // A worker's harness key/address: a WINDOW inside the owning lieutenant's
@@ -487,7 +487,12 @@ test('worker send: delivers into the live worker session + level-2 card event; l
 test('worker send reopens a done-but-alive worker: turn re-enters Working, record reset, text delivered', async () => {
   const { s, fdir, teardown } = await boot();
   try {
-    await s.api('POST', '/api/cards', withOwner({ title: 'Reopen', id: 'reopen', attributes: { repo: 'proj' } }));
+    // reworked in place: the playbook keeps the worktree, so there is still a
+    // checkout for the reopened turn to write in
+    writePlaybook(s, 'kept', ['---', 'keep_worktree: true', '---', '{{TASK}}', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Reopen', id: 'reopen', playbook: 'kept', attributes: { repo: 'proj' },
+    }));
     assert.strictEqual((await s.api('POST', '/api/cards/reopen/start', { harness: 'fake' })).status, 200);
     const sess = workerKey(s.dir, 'reopen');
 
@@ -793,6 +798,121 @@ test('a restart on a `branch: false` playbook clears the branch the previous run
     await s.stop();
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+// A worktree outlives the work: card.start provisions one and nothing gave it
+// back until somebody archived the card, so finished cards sat on their
+// checkouts. The release now happens when the work ENDS — `keep_worktree: true`
+// is the exception, for a card expected to be reworked in place.
+async function until(what, fn, ms = 6000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > deadline) throw new Error('timeout waiting for: ' + what);
+    await sleep(50);
+  }
+}
+const cardEvents = async (s, id) => ((await s.api('GET', '/api/cards/' + id)).body.events || []);
+
+test('worker done releases the worktree; `keep_worktree: true` holds it until archive', async () => {
+  const { s, teardown } = await boot();
+  try {
+    // (a) no keep_worktree key: the directory is gone when the work ends
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Ship and go', id: 'goes', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/goes/start', { harness: 'fake' })).body.worker;
+    assert.ok(fs.existsSync(w.worktree.path));
+    await s.api('POST', '/api/cards/goes/worker/done', { outcome: 'shipped' });
+    await until('worktree released', async () => !fs.existsSync(w.worktree.path));
+    const ev = (await cardEvents(s, 'goes')).find((e) => /worktree released/.test(e.text));
+    assert.ok(ev, 'the timeline says the worktree went');
+    assert.match(ev.text, new RegExp(w.worktree.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.strictEqual((await s.api('GET', '/api/cards/goes')).body.attributes.worktree, undefined,
+      'the attribute stops pointing at a directory that is gone');
+    // the clone knows too: a stale registration would block the next add
+    assert.strictEqual(git(path.join(s.dir, 'projects', 'proj'), 'worktree', 'list').split('\n').filter(Boolean).length, 1);
+
+    // (b) keep_worktree: true — the checkout survives the worker
+    writePlaybook(s, 'reworked', ['---', 'keep_worktree: true', '---', 'rework me', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Rework in place', id: 'stays', playbook: 'reworked', attributes: { repo: 'proj' },
+    }));
+    const k = (await s.api('POST', '/api/cards/stays/start', { harness: 'fake' })).body.worker;
+    assert.strictEqual(k.keepWorktree, true);
+    await s.api('POST', '/api/cards/stays/worker/done', { outcome: 'first pass' });
+    await sleep(400);
+    assert.ok(fs.existsSync(k.worktree.path), 'kept: the card is expected to be reworked in place');
+
+    // ...and archiving releases it anyway — nothing is left to rework
+    assert.strictEqual((await s.api('POST', '/api/cards/stays/archive', { reason: 'killed' })).status, 200);
+    await until('worktree released at archive', async () => !fs.existsSync(k.worktree.path));
+  } finally { await teardown(); }
+});
+
+test('a dirty worktree survives `worker done`, and the timeline says why', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Left work behind', id: 'dirty', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/dirty/start', { harness: 'fake' })).body.worker;
+    fs.writeFileSync(path.join(w.worktree.path, 'unsaved.txt'), 'not committed\n');
+
+    await s.api('POST', '/api/cards/dirty/worker/done', { outcome: 'done, sort of' });
+    const ev = await until('the refusal on the timeline', async () =>
+      (await cardEvents(s, 'dirty')).find((e) => /worktree kept/.test(e.text)));
+    assert.match(ev.text, /uncommitted changes/); // the reason
+    assert.match(ev.text, new RegExp(w.worktree.path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))); // the path
+    assert.strictEqual(ev.level, 2, 'a refused release is not an alarm');
+    assert.ok(fs.existsSync(path.join(w.worktree.path, 'unsaved.txt')), 'nothing was discarded');
+    assert.strictEqual((await s.api('GET', '/api/cards/dirty')).body.attributes.worktree, w.worktree.path);
+  } finally { await teardown(); }
+});
+
+test('archiving a card whose worktree is already gone is a no-op, not an error', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Twice released', id: 'twice', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/twice/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/twice/worker/done', { outcome: 'shipped' });
+    await until('worktree released', async () => !fs.existsSync(w.worktree.path));
+
+    const r = await s.api('POST', '/api/cards/twice/archive', { reason: 'killed' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    await sleep(400);
+    const evs = (await s.api('GET', '/api/board')).body.events.filter((e) => e.card === 'twice');
+    assert.deepStrictEqual(evs.filter((e) => /worktree/.test(e.text)), [], 'nothing happened, nothing said');
+  } finally { await teardown(); }
+});
+
+// A released worktree is nothing to reincarnate into: both ways back into a
+// finished worker name the key that would have kept it, instead of failing
+// somewhere deep inside the harness on a missing cwd.
+test('resume and worker send both refuse a worker whose worktree was released', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'No way back', id: 'noback', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/noback/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/noback/worker/done', { outcome: 'shipped' });
+    await until('worktree released', async () => !fs.existsSync(w.worktree.path));
+
+    // its session is still alive, so send would otherwise reopen the turn in place
+    const send = await s.api('POST', '/api/cards/noback/worker/send', { text: 'one more thing' });
+    assert.strictEqual(send.status, 409, JSON.stringify(send.body));
+    assert.match(send.body.error, /worktree was released/);
+    assert.match(send.body.error, /keep_worktree/);
+
+    const res = await s.api('POST', '/api/cards/noback/start', { resume: true });
+    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
+    assert.match(res.body.error, /worktree is gone/);
+    assert.match(res.body.error, /keep_worktree/);
+  } finally { await teardown(); }
 });
 
 test('a malformed frontmatter block refuses the start and names the line', async () => {

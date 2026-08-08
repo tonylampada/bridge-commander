@@ -1873,6 +1873,53 @@ async function fireHooks(event, card, w, opts) {
   }
 }
 
+// releaseCardWorktree(card, w, opts) — the worktree goes when the WORK ends, not
+// whenever someone tidies up: a finished card held its checkout until archive,
+// so fifteen finished cards held fifteen worktrees on disk.
+//
+// Called at `worker done` (opts.honorKeep — the playbook's `keep_worktree: true`
+// keeps it for a card expected to be reworked in place) and at archive (never
+// kept: the card is gone, there is nothing left to rework). Both call sites run
+// their lifecycle hooks FIRST, so a hook can still reach paths inside
+// $BC_WORKTREE.
+//
+// releaseWorktree refuses an unclean worktree, and that refusal is the feature —
+// committed-but-unmerged work is never discarded. A refusal is NOT an error: the
+// directory stays and the timeline says which path and why. Never throws — every
+// call site observes a lifecycle outcome it must not fail.
+async function releaseCardWorktree(card, w, opts = {}) {
+  try {
+    if (opts.honorKeep && w && w.keepWorktree) return;
+    const attrs = (card && card.attributes) || {};
+    const wtRec = (w && w.worktree && w.worktree.path) ? w.worktree
+      : (attrs.worktree ? { path: String(attrs.worktree), tool: 'git' } : null);
+    if (!wtRec) return;
+    const project = findProject(String((w && w.project) || attrs.repo || ''));
+    if (!project) return; // no clone to release against — leave the directory alone
+    const rel = await releaseWorktree(wtRec, project.path);
+    if (rel.released && rel.reason === 'already gone') return; // nothing happened, nothing to say
+    const text = rel.released
+      ? 'worktree released: ' + wtRec.path
+      : 'worktree kept (' + rel.reason + '): ' + wtRec.path;
+    if (!rel.released) console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
+    const ev = mkEvent({ text, actor: 'server' }, { level: 2 });
+    const live = findCard(card.id); // archived in the meantime → the board stream carries it
+    if (live) {
+      live.events.push(ev);
+      live.updated = now();
+      // the attribute is a pointer at a directory: a released one has to stop
+      // pointing, or every reader downstream is sent to a path that is gone
+      if (rel.released && live.attributes) delete live.attributes.worktree;
+    } else {
+      ev.card = card.id; ev.cardTitle = card.title;
+      board.events.push(ev);
+    }
+    saveBoard(); broadcast();
+  } catch (e) {
+    console.error(now() + ' worktree release for ' + card.id + ' failed: ' + String((e && e.message) || e));
+  }
+}
+
 // The system move into Working — card.start is the ONE way in (invariant:
 // Working ⇔ live worker). Clears any pendingOrder (a start-order just executed).
 function enterWorking(card, text) {
@@ -1969,6 +2016,14 @@ async function doStartCard(card, body) {
       return { error: 'refusing to resume ' + card.id + ': its worker stopped with --expect-exit — resuming '
         + 'would start a second run over the one already in flight. '
         + 'The way back, as recorded at the pause: ' + (existing.pauseReason || '(no reason recorded)'), code: 409 };
+    }
+    // A resume reincarnates the session in the SAME worktree, so a released one
+    // leaves nothing to reincarnate into. Say that, and name the key that keeps
+    // it: the harness would otherwise fail on a missing cwd deep inside tmux.
+    if (existing.worktree && existing.worktree.path && !fs.existsSync(existing.worktree.path)) {
+      return { error: 'cannot resume ' + card.id + ': its worktree is gone (' + existing.worktree.path
+        + ') — released when the worker reported done. Start it fresh (card start), or, for a playbook '
+        + 'whose cards are reworked in place, set `keep_worktree: true` in its frontmatter', code: 409 };
     }
     let ref;
     try {
@@ -2149,6 +2204,9 @@ async function doStartCard(card, body) {
   attachBriefArtifact(card, ref);
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
   if (branch) worker.branch = branch;
+  // Recorded at start because `worker done` is where it is read, and the
+  // playbook is resolved HERE and only here.
+  if (meta.keep_worktree) worker.keepWorktree = true;
   board.workers.push(worker);
   enterWorking(card, 'worker ' + workerName(ref) + ' started in ' + wt.path);
   return { worker };
@@ -2232,7 +2290,15 @@ async function workerSend(card, body) {
     }
     // Done but its session is still alive+idle: reopen the turn in place (the
     // reset mirrors the resume path) instead of 409-ing, so a send re-enters
-    // Working without the undiscoverable two-step resume.
+    // Working without the undiscoverable two-step resume. Unless the ground is
+    // gone: `done` released the worktree the session sits in, so the reopened
+    // turn would have nowhere to write.
+    if (w.worktree && w.worktree.path && !fs.existsSync(w.worktree.path)) {
+      return { error: 'worker for ' + card.id + ' reported done and its worktree was released ('
+        + w.worktree.path + ') — a reopened turn would have nowhere to write. Start it fresh '
+        + '(card start ' + card.id + '), or, for a playbook whose cards are reworked in place, '
+        + 'set `keep_worktree: true` in its frontmatter', code: 409 };
+    }
     w.done = false;
     delete w.outcome;
     delete w.flagged;
@@ -3121,8 +3187,13 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'worker/done' && req.method === 'POST') {
         const r = workerDone(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, 400, { error: r.error });
+        const w = findWorker(card.id);
         saveBoard(); broadcast();
-        fireHooks('worker-done', card, findWorker(card.id)); // fire-and-forget
+        // Fire-and-forget, in order: the hooks run (they may read paths inside
+        // $BC_WORKTREE), THEN the work-is-over release. Neither blocks the
+        // worker's own `done` call — it is the last thing it does.
+        fireHooks('worker-done', card, w)
+          .then(() => releaseCardWorktree(card, w, { honorKeep: true }));
         return sendJson(res, 200, { ok: true, event: r.event, card: publicCard(card, 'user') });
       }
       if (!sub && req.method === 'GET') {
@@ -3171,9 +3242,12 @@ const server = http.createServer(async (req, res) => {
         const r = archiveCard(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, 400, { error: r.error });
         saveBoard(); broadcast();
-        // Fire-and-forget is safe here: this path never releases the worktree,
-        // so the hooks-before-release ordering holds trivially.
-        fireHooks('card-archived', card, w, { boardLevel: true });
+        // Hooks first, then the release — the ordering guarantee: a hook may
+        // still need paths inside $BC_WORKTREE. The card is gone, so nothing
+        // is ever kept here; a worktree already released at `worker done` is a
+        // no-op, and an unclean one stays exactly where it is.
+        fireHooks('card-archived', card, w, { boardLevel: true })
+          .then(() => releaseCardWorktree(card, w));
         return sendJson(res, 200, r);
       }
       // promote-to-artifact — the deliberate tool. POST adds, DELETE removes an

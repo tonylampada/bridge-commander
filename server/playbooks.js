@@ -63,16 +63,17 @@ function resolvePlaybook(stateDir, id) {
 //   model: gpt-5.6-sol
 //   requires: [pr_url, pr_number]
 //   branch: false
+//   keep_worktree: true
 //   ---
 //
 // A playbook includes what runs it, and prose in the brief cannot act — the
 // worker reads "start this on codex" only once it is already on claude.
-// Four keys, all optional, no playbook without the block behaving any
+// Five keys, all optional, no playbook without the block behaving any
 // differently. The parser is hand-written and covers only what those
-// four keys need — a general markup language is exactly what this must not
+// five keys need — a general markup language is exactly what this must not
 // grow into — and anything else in the block is an error naming its line,
 // because a guess here silently starts the wrong worker.
-const FM_KEYS = ['harness', 'model', 'requires', 'branch'];
+const FM_KEYS = ['harness', 'model', 'requires', 'branch', 'keep_worktree'];
 const FM_NAME_RE = /^[\w][\w.-]*$/;
 
 function unquote(s) {
@@ -98,9 +99,11 @@ function fmValue(raw, at) {
   return unquote(raw);
 }
 
+const FM_FLAGS = ['branch', 'keep_worktree'];
+
 function fmCheck(key, val, at) {
-  if (key === 'branch') {
-    if (typeof val !== 'boolean') throw new Error(at + 'branch takes true or false, got: ' + JSON.stringify(val));
+  if (FM_FLAGS.includes(key)) {
+    if (typeof val !== 'boolean') throw new Error(at + key + ' takes true or false, got: ' + JSON.stringify(val));
     return val;
   }
   if (key === 'requires') {
@@ -122,7 +125,7 @@ function fmCheck(key, val, at) {
 // parsePlaybook(text) -> { meta, body }. No opening `---` line = no frontmatter:
 // meta is empty and the body is the text untouched, which is every playbook
 // that predates this. A block that opens and never closes, or holds anything
-// but the four keys, THROWS with the offending line named.
+// but the five keys, THROWS with the offending line named.
 //
 // A first line of `---` is genuinely ambiguous — an opening delimiter to us, a
 // horizontal rule to a playbook written before this existed — so when the

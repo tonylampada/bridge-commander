@@ -38,7 +38,9 @@ them drift.
   `<workspace>/.bridge-commander/playbooks/`, rendered against the card as it stands at start —,
   session/worktree/branch bound to the card, card → Working. Workers report with
   `bc-axi worker signal|done`; the lieutenant verifies and hands off — nothing moves a card
-  out of Working automatically.
+  out of Working automatically. `done` gives the worktree back (a playbook's
+  `keep_worktree: true` holds it for a card reworked in place; an unclean one is never
+  released).
 - **Supervision is infrastructure**: the server watches sessions, turn-ends, and PRs. Dead
   lieutenants are auto-respawned (resume), dead workers flag their owner, merged PRs archive
   the card, release the worktree, and kill the lingering worker session (never hand-archive

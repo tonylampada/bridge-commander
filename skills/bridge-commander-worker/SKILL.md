@@ -33,7 +33,9 @@ nothing.
 
 **`worker done <CARD> --outcome "<what landed>"`** — terminal, and the only way the card's
 owner learns you finished. The outcome is what your lieutenant acts on without opening
-anything: what landed, and the PR URL if there is one.
+anything: what landed, and the PR URL if there is one. Terminal for the worktree too: the
+board takes it back when you report done, so commit and push before you call it — anything
+left uncommitted keeps the directory (nothing is ever discarded) but is nobody's plan.
 
 That is your whole vocabulary with the board. **Your lieutenant moves the card** once they have
 verified the work, so leave the column alone. You have no channel to the captain; anything for

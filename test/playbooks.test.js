@@ -85,13 +85,14 @@ test('no frontmatter = the body is the file, untouched', () => {
   assert.deepStrictEqual(parsePlaybook(rule), { meta: {}, body: rule });
 });
 
-test('the four keys parse to their types, and the body starts after the closing ---', () => {
+test('the five keys parse to their types, and the body starts after the closing ---', () => {
   const { meta, body } = parsePlaybook([
     '---',
     'harness: codex',
     'model: gpt-5.6-sol',
     'requires: [pr_url, pr_number, repo_slug]',
     'branch: false',
+    'keep_worktree: true',
     '---',
     '',
     '# The brief',
@@ -101,6 +102,7 @@ test('the four keys parse to their types, and the body starts after the closing 
     model: 'gpt-5.6-sol',
     requires: ['pr_url', 'pr_number', 'repo_slug'],
     branch: false,
+    keep_worktree: true,
   });
   assert.strictEqual(body, '# The brief'); // the blank line under the block is not the brief
 });
@@ -125,6 +127,7 @@ test('a malformed block fails with the offending line named', () => {
   bad(['---', 'harness: codex', 'this is prose', '---', 'b'], /line 3: expected `key: value`.*this is prose/);
   bad(['---', 'hraness: codex', '---', 'b'], /line 2: unknown key "hraness"/);
   bad(['---', 'branch: nope', '---', 'b'], /line 2: branch takes true or false/);
+  bad(['---', 'keep_worktree: yes', '---', 'b'], /line 2: keep_worktree takes true or false/);
   bad(['---', 'harness: [a, b]', '---', 'b'], /line 2: harness takes a name/);
   bad(['---', 'harness: true', '---', 'b'], /line 2: harness takes a name/);
   bad(['---', 'model:', '---', 'b'], /line 2: "model" has no value/);
