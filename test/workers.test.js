@@ -710,7 +710,8 @@ test('`requires` counts a recorded list as present, an empty one as missing, and
     }));
     const r = await s.api('POST', '/api/cards/nopr/start', { harness: 'fake' });
     assert.strictEqual(r.status, 400, JSON.stringify(r.body));
-    assert.match(r.body.error, /prs/, 'the refusal names the attribute');
+    // anchored on the attribute: a bare /prs/ would pass on the brief id alone
+    assert.match(r.body.error, /requires the attribute prs\./, 'the refusal names the attribute');
     assert.doesNotMatch(r.body.error, /--attr prs=/, 'and never a recipe that would flatten the list');
     assert.match(r.body.error, /recorded by the board itself/);
     assert.deepStrictEqual(boardOnDisk(s).workers.filter((w) => w.card === 'nopr'), []);
