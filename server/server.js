@@ -1923,6 +1923,11 @@ function attachBriefArtifact(card, ref) {
 // against the board after the spawn so a mid-start archive never leaves an
 // orphan session behind. The response still reports the REAL spawn outcome —
 // the await keeps startCard's success/failure contract synchronous-looking.
+// The attributes the BOARD writes and a human never does: each holds a list of
+// records the board appends to, and `--attr prs=<value>` overwrites that list
+// with a string the next append then has to throw away. Named in a refusal,
+// never offered as a recipe.
+const BOARD_OWNED_ATTRS = new Set(['prs', 'artifacts']);
 const startingCards = new Set(); // card ids with a start/resume in flight
 async function startCard(card, body) {
   if (startingCards.has(card.id)) {
@@ -2033,10 +2038,19 @@ async function doStartCard(card, body) {
     // placeholder table uses, so a template asking for PR_URL is answered by
     // the card's pr_url — asking for a name the brief could not have read back
     // is not a requirement anyone means to write.
+    //
+    // The question here is whether the card CARRIES the thing, not whether it
+    // has a text form to render — that second question is briefVars', and it
+    // is why the two rules differ: a review brief demanding "this card has PRs
+    // recorded" is a real requirement even though the recorded list renders
+    // into nothing. An empty list, though, carries nothing.
     const have = new Set();
     for (const [k, v] of Object.entries((card.attributes || {}))) {
-      if (v === null || typeof v === 'object' || String(v).trim() === '') continue;
-      have.add(attrVar(k));
+      if (v === null || v === undefined) continue;
+      const carried = typeof v === 'object'
+        ? (Array.isArray(v) ? v.length > 0 : Object.keys(v).length > 0)
+        : String(v).trim() !== '';
+      if (carried) have.add(attrVar(k));
     }
     // Named back in the form the CARD carries: the uppercase form would earn
     // the user a second attribute resolving to the placeholder the first owns.
@@ -2044,10 +2058,20 @@ async function doStartCard(card, body) {
       .filter((k) => !have.has(attrVar(k)))
       .map((k) => attrCardKey(k)))];
     if (missing.length) {
-      return { error: 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
-        + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ')
-        + '. Set ' + (missing.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch ' + card.id
-        + ' ' + missing.map((k) => '--attr ' + k + '=<value>').join(' ') };
+      const ours = missing.filter((k) => BOARD_OWNED_ATTRS.has(k));
+      const settable = missing.filter((k) => !BOARD_OWNED_ATTRS.has(k));
+      let err = 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
+        + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ') + '.';
+      if (settable.length) {
+        err += ' Set ' + (settable.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch '
+          + card.id + ' ' + settable.map((k) => '--attr ' + k + '=<value>').join(' ') + '.';
+      }
+      if (ours.length) {
+        err += ' ' + ours.join(' and ') + ' ' + (ours.length > 1 ? 'are' : 'is')
+          + ' recorded by the board itself and never set by hand — the card has to earn '
+          + (ours.length > 1 ? 'them' : 'it') + ' before this brief can run.';
+      }
+      return { error: err };
     }
   }
   // Harness precedence: explicit CLI --harness wins, then --command (which

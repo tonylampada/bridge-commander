@@ -687,6 +687,36 @@ test('`requires` matches the attribute however it is spelled, and names the card
   } finally { await teardown(); }
 });
 
+// `requires` asks whether the card CARRIES the thing, which is a different
+// question from whether the thing renders: prs has no text form, and "this
+// card must have PRs recorded" is still a legitimate demand from a review
+// brief. And prs is the board's to write — so the refusal names it without
+// handing out an --attr recipe that would flatten the recorded list.
+test('`requires` counts a recorded list as present, an empty one as missing, and offers no recipe for what the board owns', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'needs-prs', ['---', 'requires: [prs]', '---', 'review the PRs', ''].join('\n'));
+    const pr = { url: 'https://github.com/o/r/pull/11', state: 'open' };
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Has PRs', id: 'haspr', brief: 'needs-prs', attributes: { repo: 'proj', prs: [pr] },
+    }));
+    const ok = await s.api('POST', '/api/cards/haspr/start', { harness: 'fake' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+    assert.deepStrictEqual(ok.body.card.attributes.prs, [pr], 'the recorded list is untouched');
+
+    // an empty list carries nothing
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'No PRs', id: 'nopr', brief: 'needs-prs', attributes: { repo: 'proj', prs: [] },
+    }));
+    const r = await s.api('POST', '/api/cards/nopr/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    assert.match(r.body.error, /prs/, 'the refusal names the attribute');
+    assert.doesNotMatch(r.body.error, /--attr prs=/, 'and never a recipe that would flatten the list');
+    assert.match(r.body.error, /recorded by the board itself/);
+    assert.deepStrictEqual(boardOnDisk(s).workers.filter((w) => w.card === 'nopr'), []);
+  } finally { await teardown(); }
+});
+
 test('`branch: false` cuts no branch — the brief owns the delivery contract, not the card type', async () => {
   const { s, teardown } = await boot();
   try {
