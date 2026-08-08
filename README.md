@@ -79,6 +79,10 @@ and attributes, through `{{CARD_TITLE}}`, `{{TASK}}`, `{{THREAD}}`, `{{ATTR_<NAM
 rest, all listed in the folder's own README. Sharpen the body a second before starting and the
 worker reads the sharpened one.
 
+A template may also open with a small frontmatter block naming how the card runs — `harness`,
+`model`, `requires` (attributes it cannot start without), `branch` — all optional, all in
+[briefs/README.md](briefs/README.md).
+
 They are **yours**. Edit one and the next card started on it uses the edit — no restart, no
 release. Add a file and it is in the dropdown. The copies shipped here only seed a fresh
 workspace; a file in `.bridge-commander/briefs/` always wins, so upgrading never overwrites
