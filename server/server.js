@@ -57,7 +57,7 @@ const crypto = require('crypto');
 // The harness port — the ONLY seam the server speaks to agent sessions through
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
-const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
+const { isHarnessRef, harnessFor, getHarness, knownHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
@@ -292,14 +292,24 @@ function normalizeBoard(doc) {
     && typeof p.path === 'string' && p.path);
   for (const p of b.projects) delete p.mode;
   if (!Array.isArray(b.workers)) b.workers = [];
-  // A ref naming the retired `command` harness is dropped the same way, and for
-  // the same reason: the registry cannot resolve it any more, so every liveness
-  // path that touched one would read a harness that no longer exists and quietly
-  // call it dead. Those records are finished work — nothing resumes them, and
-  // their cards keep their events, outcomes and the worktree/repo attributes the
-  // archive path releases from.
-  b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref)
-    && w.ref.harness !== 'command');
+  b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref));
+  // A record whose harness has RETIRED — the `command` harness, which ran a
+  // program instead of an agent — normalizes to dead but INTACT. Not dropped:
+  // the registry entry is the only thing that knows its worktree exists, and it
+  // is the only place the worktree's `tool` and `base` are written down. The card
+  // attribute holds a bare path, so a dropped record leaves a directory and its
+  // worktree registration orphaned with nothing left that can find them, and a
+  // `treehouse` worktree released as if it were plain `git` is not released at
+  // all. `mode` was a dead FIELD; this is a live HANDLE.
+  // What the record loses is its session: marked here, it reads dead everywhere
+  // (workerAlive / workerKill) WITHOUT the registry ever being asked to resolve
+  // a name it no longer has.
+  for (const w of b.workers) {
+    if (knownHarness(w.ref.harness)) { delete w.retiredHarness; continue; }
+    w.retiredHarness = true;
+    w.done = true; // supervision watches live work; this is finished work
+    delete w.flagged;
+  }
   for (const c of b.cards) {
     if (!Array.isArray(c.events)) c.events = [];
     if (!Array.isArray(c.thread)) c.thread = [];
@@ -952,6 +962,7 @@ function resolvePaneRef(kind, id, want) {
     if (!card) return { ref: null, reason: 'unknown card: ' + id };
     if (card.column !== 'working') return { ref: null, reason: 'card is not Working' };
     if (!w) return { ref: null, reason: 'no worker bound to ' + id };
+    if (w.retiredHarness) return { ref: null, reason: 'worker ran on the retired "' + w.ref.harness + '" harness — no session to view' };
     // `want` is the caller asking for one of the offered windows by name —
     // honoured only if the CARD listed it, so a request can never name a window
     // of its own. Unlisted or absent falls back to the card's first offer, then
@@ -1230,6 +1241,9 @@ function commandTargetRef(target) {
     const w = findWorker(card.id);
     if (!w || !isHarnessRef(w.ref)) {
       return { ref: null, why: 'no worker on card ' + card.id + ' — slash commands address the worker session (card start ' + card.id + ' first)' };
+    }
+    if (w.retiredHarness) {
+      return { ref: null, why: 'the worker on card ' + card.id + ' ran on the retired "' + w.ref.harness + '" harness — there is no session to command' };
     }
     return { ref: w.ref };
   }
@@ -1675,8 +1689,7 @@ function archiveCard(card, body, actorDefault) {
   // supervision stops watching a session that no longer represents live work.
   for (const w of board.workers) {
     if (w.card !== card.id) continue;
-    const ref = w.ref;
-    Promise.resolve().then(() => harnessFor(ref).kill(ref)).catch(() => {});
+    workerKill(w).catch(() => {}); // a retired harness is already dead — no lookup
   }
   board.workers = board.workers.filter((w) => w.card !== card.id);
   // The kill lands on the board-level stream (the card is gone) with a card
@@ -1788,6 +1801,22 @@ function ownerSession(card) {
 function workerName(ref) { return ref.window ? ref.session + ':' + ref.window : ref.session; }
 function findWorker(cardId) { return board.workers.find((w) => w.card === cardId); }
 
+// A registry entry whose harness has RETIRED is dead, and is known to be dead
+// without asking anyone: the lookup that would answer is precisely the one that
+// must never happen, because the registry cannot resolve that name any more.
+// normalizeBoard marks these on load; every path that would reach the harness
+// for a worker goes through these two, so the record keeps its worktree handle
+// while nothing tries to talk to a session that no longer has an implementation.
+async function workerAlive(w) {
+  if (!w || w.retiredHarness) return false;
+  try { return await harnessFor(w.ref).alive(w.ref); } catch (e) { return false; }
+}
+// Best-effort by contract (a dead ref is a no-op), so a retired one is too.
+function workerKill(w) {
+  if (!w || w.retiredHarness) return Promise.resolve();
+  return Promise.resolve().then(() => harnessFor(w.ref).kill(w.ref));
+}
+
 // The worker lease (card.status.worker) is a WRITTEN signal — status.set is its
 // only writer — so a worker that never writes one reads `absent` while its
 // session is plainly alive, and its card reports an absent worker for the whole
@@ -1802,8 +1831,7 @@ async function statusWithLiveness(card, status) {
   if (!status || !status.worker || status.worker.state !== 'absent') return status;
   const w = findWorker(card.id);
   if (!w) return status;
-  let up = false;
-  try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+  const up = await workerAlive(w);
   if (!up) return status;
   return Object.assign({}, status, {
     worker: {
@@ -1969,6 +1997,15 @@ async function doStartCard(card, body) {
         + 'would start a second run over the one already in flight. '
         + 'The way back, as recorded at the pause: ' + (existing.pauseReason || '(no reason recorded)'), code: 409 };
     }
+    // Nothing to reincarnate: the harness that ran this worker no longer exists,
+    // so there is no implementation to resume it WITH — said here rather than
+    // discovered by asking the registry for a name it cannot resolve. The record
+    // stays; it is the card's worktree handle, not a session to revive.
+    if (existing.retiredHarness) {
+      return { error: 'cannot resume ' + card.id + ': its worker ran on the retired "' + existing.ref.harness
+        + '" harness, which no longer exists. That run is finished — start the card fresh '
+        + '(archive the worker first) or archive the card.', code: 409 };
+    }
     let ref;
     try {
       ref = await harnessFor(existing.ref).resume(existing.ref, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
@@ -2086,8 +2123,7 @@ async function doStartCard(card, body) {
   // released first — only when clean, so committed-but-unmerged work is never
   // discarded.
   if (existing) {
-    let up = false;
-    try { up = await harnessFor(existing.ref).alive(existing.ref); } catch (e) { up = false; }
+    const up = await workerAlive(existing);
     if (up) {
       const reopenHint = existing.done ? ' (or, since it reported done, reopen it in place with worker send)' : '';
       return { error: 'previous worker session ' + workerName(existing.ref) + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it' + reopenHint, code: 409 };
@@ -2222,8 +2258,7 @@ async function workerSend(card, body) {
   if (!w) {
     return { error: 'no worker bound to card ' + card.id + ' — start one first (card start ' + card.id + ')', code: 404 };
   }
-  let up = false;
-  try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+  let up = await workerAlive(w);
   if (w.done) {
     // A done-but-DEAD worker is a genuine restart: point at the resume recipe.
     if (!up) {
@@ -2290,7 +2325,7 @@ async function pauseWorker(card, body) {
   delete w.staleNotified;
   if (!(body && body.expectExit)) {
     try {
-      await harnessFor(w.ref).kill(w.ref);
+      await workerKill(w);
     } catch (e) {
       delete w.paused; // the session may still be alive — stay honest, let supervision judge
       return { error: 'pause failed killing session ' + workerName(w.ref) + ': ' + String((e && e.message) || e), code: 502 };
@@ -2332,8 +2367,7 @@ async function parkCard(card, body) {
   }
   const w = findWorker(card.id);
   if (w) {
-    let up = false;
-    try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+    const up = await workerAlive(w);
     if (up) {
       return w.done
         ? { error: 'refusing to park ' + card.id + ': its worker reported done and session ' + workerName(w.ref)
@@ -2466,8 +2500,7 @@ async function superviseTick() {
     }
     for (const w of board.workers) {
       if (w.done || w.flagged || w.paused) continue;
-      let up = false;
-      try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
+      const up = await workerAlive(w);
       // Staleness watchdog (alive-but-hung): checked BEFORE the alive
       // early-continue, only for a genuinely live, unpaused worker on a
       // Working card. One item per stall (staleNotified mirrors the

@@ -140,6 +140,12 @@ actor strings are honor-system. The network boundary is the auth boundary.
 The server speaks ONLY this port. Builtins: `claude`, `codex` (OpenAI Codex CLI) and a
 file-backed `fake` for tests; adding a harness is implementing these seven verbs, nothing
 else. A verb a harness cannot honor THROWS with the reason — never silently succeeds.
+A worker record whose harness has since been REMOVED normalizes on load to dead but intact
+(`retiredHarness: true`, `done: true`) rather than being dropped: the record is the only
+thing that knows its worktree exists and the only place that worktree's `tool` is written
+down, so dropping it orphans a real directory. Liveness, kill, resume and the supervision
+sweep answer "dead" for such a record **without a registry lookup**, so a name the registry
+can no longer resolve is never asked for.
 Harness working state (session ids, prompts, turn-end logs) lives in the workspace's
 `.bridge-commander/harness/` — never global; spawned session names are unique per workspace.
 
