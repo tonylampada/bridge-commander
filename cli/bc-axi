@@ -55,7 +55,6 @@ const opts = {
   wakeOwner: false,
   worker: null, ttl: null, spawn: false, harness: null,
   brief: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
-  command: null,
   uri: null, file: null, version: null,
 };
 const positional = [];

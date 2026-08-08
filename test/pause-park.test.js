@@ -149,8 +149,8 @@ test('worker pause --expect-exit: nothing killed, custom reason on the card, and
 
 // The move that cost a run: a lieutenant with no context sees a stopped worker
 // and reaches for `card start --resume` — the recovery the board teaches
-// everywhere else. On an expect-exit worker that starts a second run over the
-// one still holding the path. The recorded reason is not enough; the board
+// everywhere else. On an expect-exit worker, resuming starts a second run over
+// the one still holding the path. The recorded reason is not enough; the board
 // refuses, and quotes the door it named.
 test('card start --resume is REFUSED on an expect-exit worker, quoting the recorded reason', async () => {
   const { s, teardown } = await boot();
