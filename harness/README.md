@@ -93,7 +93,7 @@ focus, so an agent with siblings must always carry its window.
 
 ## Files
 
-- `port.js` — the contract: `getHarness(name)`, `registerHarness(name, impl)`, `knownHarness(name)`, `harnessFor(ref)`, `isHarnessRef(ref)`
+- `port.js` — the contract: `getHarness(name)`, `registerHarness(name, impl)`, `harnessFor(ref)`, `isHarnessRef(ref)`
 - `claude-tmux.js` — the claude implementation over tmux (v0's real harness)
 - `codex-tmux.js` — the OpenAI Codex CLI implementation over tmux
 - `tmux-session.js` — session/window/pane plumbing shared by the tmux adapters

@@ -165,18 +165,6 @@ function getHarness(name) {
   throw new Error(`unknown harness "${name}" (known: ${[...new Set([...registry.keys(), ...Object.keys(BUILTINS)])].join(', ')})`);
 }
 
-// knownHarness(name) — could getHarness(name) resolve, without finding out the
-// expensive way? Answers from the registry and the builtin TABLE only, requiring
-// nothing: a probe that loads tmux machinery to say "yes" is not a probe, and
-// the callers who need this are the ones avoiding a lookup that would throw.
-// A persisted ref naming a harness that has since retired is the case in point —
-// the board reads those as dead instead of asking the registry for a name it no
-// longer has, and reads them live again the moment it does.
-function knownHarness(name) {
-  return typeof name === 'string' && name.length > 0
-    && (registry.has(name) || Object.prototype.hasOwnProperty.call(BUILTINS, name));
-}
-
 // isHarnessRef — structural check for a persisted/deserialized ref.
 function isHarnessRef(ref) {
   return !!ref
@@ -194,5 +182,5 @@ function harnessFor(ref) {
   return getHarness(ref.harness);
 }
 
-module.exports = { VERBS, registerHarness, getHarness, knownHarness, isHarnessRef, harnessFor,
+module.exports = { VERBS, registerHarness, getHarness, isHarnessRef, harnessFor,
   validatePaneInput, KEY_RE, PANE_INPUT_MAX };

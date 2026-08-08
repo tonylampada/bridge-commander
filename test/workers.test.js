@@ -10,7 +10,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServer, startServerWithLieutenant, withOwner, runCli, sleep, LT } = require('./helper');
+const { startServerWithLieutenant, withOwner, runCli, LT } = require('./helper');
 const { lieutenantSession, workerWindow } = require('../server/names.js');
 
 // A worker's harness key/address: a WINDOW inside the owning lieutenant's
@@ -863,140 +863,6 @@ test('--command is gone: the API refuses the field by name', async () => {
     assert.match(r.body.error, /--command was removed/);
     assert.match(r.body.error, /--brief/);
     assert.deepStrictEqual(boardOnDisk(s).workers, []);
-  } finally {
-    await teardown();
-  }
-});
-
-// Finished workers from the retired delivery pipeline ride a `command` ref the
-// registry can no longer resolve. They normalize to DEAD BUT INTACT, and the
-// intact half is the point: the registry entry is the only thing that knows
-// their worktree exists, and the only place its `tool` and `base` are recorded
-// (the card attribute holds a bare path — release a `treehouse` worktree as
-// plain `git` and it is not released at all). Dropping the row would orphan a
-// real directory with nothing left that could find it.
-//
-// So: the record stays and carries the handle; nothing ever asks the registry
-// to resolve the name. This walks the whole life of one — load, render, the
-// liveness sweep, archive-on-merge, and the release that needs the handle.
-test('a retired-harness worker record survives load as dead-but-intact, and its worktree still releases', async () => {
-  // Own workspace dir, not boot()'s: this test stops the server and brings a
-  // second one up on the SAME board, which is the only way to exercise a load.
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-retired-'));
-  const repo = makeRepo(root);
-  const ws = path.join(root, 'ws');
-  fs.mkdirSync(ws, { recursive: true });
-  const env = {
-    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
-    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
-  };
-  const s = await startServerWithLieutenant({ dir: ws, env });
-  const teardown = async () => { fs.rmSync(root, { recursive: true, force: true }); };
-  try {
-    assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj' })).status, 200);
-    // Two REAL worktrees, provisioned the way a worker's is, then handed to
-    // records whose harness no longer exists.
-    for (const id of ['oldrun', 'oldarch']) {
-      await s.api('POST', '/api/cards', withOwner({ title: id, id, attributes: { repo: 'proj' } }));
-      assert.strictEqual((await s.api('POST', '/api/cards/' + id + '/start', { harness: 'fake' })).status, 200);
-      await s.api('POST', '/api/cards/' + id + '/worker/done', { outcome: 'the run finished' });
-      // where the fifteen actually sit: Review, worker done, worktree alive
-      assert.strictEqual((await s.api('POST', '/api/cards/' + id + '/move', { column: 'review' })).status, 200);
-    }
-    const wt = boardOnDisk(s).workers.find((w) => w.card === 'oldrun').worktree;
-    const wtArch = boardOnDisk(s).workers.find((w) => w.card === 'oldarch').worktree;
-    assert.ok(fs.existsSync(wt.path) && fs.existsSync(wtArch.path), 'worktrees provisioned');
-    await s.stop();
-
-    // The recorded worktree deliberately does NOT sit at the card's default
-    // path — four of the real fifteen are `~/.treehouse/<repo>/<n>/<repo>`,
-    // nowhere near it. That is what makes the release observable here, and it
-    // is the whole reason the record has to survive: the card attribute holds
-    // this path but not its `tool`, and only the record knows both.
-    const clone = path.join(ws, 'projects', 'proj'); // worktrees hang off the CLONE, never the source
-    const away = path.join(root, 'away-oldrun');
-    execFileSync('git', ['-C', clone, 'worktree', 'add', '-d', away], { stdio: ['ignore', 'pipe', 'pipe'] });
-
-    const bfile = path.join(s.dir, '.bridge-commander', 'board.json');
-    const b = JSON.parse(fs.readFileSync(bfile, 'utf8'));
-    for (const w of b.workers) {
-      w.ref = { harness: 'command', session: 'bc-old', window: 'w-' + w.card, cwd: w.worktree.path, command: 'run.js ' + w.card };
-    }
-    const oldrunRec = b.workers.find((w) => w.card === 'oldrun');
-    execFileSync('git', ['-C', clone, 'worktree', 'remove', wt.path], { stdio: ['ignore', 'pipe', 'pipe'] });
-    oldrunRec.worktree = { path: away, tool: 'git', base: 'origin/main' };
-    oldrunRec.ref.cwd = away;
-    // The OTHER record is written live-looking on purpose: `done: false`. Load
-    // must not touch it — a normalization that writes a terminal flag can never
-    // be undone, so a harness that fails to load for one boot would bury a real
-    // worker's record. Dead-ness is derived at the read points, and this row is
-    // how we see the row itself left alone.
-    b.workers.find((w) => w.card === 'oldarch').done = false;
-    fs.writeFileSync(bfile, JSON.stringify(b, null, 2));
-
-    const s2 = await startServer({
-      dir: ws,
-      env: Object.assign({}, env, { BC_SUPERVISE_INTERVAL_MS: '80' }),
-    });
-    try {
-      // it loads, and it renders — card and worker both
-      assert.ok((await s2.api('GET', '/api/board')).body.cards.some((c) => c.id === 'oldrun'));
-      assert.strictEqual((await s2.api('GET', '/api/cards/oldrun')).body.id, 'oldrun');
-      // any write flushes the normalized board back to disk
-      await s2.api('POST', '/api/cards/oldrun/events', { text: 'poke', actor: 'test' });
-      const kept = boardOnDisk(s).workers.find((w) => w.card === 'oldrun');
-      assert.ok(kept, 'the record is KEPT, not dropped');
-      assert.ok(!('retiredHarness' in kept), 'and not MARKED either — nothing is written to the row');
-      assert.strictEqual(kept.done, true, 'done is exactly what was on disk: load rewrites nothing');
-      assert.strictEqual(kept.worktree.path, away, 'the worktree handle survives — the whole point');
-      assert.strictEqual(kept.worktree.tool, 'git', 'tool and all: the card attribute holds only a bare path');
-      const live = boardOnDisk(s).workers.find((w) => w.card === 'oldarch');
-      assert.strictEqual(live.done, false, 'and the live-looking row keeps ITS done — no terminal flag forced on');
-      assert.ok(!('retiredHarness' in live), 'nor a mark that outlives the harness going missing');
-
-      // dead WITHOUT a lookup: the liveness sweep runs over both and raises no
-      // worker-died alarm — not even for the row that still reads unfinished,
-      // which is the one a forced `done` used to hide — and the card still
-      // reads a plain absent worker
-      await sleep(300);
-      for (const id of ['oldrun', 'oldarch']) {
-        assert.ok(!(await s2.api('GET', '/api/cards/' + id)).body.events.some((e) => e.kind === 'worker-died'),
-          'the sweep never mistakes a retired record for a crash: ' + id);
-        assert.strictEqual(boardOnDisk(s).workers.find((w) => w.card === id).flagged, undefined,
-          'the sweep wrote nothing to the row either: ' + id);
-      }
-      assert.strictEqual((await s2.api('GET', '/api/cards/oldrun')).body.status.worker.state, 'absent');
-
-      // resume refuses by name rather than discovering it at the registry
-      const r = await s2.api('POST', '/api/cards/oldrun/start', { resume: true });
-      assert.strictEqual(r.status, 409, JSON.stringify(r.body));
-      assert.match(r.body.error, /retired "command" harness/);
-
-      // and so does a send — pointing at --resume would be a circle, since the
-      // line above is the board refusing exactly that
-      const snd = await s2.api('POST', '/api/cards/oldrun/worker/send', { text: 'carry on' });
-      assert.strictEqual(snd.status, 409, JSON.stringify(snd.body));
-      assert.match(snd.body.error, /retired "command" harness/);
-      assert.doesNotMatch(snd.body.error, /--resume/);
-
-      // THE RELEASE. A restart on the card hands releaseWorktree the RECORDED
-      // worktree — path, tool and base — which is exactly what a dropped record
-      // would have taken to the grave.
-      assert.ok(fs.existsSync(away), 'still there before the restart');
-      const again = await s2.api('POST', '/api/cards/oldrun/start', { harness: 'fake' });
-      assert.strictEqual(again.status, 200, JSON.stringify(again.body));
-      assert.ok(!fs.existsSync(away), 'the retired run\'s worktree is RELEASED, not orphaned');
-      assert.deepStrictEqual(
-        execFileSync('git', ['-C', clone, 'worktree', 'list'], { encoding: 'utf8' })
-          .split('\n').filter((l) => l.includes('away-oldrun')), [],
-        'and its git worktree registration goes with it');
-
-      // and archive drops the registry entry without ever reaching for the
-      // harness it can no longer resolve
-      const arch = await s2.api('POST', '/api/cards/oldarch/archive', { reason: 'killed' });
-      assert.strictEqual(arch.status, 200, JSON.stringify(arch.body));
-      assert.ok(!boardOnDisk(s).workers.some((w) => w.card === 'oldarch'), 'registry entry dropped with the card');
-    } finally { await s2.stop(); }
   } finally {
     await teardown();
   }
