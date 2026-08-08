@@ -183,24 +183,6 @@ test('worker-done hooks: env context from the worker record, hook-ran level-2 ca
   } finally { await teardown(); }
 });
 
-// The same ordering guarantee the archive path has always had, now on the path
-// that releases first: a worker-done hook still reaches paths inside
-// $BC_WORKTREE, and the release happens once every hook is finished.
-test('worker-done hooks run BEFORE the worktree release', async () => {
-  const { s, root, teardown } = await bootWithProject();
-  try {
-    const out = path.join(root, 'wd-check.out');
-    shHook(s.dir, 'worker-done', 'check.sh',
-      'if [ -d "$BC_WORKTREE" ]; then echo "worktree-present"; else echo "worktree-gone"; fi > ' + JSON.stringify(out));
-    await s.api('POST', '/api/cards', withOwner({ title: 'Ordered', id: 'ordered', attributes: { repo: 'proj' } }));
-    const w = (await s.api('POST', '/api/cards/ordered/start', { harness: 'fake' })).body.worker;
-    await s.api('POST', '/api/cards/ordered/worker/done', { outcome: 'fin' });
-
-    await until('worktree released', async () => !fs.existsSync(w.worktree.path));
-    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'worktree-present');
-  } finally { await teardown(); }
-});
-
 test('worker-done failing hook: hook-failed level-1 card event + hook-failed QueueItem to the owner', async () => {
   const { s, teardown } = await bootWithProject();
   try {
@@ -313,7 +295,8 @@ test('card-archived hooks (manual archive): board-level events with a card ref; 
     });
     assert.strictEqual(ev.cardTitle, 'Kill me');
     assert.match(ev.text, /card-archived hook capture\.sh ok/);
-    // the hook saw the worktree in place — and only then was it released
+    // archive is the backstop release: the hook saw the worktree in place, and
+    // only then did it go
     assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'worktree-present');
     await until('worktree released after the hooks', async () => !fs.existsSync(w.worktree.path));
   } finally { await teardown(); }
@@ -337,12 +320,7 @@ test('card-archived hooks run BEFORE the worktree release on the merged-PR path'
     const out = path.join(root, 'wt-check.out');
     shHook(s.dir, 'card-archived', 'check.sh',
       'if [ -d "$BC_WORKTREE" ]; then echo "worktree-present"; else echo "worktree-gone"; fi > ' + JSON.stringify(out));
-    // keep_worktree: the worktree has to survive `worker done` for the merged-PR
-    // path to be the one releasing it — which is what this test is about
-    const pbDir = path.join(s.dir, '.bridge-commander', 'playbooks');
-    fs.mkdirSync(pbDir, { recursive: true });
-    fs.writeFileSync(path.join(pbDir, 'kept.md'), '---\nkeep_worktree: true\n---\nship it\n');
-    await s.api('POST', '/api/cards', withOwner({ title: 'Merge me', id: 'merge-me', playbook: 'kept', attributes: { repo: 'proj' } }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Merge me', id: 'merge-me', attributes: { repo: 'proj' } }));
     const w = (await s.api('POST', '/api/cards/merge-me/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/merge-me/worker/done',
       { outcome: 'PR: https://github.com/acme/proj/pull/1' });

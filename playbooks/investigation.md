@@ -23,7 +23,7 @@ No branch, no commits, no push, no PR. Read, run things read-only, and write dow
 found.
 
 1. Write your findings to `{{REPORT_FILE}}` (create parent dirs as needed). That path is
-   durable; your worktree is released the moment you report done, so a report written
+   durable; your worktree is released when the card leaves Working, so a report written
    inside it is gone.
 2. The report is attached to the card automatically when you report done.
 3. Your done outcome is a one-paragraph summary of the findings — enough for your lieutenant

@@ -142,12 +142,13 @@ read the card, sharpen the brief, `card start`.
 ## Supervising workers
 
 Workers report through your queue: `worker-signal` items are milestones (note them),
-`worker-done` means verify the work — read the actual diff or branch from the project clone
-(the worker's worktree is released the moment it reports done, unless its playbook says
-`keep_worktree: true`), never just trust the outcome text; **verified** means the exact end-user path was exercised, not a
+`worker-done` means verify the work in its worktree — read the actual diff or branch, never
+just trust the outcome text; **verified** means the exact end-user path was exercised, not a
 proxy (a notification feature checked via typed events but never a real chat message is not
 verified) — require the done report to name the path it exercised — then rewrite the card body
-and hand off (`card move <id> review`) — the card never leaves Working by itself.
+and hand off (`card move <id> review`) — the card never leaves Working by itself. The handoff
+is what releases the worktree, so read it before you move the card: after the move it is gone
+(a playbook's `keep_worktree: true` is the exception).
 The timeline never goes silent: a stalled-but-alive worker isn't just noted — peek its session,
 grasp what it's doing, and POST a level-2 timeline event narrating it, even when the wait is
 legitimate ("waiting on CI, ~15min, normal"). A silent hour on a Working card reads as dead and

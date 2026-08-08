@@ -70,22 +70,10 @@ async function boot() {
 
 const PR = 'https://github.com/acme/proj/pull/42';
 
-// `worker done` releases the worktree, so a card whose RELEASE is under test
-// here has to keep it that long: keep_worktree survives the worker and leaves
-// the merge as the thing that gives the checkout back.
-function keepsWorktree(s, id) {
-  const dir = path.join(s.dir, '.bridge-commander', 'playbooks');
-  fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, id + '.md'), '---\nkeep_worktree: true\n---\n{{TASK}}\n');
-  return id;
-}
-
 test('merged PR: worktree released, card archived (landed, level 1), owner queued', async () => {
   const { s, root, gh, teardown } = await boot();
   try {
-    await s.api('POST', '/api/cards', withOwner({
-      title: 'Merge me', id: 'merge-me', playbook: keepsWorktree(s, 'kept'), attributes: { repo: 'proj' },
-    }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Merge me', id: 'merge-me', attributes: { repo: 'proj' } }));
     const w = (await s.api('POST', '/api/cards/merge-me/start', { harness: 'fake' })).body.worker;
     gh.setState(PR, 'OPEN');
     await s.api('POST', '/api/cards/merge-me/worker/done', { outcome: 'PR open: ' + PR });
@@ -188,9 +176,7 @@ test('stack card: the first merge does NOT archive — card, worktree and hooks 
   try {
     const archived = path.join(root, 'archived.out');
     shHook(s.dir, 'card-archived', 'mark.sh', 'echo fired >> ' + JSON.stringify(archived));
-    await s.api('POST', '/api/cards', withOwner({
-      title: 'Stack', id: 'stack', playbook: keepsWorktree(s, 'kept'), attributes: { repo: 'proj' },
-    }));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Stack', id: 'stack', attributes: { repo: 'proj' } }));
     const w = (await s.api('POST', '/api/cards/stack/start', { harness: 'fake' })).body.worker;
     gh.setState(PR_A, 'OPEN'); gh.setState(PR_B, 'OPEN');
     await s.api('POST', '/api/cards/stack/worker/done', { outcome: 'PRs: ' + PR_A + ' and ' + PR_B });

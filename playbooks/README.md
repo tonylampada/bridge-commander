@@ -39,7 +39,7 @@ keep_worktree: true
 | `model` | the model that session starts with |
 | `requires` | card attributes this playbook cannot work without — `card start` refuses before provisioning anything and names the missing one |
 | `branch` | `false` = detached HEAD, no branch cut, nothing to push. Omitted, the card type decides as before (an investigation gets no branch) |
-| `keep_worktree` | `true` = the worker's worktree survives its `done`. Omitted, the board gives it back the moment the work ends |
+| `keep_worktree` | `true` = the worktree is never released automatically. Omitted, the board gives it back when the card leaves Working |
 
 All five are optional. **An explicit CLI flag beats the frontmatter, which beats the config
 default** — so `--harness claude` still overrides a playbook that says `codex`.
@@ -53,12 +53,17 @@ literal on purpose, so a `codereview` brief with no `pr_url` would otherwise lau
 discover that for itself.
 
 `keep_worktree` is the exception, not the habit: a worktree is a full checkout, and fifteen
-finished cards used to hold fifteen of them. Reach for it when the card is expected to be
-**reworked in place** — `worker send` for another turn, `card start --resume` — where throwing
-the checkout away costs a re-clone. Everything else gets its worktree back at `worker done`,
-and both ways back into a finished worker refuse rather than land an agent in a deleted
-directory. A worktree with uncommitted changes is never released, kept or not: the release is
-refused, the card timeline says so, and the directory stays exactly as it is.
+finished cards used to hold fifteen of them. Everything else gets its worktree back **at the
+handoff** — the move out of Working, once the lieutenant has read the diff in it — with
+archive as the backstop. Reach for the key when the card is expected to be **reworked in
+place** — `worker send` for another turn, `card start --resume` — where throwing the checkout
+away costs a re-clone; both of those refuse once the worktree is gone, and point at a fresh
+`card start`.
+
+A worktree still holding work is never released, kept or not — uncommitted changes, or commits
+on a HEAD no branch, tag or remote ref reaches (a worktree is created detached, so a run that
+commits without cutting a branch is referenced by nothing else). The release is refused, the
+card timeline says which path and why, and the directory stays exactly as it is.
 
 ## Worker duties
 

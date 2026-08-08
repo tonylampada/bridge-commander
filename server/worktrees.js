@@ -140,8 +140,16 @@ function createWorktree(projectPath, cardId, workspace) {
 }
 
 // releaseWorktree({ path, tool }, projectPath) -> { released, reason? }
-// Releases ONLY a clean worktree (uncommitted changes are never discarded);
-// a dirty or unreadable worktree is left in place with the reason reported.
+// Releases ONLY a worktree whose work is safely elsewhere; a worktree that is
+// not, or that cannot be read, is left in place with the reason reported.
+//
+// TWO ways work can still live only here, and neither is ever discarded:
+//   - uncommitted changes (`git status --porcelain`);
+//   - commits on a HEAD no branch, tag or remote ref holds. A worktree is
+//     created DETACHED and the branch is cut inside it, so a run that commits
+//     before cutting one — or a `branch: false` playbook that commits at all —
+//     is referenced by this worktree's HEAD and nothing else. `git worktree
+//     remove` on it drops the last reference to those commits.
 function releaseWorktree(rec, projectPath) {
   const wt = rec && rec.path;
   if (!wt || !fs.existsSync(wt)) return Promise.resolve({ released: true, reason: 'already gone' });
@@ -150,9 +158,19 @@ function releaseWorktree(rec, projectPath) {
   catch (e) { return Promise.resolve({ released: false, reason: 'unreadable: ' + String(e.message || e) }); }
   return withProjectLock(proj, async () => {
     let dirty;
-    try { dirty = await git(wt, 'status', '--porcelain'); }
-    catch (e) { return { released: false, reason: 'unreadable: ' + String(e.message || e) }; }
+    let dangling;
+    try {
+      dirty = await git(wt, 'status', '--porcelain');
+      // the newest commit on HEAD that no branch, tag or remote ref reaches —
+      // empty for the ordinary worktree, which stands on its branch or on the
+      // origin tip it was cut from
+      dangling = await git(wt, 'rev-list', '--max-count=1', 'HEAD', '--not', '--branches', '--tags', '--remotes');
+    } catch (e) { return { released: false, reason: 'unreadable: ' + String(e.message || e) }; }
     if (dirty) return { released: false, reason: 'worktree has uncommitted changes' };
+    if (dangling) {
+      return { released: false,
+        reason: 'HEAD carries commits no branch or tag holds (' + dangling.slice(0, 8) + ')' };
+    }
     try {
       if (rec.tool === 'treehouse') await run('treehouse', ['return', wt], { cwd: projectPath });
       else await git(projectPath, 'worktree', 'remove', wt);
