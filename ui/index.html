@@ -94,13 +94,11 @@
   <div class="sp-row">
     <button id="mon-open" title="live machine & per-agent load (samples only while open)">📈 machine load</button>
   </div>
+  <!-- labels outgrew the dropdown: this row hands off to the settings screen -->
   <div class="sp-title">labels</div>
-  <div id="lm-list"></div>
-  <form id="lm-new">
-    <input id="lm-color" type="color" value="#4cc2ff" title="label color">
-    <input id="lm-name" placeholder="new label…" autocomplete="off">
-    <button type="submit">add</button>
-  </form>
+  <div class="sp-row">
+    <button id="labels-open" title="create, rename, recolor and delete board labels">🏷 labels</button>
+  </div>
 </div>
 
 <!-- label picker popover -->
@@ -145,14 +143,28 @@
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 
-  <!-- board: right — one region, four modes (kanban | table | archived | file).
-       The file screen is entered by opening a file, not from the switcher: it
-       takes the board's place with the chat still at its side. -->
+  <!-- board: right — one region, five modes (kanban | table | archived | file |
+       settings). The file and settings screens are not in the switcher (you
+       enter them by opening a file, or from the gear): they take the board's
+       place with the chat still at its side. -->
   <section id="board-wrap">
     <div id="board"><div class="empty">waiting for board…</div></div>
     <div id="table"></div>
     <div id="archive"></div>
     <div id="filepane"></div>
+    <!-- settings screen: one section per setting that outgrew the gear
+         dropdown. Labels today; the rest move in later. -->
+    <div id="settings-screen">
+      <section class="ss-sec" id="ss-labels">
+        <div class="ss-title">labels</div>
+        <div id="lm-list"></div>
+        <form id="lm-new">
+          <input id="lm-color" type="color" value="#4cc2ff" title="label color">
+          <input id="lm-name" placeholder="new label…" autocomplete="off">
+          <button type="submit">add</button>
+        </form>
+      </section>
+    </div>
   </section>
 </main>
 

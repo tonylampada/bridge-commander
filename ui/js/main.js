@@ -71,7 +71,7 @@ gearBtn.onclick = (e) => {
   e.stopPropagation();
   spEl.hidden = !spEl.hidden;
   gearBtn.classList.toggle('on', !spEl.hidden);
-  if (!spEl.hidden) { S.notifOpen = false; renderLabelManager(); renderNotifSettings(); render(); }
+  if (!spEl.hidden) { S.notifOpen = false; renderNotifSettings(); render(); }
 };
 document.addEventListener('click', (e) => {
   if (!spEl.hidden && !spEl.contains(e.target) && e.target !== gearBtn) {
@@ -85,23 +85,34 @@ document.getElementById('mon-open').onclick = () => {
   gearBtn.classList.remove('on');
   openMonitor();
 };
+// ⚙️ → labels: same handoff, to the settings screen in the board region (so the
+// chat stays at its side). Mobile lives in the board tab, like the file screen.
+document.getElementById('labels-open').onclick = () => {
+  spEl.hidden = true;
+  gearBtn.classList.remove('on');
+  S.view = 'board';
+  setBoardMode('settings');
+};
 
-// ---------- board region mode: kanban ⇄ table ⇄ archived ⇄ file ----------
+// ---------- board region mode: kanban ⇄ table ⇄ archived ⇄ file ⇄ settings ----
 // Board and table are two views over the LIVE cards; 🧊 is the archived
-// snapshots' own read-only mode. The choice sticks per browser.
-// 'file' is the fourth mode and the odd one out: it is not in the switcher (you
-// enter it by opening a file, not by picking it), and it is never remembered —
-// a reload has no file to come back to.
+// snapshots' own read-only mode. Those three are the switcher, and the choice
+// sticks per browser.
+// 'file' and 'settings' are the screens: not in the switcher (you enter them by
+// opening a file, or from the gear), and never remembered — MODE_BTN is the
+// whole rule, so a reload comes back to the last switcher mode.
 const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch' };
+const SCREENS = ['file', 'settings'];
 function setBoardMode(mode) {
-  if (!MODE_BTN[mode] && mode !== 'file') mode = 'board';
-  if (mode !== 'file') forgetFile(); // picking a switcher mode leaves the file screen
+  if (!MODE_BTN[mode] && !SCREENS.includes(mode)) mode = 'board';
+  if (mode !== 'file') forgetFile(); // anything else leaves the file screen
   S.boardMode = mode;
-  if (mode !== 'file') try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
+  if (MODE_BTN[mode]) try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
   const wrap = document.getElementById('board-wrap');
   wrap.classList.toggle('table-mode', mode === 'table');
   wrap.classList.toggle('archive-mode', mode === 'archive');
   wrap.classList.toggle('file-mode', mode === 'file');
+  wrap.classList.toggle('settings-mode', mode === 'settings');
   for (const [m, id] of Object.entries(MODE_BTN)) {
     document.getElementById(id).classList.toggle('on', m === mode);
   }
@@ -225,6 +236,7 @@ onRender(() => {
   // The file screen owns its own DOM and is never repainted from here: a render
   // under the captain's cursor would eat what he is typing.
   if (S.boardMode === 'file') { /* nothing to repaint */ }
+  else if (S.boardMode === 'settings') renderLabelManager();
   else if (S.boardMode === 'archive') renderArchive();
   else if (S.boardMode === 'table') renderTable();
   else renderBoard();
@@ -234,7 +246,7 @@ onRender(() => {
   renderNotifications();
   renderTabs();
   if (pickerIsOpen()) renderPicker();
-  if (!spEl.hidden) { renderLabelManager(); renderNotifSettings(); }
+  if (!spEl.hidden) renderNotifSettings();
   // fill the [data-ago] spans the panels above left empty (see util.js: time
   // text stays out of the compared markup so it never forces a rebuild)
   refreshAgoLabels();
