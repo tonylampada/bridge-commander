@@ -40,7 +40,7 @@ async function boot(extraEnv = {}) {
       BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
     }, extraEnv),
   });
-  const r = await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+  const r = await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
   const teardown = async () => { await s.stop(); fs.rmSync(root, { recursive: true, force: true }); };
   return { s, root, repo, fdir, teardown };

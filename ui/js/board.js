@@ -251,7 +251,34 @@ document.addEventListener('click', (e) => { if (!menuEl.hidden && !menuEl.contai
 const ncOverlay = document.getElementById('nc-overlay');
 const ncType = document.getElementById('nc-type');
 const ncOwner = document.getElementById('nc-owner');
+const ncBrief = document.getElementById('nc-brief');
 let ncColumnId = ''; // the column whose "+" opened the modal — the create target
+
+// The brief dropdown: the templates in the workspace's briefs/ folder. Refetched
+// on every open — the folder is the captain's to edit, and a template added
+// between two cards has to be pickable on the second. The empty option stays
+// selectable: a card may be born briefless and get one later, but it will not
+// start until it does, which is what the hint says.
+export async function fillBriefOptions(select, selected) {
+  select.textContent = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '— brief (needed to start)';
+  select.appendChild(none);
+  let ids = [];
+  try { ids = (await api.briefs()).briefs || []; } catch (e) { ids = []; }
+  // a card pointing at a template that has since been renamed away still shows
+  // its own value rather than silently reading as "no brief"
+  if (selected && !ids.includes(selected)) ids = [selected, ...ids];
+  for (const id of ids) {
+    const o = document.createElement('option');
+    o.value = id;
+    o.textContent = id;
+    select.appendChild(o);
+  }
+  select.value = selected || '';
+  return ids;
+}
 export function openNewCard(columnId) {
   if (!lieutenants().length) { openNewLieutenant(); return; } // a card needs an owner
   ncColumnId = columnId || 'backlog';
@@ -272,6 +299,12 @@ export function openNewCard(columnId) {
   document.getElementById('nc-body').value = '';
   document.getElementById('nc-harness').value = '';
   document.getElementById('nc-model').value = '';
+  // async: the modal opens now, the options land a tick later. `default` is
+  // preselected only when it actually exists — offering an id the server would
+  // reject is worse than offering none.
+  fillBriefOptions(ncBrief, '').then((ids) => {
+    if (!ncBrief.value && ids.includes('default')) ncBrief.value = 'default';
+  });
   ncOverlay.hidden = false;
   document.getElementById('nc-name').focus();
 }
@@ -293,7 +326,7 @@ document.getElementById('nc-modal').onsubmit = async (e) => {
   if (ncModel) attributes.model = ncModel;
   try {
     const r = await api.createCard(Object.assign(
-      { title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value },
+      { title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value, brief: ncBrief.value },
       Object.keys(attributes).length ? { attributes } : {}));
     closeNewCard();
     openDetail(r.card.id);

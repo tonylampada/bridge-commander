@@ -35,8 +35,9 @@ them drift.
   instead of an agent), plus an in-memory `fake` for tests.
 - **Workers**: `bc-axi card start <id>` is ONE atomic op — isolated worktree
   (`treehouse get --lease` when available, else `git worktree add`), a real worker session
-  launched with the generated brief (task + card thread + the project's delivery-mode
-  contract), session/worktree/branch bound to the card, card → Working. Workers report with
+  launched with the card's brief — a markdown template from
+  `<workspace>/.bridge-commander/briefs/`, rendered against the card as it stands at start —,
+  session/worktree/branch bound to the card, card → Working. Workers report with
   `bc-axi worker signal|done`; the lieutenant verifies and hands off — nothing moves a card
   out of Working automatically.
 - **Supervision is infrastructure**: the server watches sessions, turn-ends, and PRs. Dead

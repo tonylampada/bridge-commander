@@ -169,7 +169,7 @@ test('card-thread commands address the WORKER session; worker turn-end refreshes
     env: { BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git', BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0' },
   });
   try {
-    assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' })).status, 200);
+    assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj' })).status, 200);
     await s.api('POST', '/api/cards', withOwner({ title: 'Task', attributes: { repo: 'proj' } }));
     assert.strictEqual((await s.api('POST', '/api/cards/task/start', { harness: 'fake' })).status, 200);
     const key = lieutenantSession(s.dir, LT) + ':' + workerWindow('task');

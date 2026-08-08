@@ -99,15 +99,30 @@ them when confident — you don't wait for permission inside your mission. Outsi
 Escalate to the captain only what needs the captain: decisions, review-ready work, real
 blockers.
 
-## Projects and delivery modes
+## Projects
 
-Work happens in registered projects. `bc-axi project add <git-url|path> --mode
-no-mistakes|direct-PR|local-only` clones a repo into the workspace and records its delivery
-mode — how finished work reaches main: `no-mistakes` = validation pipeline → PR → captain
-merge; `direct-PR` = push + PR, captain merge; `local-only` = ready in branch, no remote.
-A card must carry `repo: <project-name>` (`--attr repo=…`) before it can start. Pick the
-mode with the captain when registering; the worker brief carries the mode's contract
-automatically.
+Work happens in registered projects. `bc-axi project add <git-url|path>` clones a repo into
+the workspace and registers it. A card must carry `repo: <project-name>` (`--attr repo=…`)
+before it can start. How finished work reaches main is not a property of the repo — it is
+the card's brief.
+
+## Briefs
+
+A brief is a markdown template the captain owns, in `<workspace>/.bridge-commander/briefs/`.
+One file per template, and the file name is its id: `default` implements and ships,
+`no-mistakes` adds a review gate and CI, `investigation` asks for a report. `bc-axi brief
+list` prints them.
+
+A card points at one — `card create --brief <id>`, `card patch --brief <id>` — and `card
+start` renders that template against the card **at that moment**: title, body, thread and
+attributes as they stand, through `{{CARD_TITLE}}`, `{{TASK}}`, `{{THREAD}}`, `{{BRANCH}}`,
+`{{ATTR_<NAME>}}` and the rest (see the folder's README). So sharpening the body a second
+before starting is a sharper brief, and editing a template changes the next card started on
+it with no restart.
+
+**A card with no brief does not start**, and nothing picks one on its behalf: `card start`
+refuses and names the templates. Cards created before briefs existed have none — set one
+with `card patch --brief <id>` when you get to them.
 
 ## Starting work
 

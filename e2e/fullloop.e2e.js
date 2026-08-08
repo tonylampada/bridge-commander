@@ -133,7 +133,7 @@ function dumpDiagnostics() {
     fs.writeFileSync(path.join(repo, 'README.md'), 'throwaway fullloop repo\n');
     git(repo, 'add', '.');
     git(repo, '-c', 'user.email=e2e@bc', '-c', 'user.name=bc-e2e', 'commit', '-q', '-m', 'init');
-    const pr = await api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    const pr = await api('POST', '/api/projects', { source: repo, name: 'proj' });
     assert.strictEqual(pr.status, 200, JSON.stringify(pr.body));
     console.log('  ✔ setup: server up, local-only project registered');
 

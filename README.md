@@ -62,13 +62,36 @@ every endpoint faked, writes mutate and re-broadcast, nothing persists. Iterate
 on the UI with realistic gnarly states (dead lieutenants, giant cards, a
 paginated archive) without touching a live workspace.
 
+## Briefs — how you ask for work
+
+The prompt a worker is launched with is a markdown file you own, in
+`.bridge-commander/briefs/`. One file per template, and the file name is its id:
+
+| template | is |
+|---|---|
+| `default` | implement, commit, ship it the way the project allows |
+| `no-mistakes` | the same, behind a review-and-CI gate |
+| `investigation` | no branch, no PR — a written report |
+| `codereview` | review one PR and write the verdict up |
+
+Every card points at one (the dropdown in the new-card modal, `--brief <id>` on the CLI), and
+`card start` renders it against the card **as it stands at that moment** — title, body, thread
+and attributes, through `{{CARD_TITLE}}`, `{{TASK}}`, `{{THREAD}}`, `{{ATTR_<NAME>}}` and the
+rest, all listed in the folder's own README. Sharpen the body a second before starting and the
+worker reads the sharpened one.
+
+They are **yours**. Edit one and the next card started on it uses the edit — no restart, no
+release. Add a file and it is in the dropdown. The copies shipped here only seed a fresh
+workspace; a file in `.bridge-commander/briefs/` always wins, so upgrading never overwrites
+what you wrote. A card with no brief does not start, and nothing picks one for it.
+
 ## Dependencies
 
 - Node ≥ 18, `tmux`, `git`
 - [Claude Code](https://claude.com/claude-code), authenticated — the default agent harness
 - [GitHub CLI](https://cli.github.com/), authenticated — PR flows
 - [treehouse](https://github.com/kunchenguid/treehouse) — worker worktrees (optional; falls back to `git worktree`)
-- [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for `no-mistakes`-mode projects; the `/no-mistakes` skill appears after running `no-mistakes init` in the project
+- [no-mistakes](https://github.com/kunchenguid/no-mistakes) — only for cards on the `no-mistakes` brief; the `/no-mistakes` skill appears after running `no-mistakes init` in the project
 - [OpenAI Codex CLI](https://github.com/openai/codex) — only for `--harness codex` (optional)
 
 ## Configuration

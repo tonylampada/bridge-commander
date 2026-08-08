@@ -140,8 +140,7 @@ async function stepCase(name, fn) {
       git(repo, 'add', '.');
       git(repo, '-c', 'user.email=e2e@bc', '-c', 'user.name=bc-e2e', 'commit', '-q', '-m', 'init');
 
-      const r = await runCli(['project', 'add', repo, '--name', 'proj', '--mode', 'local-only',
-        '--workspace', ws, '--port', String(port)]);
+      const r = await runCli(['project', 'add', repo, '--name', 'proj', '--workspace', ws, '--port', String(port)]);
       assert.strictEqual(r.code, 0, r.stderr);
       assert.ok(fs.existsSync(path.join(ws, 'projects', 'proj', 'README.md')), 'cloned into the workspace');
     });
@@ -156,7 +155,8 @@ async function stepCase(name, fn) {
       // The CLI refuses --id (the owner mints it); the readable e2e id comes in
       // through the API, which still takes an explicit one.
       const created = await api('POST', '/api/cards', {
-        id: CARD, title: 'Hello file', owner: 'ada', attributes: { repo: 'proj' }, body: cardBody,
+        id: CARD, title: 'Hello file', owner: 'ada', brief: 'default',
+        attributes: { repo: 'proj' }, body: cardBody,
       });
       assert.strictEqual(created.status, 200, JSON.stringify(created.body));
       assert.strictEqual(created.body.card.id, CARD);

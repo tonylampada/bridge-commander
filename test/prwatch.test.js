@@ -63,7 +63,7 @@ async function boot() {
       BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '200', BC_GH_CMD: gh.stub,
     },
   });
-  await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'direct-PR' });
+  await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
   const teardown = async () => { await s.stop(); fs.rmSync(root, { recursive: true, force: true }); };
   return { s, root, gh, teardown };
 }

@@ -41,7 +41,11 @@ const TELLS = [
 
 // Pre-existing, unrelated, and each one checked by hand.
 const ALLOWED = [
-  { file: 'server/brief.js', re: /no-mistakes pipeline/, why: 'the no-mistakes tool has a pipeline of its own; predates this and means something else' },
+  // The `{{...}}` tell fires on brief.js for a reason that is not the executor:
+  // a worker brief IS a markdown template now, and {{CARD_ID}} & friends are
+  // its placeholders. Same syntax, different thing, and the two never meet —
+  // brief.js reads briefs/, knows no stages and no YAML.
+  { file: 'server/brief.js', re: /\{\{[A-Z_]+\}\}|render\(template/, why: 'the brief template placeholders — the board renders its own briefs, nothing to do with the executor' },
   { file: 'ui/js/detail.js', re: /x-yaml\|yaml\|csv/, why: 'a MIME regex listing text types the file viewer renders' },
   { file: 'ui/js/filectx.js', re: /yml: 'yaml'/, why: 'an extension → language map for syntax highlighting' },
   { file: 'ui/js/ltswitcher.js', re: /the stage themselves/, why: 'prose about a UI element, not a pipeline stage' },

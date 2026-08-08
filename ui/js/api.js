@@ -71,6 +71,9 @@ export const api = {
   archive: (limit, offset) => j('GET', '/api/archive?limit=' + (limit || 20) + '&offset=' + (offset || 0)),
   restoreCard: (id) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/restore', { actor: 'user' }),
   config: () => j('GET', '/api/config'),
+  // the brief templates a card can point at — read off disk server-side, so a
+  // template added a second ago is in the next answer. Never cached here.
+  briefs: () => j('GET', '/api/briefs'),
   // slash commands the current chat target's harness answers (composer autocomplete)
   commands: (target) => j('GET', '/api/commands?target=' + encodeURIComponent(target)),
 };

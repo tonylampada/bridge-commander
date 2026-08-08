@@ -154,7 +154,7 @@ async function bootWithProject(extraEnv = {}) {
       BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
     }, extraEnv),
   });
-  await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'direct-PR' });
+  await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
   const teardown = async () => { await s.stop(); fs.rmSync(root, { recursive: true, force: true }); };
   return { s, root, teardown };
 }
@@ -247,7 +247,7 @@ test('worker-died hooks fire from the supervision loop', async () => {
       fs.writeFileSync(path.join(sd, 'board.json'), JSON.stringify({
         title: 'seeded', seq: 0, labels: [], reads: {}, kinds: {}, events: [],
         lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso }],
-        projects: [{ name: 'proj', path: path.join(root, 'proj'), mode: 'direct-PR', added: nowIso }],
+        projects: [{ name: 'proj', path: path.join(root, 'proj'), added: nowIso }],
         cards: [{
           id: 'doomed', title: 'Doomed', type: 'implementation', owner: 'ada', column: 'working',
           labels: [], attributes: { repo: 'proj' }, body: '', created: nowIso, updated: nowIso,
@@ -315,7 +315,7 @@ test('card-archived hooks run BEFORE the worktree release on the merged-PR path'
     },
   });
   try {
-    await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'direct-PR' });
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
     const out = path.join(root, 'wt-check.out');
     shHook(s.dir, 'card-archived', 'check.sh',
       'if [ -d "$BC_WORKTREE" ]; then echo "worktree-present"; else echo "worktree-gone"; fi > ' + JSON.stringify(out));

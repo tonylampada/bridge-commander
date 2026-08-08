@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, PROJECT_MODES } = require(path.join(__dirname, 'brief.js'));
+const { workerBrief, listBriefs, resolveBrief } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -283,12 +283,14 @@ function normalizeBoard(doc) {
   }
   ensureMinting(b.lieutenants); // prefix + card counter (backfilled for the ones that predate them)
   // projects: the registered-repo registry; workers: the live worker-ref registry
-  // (both survive restarts — board is truth). Odd shapes are dropped.
+  // (both survive restarts — board is truth). Odd shapes are dropped. A `mode`
+  // left over from delivery modes is ignored and dropped on the next write:
+  // the card's brief chooses the delivery contract now.
   if (!Array.isArray(b.projects)) b.projects = [];
   b.projects = b.projects.filter((p) => p && typeof p === 'object'
     && typeof p.name === 'string' && p.name
-    && typeof p.path === 'string' && p.path
-    && PROJECT_MODES.includes(p.mode));
+    && typeof p.path === 'string' && p.path);
+  for (const p of b.projects) delete p.mode;
   if (!Array.isArray(b.workers)) b.workers = [];
   b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref));
   for (const c of b.cards) {
@@ -297,6 +299,9 @@ function normalizeBoard(doc) {
     if (!Array.isArray(c.labels)) c.labels = [];
     if (!c.attributes || typeof c.attributes !== 'object') c.attributes = {};
     if (!CARD_TYPES.includes(c.type)) c.type = 'implementation';
+    // brief: the id of a template in briefs/, or '' — cards that predate it
+    // have none and cannot start until one is set (card patch --brief <id>).
+    if (typeof c.brief !== 'string') c.brief = '';
     if (!b.columns.some((k) => k.id === c.column)) c.column = 'backlog';
     if (c.pendingOrder && !(typeof c.pendingOrder === 'object' && c.pendingOrder.kind)) c.pendingOrder = null;
     // status: keep only a valid persisted worker lease; an absent status stays
@@ -1421,6 +1426,22 @@ function notificationItems(user) {
 }
 
 // ---------- card mutations ----------
+// A card's `brief` is the id of a markdown template under briefs/ — a pointer,
+// never text. Validated where it is SET so a typo is caught at the keyboard
+// rather than at card.start; '' clears it (and a card with none never starts).
+function briefsHint() {
+  const ids = listBriefs(STATE_DIR);
+  return ids.length ? ids.join(', ') : '(none — seed them with bc-axi init)';
+}
+function checkBrief(raw) {
+  const id = String(raw || '').trim();
+  if (!id) return { brief: '' };
+  if (!resolveBrief(STATE_DIR, id)) {
+    return { error: 'unknown brief: ' + id + ' — templates in ' + path.join(STATE_DIR, 'briefs')
+      + ': ' + briefsHint() };
+  }
+  return { brief: id };
+}
 function createCard(body, actorDefault) {
   const title = String(body.title || '').trim();
   if (!title) return { error: 'title required' };
@@ -1430,6 +1451,8 @@ function createCard(body, actorDefault) {
   if (!lt) return { error: 'unknown lieutenant: ' + owner };
   const type = body.type ? String(body.type) : 'implementation';
   if (!CARD_TYPES.includes(type)) return { error: 'bad type (use ' + CARD_TYPES.join('|') + ')' };
+  const bc = checkBrief(body.brief);
+  if (bc.error) return { error: bc.error };
   // No id given: the owner mints the next one from its own counter. The counter
   // advances only when the card is actually born (below).
   const minted = body.id ? 0 : (Number.isInteger(lt.cardSeq) ? lt.cardSeq : 0) + 1;
@@ -1456,7 +1479,7 @@ function createCard(body, actorDefault) {
   if (column !== 'backlog') return { error: 'cards are born in Backlog only — create it there and move it after' };
   const actor = String(body.actor || actorDefault || 'agent').slice(0, 60);
   const card = {
-    id, title: title.slice(0, 200), type, owner, column,
+    id, title: title.slice(0, 200), type, owner, column, brief: bc.brief,
     labels: Array.isArray(body.labels) ? body.labels.filter((l) => typeof l === 'string' && l) : [],
     attributes: (body.attributes && typeof body.attributes === 'object') ? body.attributes : {},
     body: typeof body.body === 'string' ? body.body : '',
@@ -1548,6 +1571,11 @@ function patchCard(card, body) {
       card.events.push(mkEvent(
         { actor: body.actor, text: 'owner: ' + prev + ' → ' + newOwner }, { kind: 'moved' }));
     }
+  }
+  if (body.brief !== undefined) {
+    const bc = checkBrief(body.brief);
+    if (bc.error) return { error: bc.error };
+    card.brief = bc.brief;
   }
   if (body.title !== undefined) card.title = String(body.title).slice(0, 200);
   if (body.body !== undefined) card.body = String(body.body);
@@ -1676,6 +1704,7 @@ function restoreCard(id, body) {
   if (!Array.isArray(card.labels)) card.labels = [];
   if (!card.attributes || typeof card.attributes !== 'object') card.attributes = {};
   if (!CARD_TYPES.includes(card.type)) card.type = 'implementation';
+  if (typeof card.brief !== 'string') card.brief = ''; // frozen before briefs existed
   card.status = { worker: null }; // the lease starts absent until the next status.set
   card.pendingOrder = null;
   // Working ⇔ live worker: a frozen Working snapshot restores workerless, so
@@ -1697,15 +1726,14 @@ function restoreCard(id, body) {
 
 // ---------- projects (F6: the registered-repo registry) ----------
 // workspace.addProject: clone the repo into <workspace>/projects/<name> and
-// record {name, path, mode}. A card's `repo` attribute must name a registered
-// project for card.start to provision its worker a worktree.
+// record {name, path}. A card's `repo` attribute must name a registered
+// project for card.start to provision its worker a worktree. How finished work
+// leaves the worktree is the CARD's brief, not a property of the repo.
 function findProject(name) { return board.projects.find((p) => p.name === name); }
 const addingProjects = new Set(); // names with a clone in flight (async clone opens racing duplicate adds)
 async function addProject(body) {
   const source = String((body && body.source) || '').trim();
   if (!source) return { error: 'source required (git URL or local path)' };
-  const mode = String((body && body.mode) || 'no-mistakes');
-  if (!PROJECT_MODES.includes(mode)) return { error: 'bad mode (use ' + PROJECT_MODES.join('|') + ')' };
   const name = String((body && body.name) || path.basename(source.replace(/\/+$/, '')).replace(/\.git$/, '')).trim();
   if (!/^[\w][\w.-]*$/.test(name)) return { error: 'bad project name: ' + name + ' (use [A-Za-z0-9_.-], or pass --name)' };
   if (findProject(name)) return { error: 'project exists: ' + name, code: 409 };
@@ -1725,9 +1753,9 @@ async function addProject(body) {
   } finally {
     addingProjects.delete(name);
   }
-  const project = { name, path: dest, mode, source: src, added: now() };
+  const project = { name, path: dest, source: src, added: now() };
   board.projects.push(project);
-  board.events.push(mkEvent({ text: 'project ' + name + ' registered (' + mode + ')',
+  board.events.push(mkEvent({ text: 'project ' + name + ' registered',
     actor: (body && body.actor) || 'agent', level: 2 }, {}));
   return { project };
 }
@@ -1962,7 +1990,7 @@ async function doStartCard(card, body) {
   const repoAttr = card.attributes && card.attributes.repo;
   if (!repoAttr) return { error: 'card has no repo attribute — set it first: card patch ' + card.id + ' --attr repo=<project>' };
   const project = findProject(String(repoAttr));
-  if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path> --mode <mode>)' };
+  if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path>)' };
 
   // body.command starts a session that RUNS THAT LINE instead of an agent with
   // a brief (the `command` harness — harness/command-tmux.js). Everything else
@@ -1972,6 +2000,24 @@ async function doStartCard(card, body) {
   if (command && body && body.brief) {
     return { error: 'a --command start has no brief to deliver: the session runs the command line, '
       + 'nothing reads a brief. Drop one of the two.' };
+  }
+  // The brief template is resolved and read HERE — at start, and only here, so
+  // the worker gets the card as it stands and the template as it stands. No
+  // fallback: a card with no brief does not start.
+  let template = '';
+  if (!command) {
+    const briefId = String(card.brief || '').trim();
+    if (!briefId) {
+      return { error: 'card ' + card.id + ' has no brief — pick a template before starting it: '
+        + 'bc-axi card patch ' + card.id + ' --brief <id>. Available: ' + briefsHint() };
+    }
+    const file = resolveBrief(STATE_DIR, briefId);
+    if (!file) {
+      return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
+        + 'matches. Available: ' + briefsHint() };
+    }
+    try { template = fs.readFileSync(file, 'utf8'); }
+    catch (e) { return { error: 'brief template unreadable (' + file + '): ' + String((e && e.message) || e), code: 502 }; }
   }
   // Harness precedence: explicit CLI --harness wins, then --command (which
   // names the harness by implication), then the card's stored hint
@@ -2011,9 +2057,9 @@ async function doStartCard(card, body) {
   // What spawn's second argument means is the harness's business: a brief for
   // an agent, the line to run for `command`.
   const prompt = command || workerBrief({
-    card, task: body && body.brief, thread: card.thread || [],
+    template, card, task: body && body.brief, thread: card.thread || [],
     project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
-    cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
+    stateDir: STATE_DIR, cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
   });
   const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
   const extraArgs = [];
@@ -3094,6 +3140,14 @@ const server = http.createServer(async (req, res) => {
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, project: r.project });
+    }
+
+    // ----- brief templates (the card's `brief` picks one by id) -----
+    // Read off the filesystem on every call, never cached: editing a template
+    // (or dropping a new one in) changes the next card started, with no
+    // restart, and the dropdown has to say so too.
+    if (route === 'GET /api/briefs') {
+      return sendJson(res, 200, { briefs: listBriefs(STATE_DIR), dir: path.join(STATE_DIR, 'briefs') });
     }
 
     // ----- board-level events (free-form notify) -----

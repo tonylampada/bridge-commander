@@ -66,7 +66,7 @@ async function boot() {
   const s = await startServerWithLieutenant({
     env: { BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git', BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0' },
   });
-  assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' })).status, 200);
+  assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj' })).status, 200);
 
   // A card the executor can read: the worktree/branch a real `card start`
   // would have bound, without spawning anything.

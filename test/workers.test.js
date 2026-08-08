@@ -44,7 +44,7 @@ async function boot(extraEnv = {}) {
       BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
     }, extraEnv),
   });
-  const r = await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+  const r = await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
   assert.strictEqual(r.status, 200, JSON.stringify(r.body));
   const teardown = async () => { await s.stop(); fs.rmSync(root, { recursive: true, force: true }); };
   return { s, root, repo, fdir, teardown };
@@ -71,7 +71,7 @@ test('a minted card starts on bc/<id>: branch, window and worktree all follow th
   try {
     // no id pinned — the owner mints it, and everything downstream follows it
     const card = (await s.api('POST', '/api/cards',
-      { title: 'Tile click clears selection', owner: LT, attributes: { repo: 'proj' } })).body.card;
+      { title: 'Tile click clears selection', owner: LT, brief: 'default', attributes: { repo: 'proj' } })).body.card;
     assert.strictEqual(card.id, 'ADA-1');
 
     const r = await s.api('POST', '/api/cards/ADA-1/start', { harness: 'fake' });
@@ -157,19 +157,18 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     assert.notStrictEqual(git(wt, 'rev-parse', '--absolute-git-dir'), git(repo, 'rev-parse', '--absolute-git-dir'));
     assert.strictEqual(git(wt, 'rev-parse', 'HEAD'), git(repo, 'rev-parse', 'HEAD'));
 
-    // the brief (the fake's spawn marker records the launch prompt): task,
-    // thread context, worker duties, branch, and the local-only mode contract
+    // the brief: the card's template (`default`) rendered against the card as
+    // it stands — title, body, thread, branch, and the workspace-carrying CLI
     const rec = JSON.parse(fs.readFileSync(path.join(fdir, sess + '.json'), 'utf8'));
     assert.strictEqual(rec.cwd, wt);
-    assert.match(rec.prompt, /Worker brief — card "Fix login"/);
+    assert.match(rec.prompt, /^# Fix login \(fix-login\)/);
+    assert.match(rec.prompt, /Load the `bridge-commander-worker` skill first/);
     assert.match(rec.prompt, /login button 404s/);
     assert.match(rec.prompt, /prioritize the mobile flow/);
     assert.match(rec.prompt, /git checkout -b bc\/fix-login/);
-    assert.match(rec.prompt, /Delivery mode: local-only/);
     assert.match(rec.prompt, /ready in branch bc\/fix-login/);
-    assert.match(rec.prompt, /worker signal fix-login/);
-    assert.match(rec.prompt, /worker done fix-login/);
     assert.match(rec.prompt, new RegExp('--workspace ' + s.dir.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.doesNotMatch(rec.prompt, /\{\{/, 'every placeholder resolved');
 
     // the brief is auto-attached as a card artifact (label "brief"), pointing
     // at the SAME persisted prompt file the harness port treats as the
@@ -178,7 +177,7 @@ test('card.start: worktree + spawn + bind + system move, brief contract, registr
     assert.deepStrictEqual(card.attributes.artifacts, [{ uri: 'file://' + briefFile, label: 'brief', type: 'markdown' }]);
     const art = await s.api('GET', '/api/artifact?uri=' + encodeURIComponent('file://' + briefFile));
     assert.strictEqual(art.status, 200);
-    assert.match(art.body.content, /Worker brief — card "Fix login"/);
+    assert.match(art.body.content, /^# Fix login \(fix-login\)/);
 
     // worker registry survives on disk (board is truth)
     const disk = boardOnDisk(s);
@@ -239,8 +238,8 @@ test('investigation: brief carries the report contract, no branch; done attaches
   const { s, fdir, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Why slow', id: 'why-slow', type: 'investigation', attributes: { repo: 'proj' },
-      body: 'Find out why the dashboard takes 30s.',
+      title: 'Why slow', id: 'why-slow', type: 'investigation', brief: 'investigation',
+      attributes: { repo: 'proj' }, body: 'Find out why the dashboard takes 30s.',
     }));
     const r = await s.api('POST', '/api/cards/why-slow/start', { harness: 'fake' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
@@ -249,10 +248,10 @@ test('investigation: brief carries the report contract, no branch; done attaches
     assert.strictEqual(card0.attributes.branch, undefined);
 
     const rec = JSON.parse(fs.readFileSync(path.join(fdir, workerKey(s.dir, 'why-slow') + '.json'), 'utf8'));
-    assert.match(rec.prompt, /investigation/);
+    assert.match(rec.prompt, /a report, not a change/);
     assert.match(rec.prompt, /reports\/why-slow\.md/);
     assert.doesNotMatch(rec.prompt, /git checkout -b/);
-    assert.doesNotMatch(rec.prompt, /Delivery mode/);
+    assert.doesNotMatch(rec.prompt, /\{\{/);
 
     // card.start already auto-attached the brief itself, ahead of the report
     const briefFile = path.join(s.dir, '.bridge-commander', 'harness', workerKey(s.dir, 'why-slow') + '.prompt');
@@ -414,7 +413,7 @@ test('fresh restart after done: refuses over a live session; releases the dead o
   };
   let s = await startServerWithLieutenant({ dir: wsDir, env });
   try {
-    await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
     await s.api('POST', '/api/cards', withOwner({ title: 'Redo', id: 'redo', attributes: { repo: 'proj' } }));
     const first = (await s.api('POST', '/api/cards/redo/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/redo/worker/done', { outcome: 'first pass done' });
@@ -534,7 +533,7 @@ test('worker send on a done-but-DEAD worker still 409s and names the resume reci
   };
   let s = await startServerWithLieutenant({ dir: wsDir, env });
   try {
-    await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
     await s.api('POST', '/api/cards', withOwner({ title: 'Gone', id: 'gone', attributes: { repo: 'proj' } }));
     await s.api('POST', '/api/cards/gone/start', { harness: 'fake' });
     await s.api('POST', '/api/cards/gone/worker/done', { outcome: 'done' });

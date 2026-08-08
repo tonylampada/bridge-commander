@@ -77,7 +77,7 @@ test('project add (slow clone) does not block other requests', async () => {
   const repo = makeRepo(root);
   const s = await boot(root, 2000);
   try {
-    const adding = s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    const adding = s.api('POST', '/api/projects', { source: repo, name: 'proj' });
     const { result, elapsed, probeRes } = await probeDuring(adding, () => s.api('GET', '/api/status'));
     assert.strictEqual(probeRes.status, 200);
     assert.ok(elapsed < 1000, '/api/status answered in ' + elapsed + 'ms while a 2s clone was in flight');
@@ -95,7 +95,7 @@ test('card start burst (slow worktree add) keeps the board answering; all starts
   const s = await boot(root, 2000);
   try {
     // registration pays the slow clone once, awaited up front
-    const reg = await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    const reg = await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
     assert.strictEqual(reg.status, 200, JSON.stringify(reg.body));
     for (const id of ['b1', 'b2', 'b3']) {
       await s.api('POST', '/api/cards', withOwner({ title: id, id, attributes: { repo: 'proj' } }));
@@ -127,7 +127,7 @@ test('async window is guarded: same-card double start and duplicate in-flight pr
   const repo = makeRepo(root);
   const s = await boot(root, 1000);
   try {
-    const reg = await s.api('POST', '/api/projects', { source: repo, name: 'proj', mode: 'local-only' });
+    const reg = await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
     assert.strictEqual(reg.status, 200, JSON.stringify(reg.body));
     await s.api('POST', '/api/cards', withOwner({ title: 'One', id: 'one', attributes: { repo: 'proj' } }));
 
@@ -145,8 +145,8 @@ test('async window is guarded: same-card double start and duplicate in-flight pr
 
     // two concurrent adds of the SAME project name: exactly one clone lands
     const [c, d] = await Promise.all([
-      s.api('POST', '/api/projects', { source: repo, name: 'dup', mode: 'local-only' }),
-      s.api('POST', '/api/projects', { source: repo, name: 'dup', mode: 'local-only' }),
+      s.api('POST', '/api/projects', { source: repo, name: 'dup' }),
+      s.api('POST', '/api/projects', { source: repo, name: 'dup' }),
     ]);
     assert.deepStrictEqual([c.status, d.status].sort(), [200, 409], JSON.stringify([c.body, d.body]));
     const projects = (await s.api('GET', '/api/projects')).body.projects;

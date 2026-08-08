@@ -110,10 +110,14 @@ async function startServerWithLieutenant(opts = {}) {
 // every verb against a slug id, which is exactly the guarantee the boards
 // carrying 60-odd of them need. Minting (<PREFIX>-<n>) is asserted directly,
 // without this helper, in cards.test.js.
+// Cards are born with a brief here, as they are from the UI: `default` always
+// resolves (the packaged templates are the fallback for a workspace nobody
+// seeded), so any test that goes on to start the card has one. Pass `brief`
+// explicitly — including `brief: ''` — to say otherwise.
 function withOwner(card) {
   const id = card.id || String(card.title || '').toLowerCase()
     .replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'card';
-  return Object.assign({ owner: LT, id }, card);
+  return Object.assign({ owner: LT, id, brief: 'default' }, card);
 }
 
 // Run bc-axi and capture output.
