@@ -100,7 +100,7 @@ function fmCheck(key, val, at) {
     return val;
   }
   if (key === 'requires') {
-    const names = Array.isArray(val) ? val : [String(val)]; // a lone name is a one-item list
+    const names = Array.isArray(val) ? val : [val]; // a lone name is a one-item list
     for (const n of names) {
       if (typeof n !== 'string' || !FM_NAME_RE.test(n)) {
         throw new Error(at + 'requires takes attribute names, e.g. [pr_url, repo_slug] — got: ' + JSON.stringify(n));
@@ -157,6 +157,21 @@ function threadBlock(thread) {
       + String(m.text).trim().replace(/\n/g, '\n  ')).join('\n');
 }
 
+// attrVar(name) -> the placeholder a card attribute is reachable by. ONE
+// definition with two callers — the table below and the `requires` check at
+// card.start — so the name a template asks for and the name it can actually
+// read can never drift: pr_url, PR_URL and pr-url are the same attribute.
+function attrVar(name) {
+  return 'ATTR_' + String(name).toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+}
+
+// attrCardKey(name) -> the same name in the form a CARD carries it. What an
+// error must print: telling someone to set PR_URL earns them a second
+// attribute that resolves to the very placeholder the first one already owns.
+function attrCardKey(name) {
+  return attrVar(name).slice('ATTR_'.length).toLowerCase();
+}
+
 // briefVars(b) -> the placeholder table. b: { card, task?, thread, project,
 // worktree, branch, workspace, stateDir, cli }
 function briefVars(b) {
@@ -183,7 +198,7 @@ function briefVars(b) {
   // other name that is not an attribute.
   for (const [k, v] of Object.entries(card.attributes || {})) {
     if (v === null || typeof v === 'object') continue;
-    const key = 'ATTR_' + String(k).toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+    const key = attrVar(k);
     if (!(key in vars)) vars[key] = String(v);
   }
   return vars;
@@ -249,5 +264,5 @@ function seedBriefsAndDuties(stateDir, home) {
 
 module.exports = {
   PACKAGED_BRIEFS_DIR, PACKAGED_SKILL_DIR, briefsDir, listBriefs, resolveBrief,
-  parseBrief, briefVars, render, workerBrief, seedBriefsAndDuties,
+  parseBrief, attrVar, attrCardKey, briefVars, render, workerBrief, seedBriefsAndDuties,
 };

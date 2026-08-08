@@ -660,6 +660,33 @@ test('a card missing a `requires` attribute is refused before ANYTHING is provis
   } finally { await teardown(); }
 });
 
+// A required name is matched the way the brief would READ it, not by exact
+// spelling: the template author sees the uppercase placeholder, the card
+// carries the lowercase key, and both have to name one attribute.
+test('`requires` matches the attribute however it is spelled, and names the card key when it is missing', async () => {
+  const { s, teardown } = await boot();
+  try {
+    writeTemplate(s, 'needs-upper', [
+      '---', 'requires: [PR_URL, Repo-Slug]', '---', 'review {{ATTR_PR_URL}}', '',
+    ].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Review it', id: 'shouty', brief: 'needs-upper',
+      attributes: { repo: 'proj', pr_url: 'https://github.com/o/r/pull/9' },
+    }));
+    const r = await s.api('POST', '/api/cards/shouty/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    // pr_url answered PR_URL, so only the genuinely missing one is named — and
+    // named as the CARD needs it: an --attr Repo-Slug would earn a second
+    // attribute resolving to the placeholder repo_slug already owns.
+    assert.match(r.body.error, /--attr repo_slug=<value>/);
+    assert.doesNotMatch(r.body.error, /PR_URL|Repo-Slug|REPO_SLUG/);
+
+    await s.api('PATCH', '/api/cards/shouty', { attributes: { repo_slug: 'o/r' } });
+    const ok = await s.api('POST', '/api/cards/shouty/start', { harness: 'fake' });
+    assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+  } finally { await teardown(); }
+});
+
 test('`branch: false` cuts no branch — the brief owns the delivery contract, not the card type', async () => {
   const { s, teardown } = await boot();
   try {
@@ -688,6 +715,53 @@ test('`branch: false` cuts no branch — the brief owns the delivery contract, n
     const r3 = await s.api('POST', '/api/cards/why/start', { harness: 'fake' });
     assert.strictEqual(r3.body.worker.branch, undefined);
   } finally { await teardown(); }
+});
+
+// The branch is a per-START decision now, so it has to be UNSET as readily as
+// it is set: everything downstream (lifecycle hooks, the rendered brief) reads
+// the attribute, and a leftover from the last run points them at a branch that
+// this run never cut.
+test('a restart on a `branch: false` template clears the branch the previous run cut', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    writeTemplate(s, 'cuts-one', ['# {{CARD_TITLE}}', ''].join('\n'));
+    writeTemplate(s, 'cuts-none', ['---', 'branch: false', '---', 'read only', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Two ways', id: 'twoways', brief: 'cuts-one', attributes: { repo: 'proj' },
+    }));
+    let r = await s.api('POST', '/api/cards/twoways/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.card.attributes.branch, 'bc/twoways');
+
+    await s.api('POST', '/api/cards/twoways/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/twoways/move', { column: 'review', actor: 'agent' });
+    // the session dies (restart clears the in-process fake; drop its marker so
+    // the next start is a fresh spawn, not a resume)
+    await s.stop();
+    fs.rmSync(path.join(fdir, workerKey(wsDir, 'twoways') + '.json'), { force: true });
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    await s.api('PATCH', '/api/cards/twoways', { brief: 'cuts-none' });
+    r = await s.api('POST', '/api/cards/twoways/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual(r.body.worker.branch, undefined);
+    assert.strictEqual(r.body.card.attributes.branch, undefined, 'not the previous run\'s branch');
+    const onDisk = boardOnDisk(s).cards.find((c) => c.id === 'twoways');
+    assert.strictEqual(onDisk.attributes.branch, undefined);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a malformed frontmatter block refuses the start and names the line', async () => {

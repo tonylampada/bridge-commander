@@ -129,6 +129,10 @@ test('a malformed block fails with the offending line named', () => {
   bad(['---', 'model:', '---', 'b'], /line 2: "model" has no value/);
   bad(['---', 'requires: [pr_url, ]', '---', 'b'], /line 2: empty item in the list/);
   bad(['---', 'requires: [pr url]', '---', 'b'], /line 2: requires takes attribute names/);
+  // not coerced into the attribute literally named "true": a scalar that is
+  // not a name is an error, the same as everything else the block cannot read
+  bad(['---', 'requires: true', '---', 'b'], /line 2: requires takes attribute names.*true/);
+  bad(['---', 'requires: false', '---', 'b'], /line 2: requires takes attribute names.*false/);
   bad(['---', 'harness: codex', 'harness: claude', '---', 'b'], /line 3: "harness" is set twice/);
   bad(['---', 'harness: codex'], /never closed/);
   // the everyday version of "never closed": the brief itself runs into the block

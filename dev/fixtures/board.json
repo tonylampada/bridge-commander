@@ -231,7 +231,7 @@
       "id": "oauth-token-refresh", "title": "OAuth token refresh", "type": "implementation", "brief": "default",
       "owner": "monica", "column": "working", "labels": ["auth"],
       "attributes": {
-        "repo": "bridge-commander", "session": "bc-w-oauth", "harness": "claude", "model": "fable",
+        "repo": "bridge-commander", "session": "bc-w-oauth",
         "prs": [{ "url": "https://github.com/tonylampada/bridge-commander/pull/53", "state": "open" }]
       },
       "bodyFile": "bodies/oauth.md",

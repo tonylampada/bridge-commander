@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, listBriefs, resolveBrief, parseBrief } = require(path.join(__dirname, 'brief.js'));
+const { workerBrief, listBriefs, resolveBrief, parseBrief, attrVar, attrCardKey } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -2029,10 +2029,20 @@ async function doStartCard(card, body) {
     // Refused HERE, before a worktree or a session exists: a review brief with
     // no pr_url otherwise renders its unresolved placeholder literally — the
     // right call for a typo — and spawns a worker to discover that for itself.
-    const missing = (meta.requires || []).filter((k) => {
-      const v = card.attributes && card.attributes[k];
-      return v === undefined || v === null || String(v).trim() === '';
-    });
+    // Matched through brief.js's attrVar(), the same normalisation the
+    // placeholder table uses, so a template asking for PR_URL is answered by
+    // the card's pr_url — asking for a name the brief could not have read back
+    // is not a requirement anyone means to write.
+    const have = new Set();
+    for (const [k, v] of Object.entries((card.attributes || {}))) {
+      if (v === null || typeof v === 'object' || String(v).trim() === '') continue;
+      have.add(attrVar(k));
+    }
+    // Named back in the form the CARD carries: the uppercase form would earn
+    // the user a second attribute resolving to the placeholder the first owns.
+    const missing = [...new Set((meta.requires || [])
+      .filter((k) => !have.has(attrVar(k)))
+      .map((k) => attrCardKey(k)))];
     if (missing.length) {
       return { error: 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
         + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ')
@@ -2109,7 +2119,11 @@ async function doStartCard(card, body) {
 
   card.attributes.session = workerName(ref);
   card.attributes.worktree = wt.path;
+  // Cleared when this run cuts none: a card restarted on a no-branch template
+  // would otherwise keep the last run's value, and everything downstream —
+  // lifecycle hooks, the rendered brief — would read a branch that is not there.
   if (branch) card.attributes.branch = branch;
+  else delete card.attributes.branch;
   attachBriefArtifact(card, ref);
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
   if (branch) worker.branch = branch;
