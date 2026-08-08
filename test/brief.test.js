@@ -88,7 +88,6 @@ test('the packaged templates render with no {{ left in them', () => {
   for (const f of fs.readdirSync(PACKAGED_BRIEFS_DIR)) {
     if (!f.endsWith('.md') || f === 'README.md') continue;
     const out = brief(fs.readFileSync(path.join(PACKAGED_BRIEFS_DIR, f), 'utf8'), {
-      // codereview.md reads the PR attributes off the card
       card: {
         id: 'MON-9', title: 'Demo card', type: 'implementation', body: 'do the thing',
         attributes: { pr_url: 'https://x/1', pr_number: '1', repo_slug: 'o/r' },

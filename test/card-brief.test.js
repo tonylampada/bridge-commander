@@ -47,7 +47,7 @@ test('the templates list is served off disk, workspace and packaged together', a
   try {
     let r = await s.api('GET', '/api/briefs');
     assert.strictEqual(r.status, 200);
-    assert.deepStrictEqual(r.body.briefs, ['codereview', 'default', 'investigation', 'no-mistakes']);
+    assert.deepStrictEqual(r.body.briefs, ['default', 'investigation', 'no-mistakes']);
     assert.strictEqual(r.body.dir, briefsDir);
 
     // a template dropped in a second ago is pickable now — no restart, no cache
@@ -98,7 +98,7 @@ test('card start refuses a card with no brief, and names the templates', async (
     assert.strictEqual(r.status, 400);
     assert.match(r.body.error, /has no brief/);
     assert.match(r.body.error, /card patch old-card --brief/);
-    assert.match(r.body.error, /codereview, default, investigation, no-mistakes/);
+    assert.match(r.body.error, /default, investigation, no-mistakes/);
     // it did not half-start: no worker, still in backlog
     assert.strictEqual((await s.api('GET', '/api/cards/old-card')).body.column, 'backlog');
 

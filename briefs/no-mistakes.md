@@ -32,8 +32,4 @@ Every commit goes there.
 3. Findings come back with an action. `auto-fix` is yours to fix and re-run. `ask-user` is a
    finding that challenges what the card asked for — signal it and wait for your lieutenant;
    do not answer it yourself and do not fix your way around it.
-4. When CI is green, rewrite the PR description with `/nobloat-pr-description`. Keep the
-   `## Pipeline` block at the bottom **verbatim** — that block is the gate evidence, and
-   no-mistakes wrote it. Doing this before CI is green wastes the work: the gate rewrites the
-   body at the PR step.
-5. Report the full PR URL in your done outcome.
+4. Report the full PR URL in your done outcome.
