@@ -926,12 +926,12 @@ test('a retired-harness worker record survives load as dead-but-intact, and its 
     execFileSync('git', ['-C', clone, 'worktree', 'remove', wt.path], { stdio: ['ignore', 'pipe', 'pipe'] });
     oldrunRec.worktree = { path: away, tool: 'git', base: 'origin/main' };
     oldrunRec.ref.cwd = away;
-    // Written LIVE-looking on purpose: `done: false`. Load must not touch it —
-    // a normalization that writes a terminal flag can never be undone, so a
-    // harness that fails to load for one boot would bury a real worker's record.
-    // Dead-ness is derived at the read points, and this row proves the row
-    // itself is left alone.
-    oldrunRec.done = false;
+    // The OTHER record is written live-looking on purpose: `done: false`. Load
+    // must not touch it — a normalization that writes a terminal flag can never
+    // be undone, so a harness that fails to load for one boot would bury a real
+    // worker's record. Dead-ness is derived at the read points, and this row is
+    // how we see the row itself left alone.
+    b.workers.find((w) => w.card === 'oldarch').done = false;
     fs.writeFileSync(bfile, JSON.stringify(b, null, 2));
 
     const s2 = await startServer({
@@ -947,17 +947,24 @@ test('a retired-harness worker record survives load as dead-but-intact, and its 
       const kept = boardOnDisk(s).workers.find((w) => w.card === 'oldrun');
       assert.ok(kept, 'the record is KEPT, not dropped');
       assert.ok(!('retiredHarness' in kept), 'and not MARKED either — nothing is written to the row');
-      assert.strictEqual(kept.done, false, 'done is exactly what was on disk: load rewrites nothing');
+      assert.strictEqual(kept.done, true, 'done is exactly what was on disk: load rewrites nothing');
       assert.strictEqual(kept.worktree.path, away, 'the worktree handle survives — the whole point');
       assert.strictEqual(kept.worktree.tool, 'git', 'tool and all: the card attribute holds only a bare path');
+      const live = boardOnDisk(s).workers.find((w) => w.card === 'oldarch');
+      assert.strictEqual(live.done, false, 'and the live-looking row keeps ITS done — no terminal flag forced on');
+      assert.ok(!('retiredHarness' in live), 'nor a mark that outlives the harness going missing');
 
-      // dead WITHOUT a lookup: the liveness sweep runs over it and raises no
-      // worker-died alarm, and the card still reads a plain absent worker
+      // dead WITHOUT a lookup: the liveness sweep runs over both and raises no
+      // worker-died alarm — not even for the row that still reads unfinished,
+      // which is the one a forced `done` used to hide — and the card still
+      // reads a plain absent worker
       await sleep(300);
-      assert.ok(!(await s2.api('GET', '/api/cards/oldrun')).body.events.some((e) => e.kind === 'worker-died'),
-        'the sweep never mistakes a retired record for a crash');
-      assert.strictEqual(boardOnDisk(s).workers.find((w) => w.card === 'oldrun').flagged, undefined,
-        'the sweep wrote nothing to the row either');
+      for (const id of ['oldrun', 'oldarch']) {
+        assert.ok(!(await s2.api('GET', '/api/cards/' + id)).body.events.some((e) => e.kind === 'worker-died'),
+          'the sweep never mistakes a retired record for a crash: ' + id);
+        assert.strictEqual(boardOnDisk(s).workers.find((w) => w.card === id).flagged, undefined,
+          'the sweep wrote nothing to the row either: ' + id);
+      }
       assert.strictEqual((await s2.api('GET', '/api/cards/oldrun')).body.status.worker.state, 'absent');
 
       // resume refuses by name rather than discovering it at the registry

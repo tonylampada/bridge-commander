@@ -2034,11 +2034,17 @@ async function doStartCard(card, body) {
   }
 
   if (card.column === 'working') return { error: 'card is already Working', code: 409 };
-  // An unfinished worker is steered or resumed, not spawned over — unless its
-  // harness retired, in which case neither is possible and a fresh start is the
-  // only move left. It is also the move that releases the recorded worktree,
-  // which is the whole reason the record is still here.
-  if (existing && !existing.done && !harnessRetired(existing)) {
+  // An unfinished worker is steered or resumed, never spawned over — and a
+  // harness the registry cannot resolve earns NO exemption from that. An
+  // unresolvable name may only make us read a worker as dead where dead costs
+  // nothing: a liveness check, a kill that was coming anyway. It must never
+  // unlock a destructive move — spawning over a worker, releasing its worktree,
+  // archiving it — because the name may be missing for one boot rather than
+  // gone for good, and there is no way here to tell the two apart. Where the
+  // safe read and the convenient one disagree, the safe read wins and the
+  // record stays. A finished retired record reaches a fresh start the ordinary
+  // way, through `done` — which is where every one of them already is.
+  if (existing && !existing.done) {
     return { error: 'card already has a worker (' + workerName(existing.ref) + ') — resume it (card start --resume) or archive first', code: 409 };
   }
   const repoAttr = card.attributes && card.attributes.repo;
