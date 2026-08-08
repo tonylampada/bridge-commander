@@ -122,8 +122,9 @@ sharpening the body a second before starting is a sharper brief, and editing a p
 changes the next card started on it with no restart.
 
 **A card with no playbook does not start**, and nothing picks one on its behalf: `card start`
-refuses and names the playbooks. Cards created before playbooks existed have none — set one
-with `card patch --playbook <id>` when you get to them.
+refuses and names the playbooks. Cards frozen before playbooks existed — and cards written
+when the field was still called `brief`, which nothing backfills — have none: set one with
+`card patch --playbook <id>` when you get to them.
 
 A playbook orders only what a worker can run: the Skill tool refuses a `disable-model-invocation`
 skill to an agent — `writing-great-skills` is one — so that step is yours, at handoff.
