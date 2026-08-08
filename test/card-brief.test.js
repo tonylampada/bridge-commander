@@ -178,15 +178,6 @@ test('{{ATTR_*}} reads the card attributes at start; one that does not exist sta
   } finally { await teardown(); }
 });
 
-test('a --command start needs no brief: nothing in it reads one', async () => {
-  const { s, teardown } = await boot();
-  try {
-    await s.api('POST', '/api/cards', withOwner({ title: 'Run it', brief: '', attributes: { repo: 'proj' } }));
-    const r = await s.api('POST', '/api/cards/run-it/start', { harness: 'fake', command: 'node x.js' });
-    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-  } finally { await teardown(); }
-});
-
 test('a brief whose template was deleted out from under the card is a loud refusal', async () => {
   const { s, briefsDir, teardown } = await boot();
   try {

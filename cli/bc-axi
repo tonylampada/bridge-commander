@@ -93,7 +93,6 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--effort') opts.effort = argv[++i];
   else if (a === '--brief') opts.brief = argv[++i];
   else if (a === '--brief-file') opts.briefFile = argv[++i];
-  else if (a === '--command') opts.command = argv[++i];
   else if (a === '--wake-owner') opts.wakeOwner = true;
   else if (a === '--resume') opts.resume = true;
   else if (a === '--park') opts.park = true;
@@ -794,16 +793,12 @@ async function cmdArtifactWrite() {
 async function cmdStart() {
   const id = positional[0];
   if (!id) {
-    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--command "<cmd>"] [--resume]\n' +
+    die('usage: bc-axi card start <card-id> [--brief-file f|-] [--resume]\n' +
       '                             [--harness h] [--model m] [--effort l]\n' +
       '  ONE atomic op: provision an isolated worktree, spawn the worker session with the brief\n' +
       '  as launch prompt, bind session/worktree/branch to the card, move it to Working.\n' +
       '  --brief-file adds/overrides the task text (default: the card body).\n' +
-      '  --command runs that command line in the worker session instead of launching an agent\n' +
-      '    with a brief. Same worktree, branch, registry entry and supervision; no composer,\n' +
-      '    so `worker send` on it fails. Mutually exclusive with --brief-file.\n' +
-      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree\n' +
-      '    (a --command worker: it runs its recorded command line again, from the top).\n' +
+      '  --resume reincarnates the card\'s recorded (dead) worker in the same worktree.\n' +
       '  --model overrides the spawned worker\'s model (e.g. claude-fable-5); ignored with --resume.\n' +
       '  --effort sets reasoning effort (low|medium|high|xhigh|max) for a claude worker; ignored with --resume.');
   }
@@ -812,13 +807,8 @@ async function cmdStart() {
       'brief would be silently dropped. To hand a live worker new instructions:\n' +
       '  bc-axi worker send ' + id + ' --text-file <f|->');
   }
-  if (opts.command && opts.briefFile) {
-    die('--command and --brief-file are mutually exclusive: a command session runs the line,\n' +
-      'nothing in it reads a brief.');
-  }
   const body = { actor: opts.actor || 'agent' };
   if (opts.briefFile) body.brief = readInput(opts.briefFile);
-  if (opts.command) body.command = opts.command;
   if (opts.resume) body.resume = true;
   if (opts.harness) body.harness = opts.harness;
   if (opts.model) body.model = opts.model;
@@ -879,12 +869,12 @@ async function cmdWorkerSend() {
 // WORKER DIED alarm); the record + worktree stay resumable. --park composes
 // card park (Working → Backlog) in the same call.
 //
-// --expect-exit is called from INSIDE the session that is about to end — an
-// automated `--command` worker holding on an approval gate. Nothing is killed;
-// the stop is recorded so the exit that follows reads as waiting, not dying.
+// --expect-exit is called from INSIDE the session that is about to end — a
+// worker holding on an approval gate before it exits. Nothing is killed; the
+// stop is recorded so the exit that follows reads as waiting, not dying.
 // --reason replaces the resume hint with the one that revives that worker, and
-// the server refuses `card start --resume` on it afterwards — that move re-runs
-// the recorded command over a run still in flight.
+// the server refuses `card start --resume` on it afterwards — that move spawns
+// a second run over the one still in flight.
 async function cmdWorkerPause() {
   const id = positional[0];
   if (!id) {
@@ -893,7 +883,7 @@ async function cmdWorkerPause() {
       '  record and worktree survive for card start <card-id> --resume.\n' +
       '  --park also moves the card Working -> Backlog (card park) in the same step.\n' +
       '  --expect-exit records the stop WITHOUT killing anything — for a session that is\n' +
-      '  about to end by itself (a --command worker holding on a gate, calling from inside it);\n' +
+      '  about to end by itself (a worker holding on a gate, calling from inside it);\n' +
       '  card start --resume is then REFUSED, quoting --reason as the way back.');
   }
   const body = { actor: opts.actor || 'agent' };
@@ -1255,7 +1245,7 @@ if (!commands[cmd]) {
     '                                         kill = archive (append-only file, off the board)\n' +
     '  card restore <card-id> [--note "..."]  resurrect the most recent archived snapshot in full;\n' +
     '                                         appends a loud level-1 event\n' +
-    '  card start <card-id> [--brief-file f|-] [--command "<cmd>"] [--resume] [--harness h]\n' +
+    '  card start <card-id> [--brief-file f|-] [--resume] [--harness h]\n' +
     '                                         card.start: ONE atomic op — isolated worktree + real\n' +
     '                                         worker session (the card\'s brief template, rendered\n' +
     '                                         against the card AS IT IS NOW, is the launch prompt),\n' +
@@ -1264,9 +1254,6 @@ if (!commands[cmd]) {
     '                                         repos, and cards with no brief. --resume\n' +
     '                                         reincarnates the recorded worker (after worker-died);\n' +
     '                                         it never takes --brief-file (use worker send instead).\n' +
-    '                                         --command runs a command line in the session instead of\n' +
-    '                                         an agent: same worktree/branch/supervision, no composer\n' +
-    '                                         (worker send fails), --resume re-runs the line\n' +
     '  card park <card-id>                    move a Working card whose worker is absent or DEAD back\n' +
     '                                         to Backlog (liveness re-checked server-side; a live\n' +
     '                                         worker refuses — pause it instead). Timeline event\n' +
@@ -1295,7 +1282,7 @@ if (!commands[cmd]) {
     '                                         worktree survive for card start --resume. --park also\n' +
     '                                         moves the card Working -> Backlog (run by the lieutenant).\n' +
     '                                         --expect-exit kills NOTHING — for a session ending by\n' +
-    '                                         itself (a --command worker on a gate, calling from inside)\n' +
+    '                                         itself (a worker on a gate, calling from inside)\n' +
     '\nworker (run by the worker itself, from its worktree):\n' +
     '  worker signal <card-id> "<milestone>" [--text-file f|-]\n' +
     '                                         real milestone -> level-2 card event + QueueItem to owner\n' +

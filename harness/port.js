@@ -23,9 +23,8 @@
 // (or shipping it as a builtin module). Nothing else.
 //
 // All seven must EXIST; one that cannot be honored must THROW with the reason
-// rather than pretend. `command` (a session that runs a program instead of an
-// agent) is the case in point: it has no composer, so its send() always throws
-// and the caller learns why instead of watching text vanish.
+// rather than pretend — a caller that learns why beats one watching text vanish
+// into a verb that quietly did nothing.
 //
 // OPTIONAL capability verbs: beyond the seven REQUIRED verbs a harness MAY
 // expose extra verbs for features not every harness can honor. They are
@@ -51,9 +50,9 @@
 //       them. Deliberately NOT
 //       send(): that one types, settles, Enters and retries until the composer
 //       verifies empty — right for delivering a brief, wrong for a keystroke.
-//       A harness MAY offer paneInput while send() throws (`command` does):
-//       "no composer for a brief" and "no way to press a key" are different
-//       claims. Implementations that also stream SHOULD speed their feed up
+//       A harness MAY offer paneInput while send() throws: "no composer for a
+//       brief" and "no way to press a key" are different claims.
+//       Implementations that also stream SHOULD speed their feed up
 //       briefly after input, so the echo is not stuck behind the poll.
 // — migration of a session-granular ref to window granularity (the lieutenant
 // whose session it turned out to cohabit with its worker windows):
@@ -133,7 +132,6 @@ function validatePaneInput(input) {
 const BUILTINS = {
   claude: './claude-tmux.js',
   codex: './codex-tmux.js',
-  command: './command-tmux.js',
   fake: './fake.js',
 };
 

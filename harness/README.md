@@ -57,10 +57,10 @@ in UTF-8 BYTES) so one call cannot paste a whole file into a live agent's pane �
 and, more sharply, cannot hand tmux more than tmux takes: a single-line
 `send-keys` is one imsg, so target + text must stay under ~16343 bytes.
 
-`command` panes accept `paneInput` even though their `send` always throws: those
-are different capabilities. `send` refuses because a program has no COMPOSER for
-a brief to land in; `paneInput` assumes nothing about what the pane runs, which
-is exactly how you answer a prompt, quit a pager, or Ctrl-C a stuck script.
+A harness may offer `paneInput` even where its `send` throws: those are
+different capabilities. `send` needs a COMPOSER for a brief to land in;
+`paneInput` assumes nothing about what the pane runs, which is exactly how you
+answer a prompt, quit a pager, or Ctrl-C a stuck script.
 
 The claude implementation polls `capture-pane -e` — deliberately **rendered
 frames, not a `pipe-pane` byte stream**: the target is a full-screen TUI that
@@ -96,9 +96,6 @@ focus, so an agent with siblings must always carry its window.
 - `port.js` — the contract: `getHarness(name)`, `registerHarness(name, impl)`, `harnessFor(ref)`, `isHarnessRef(ref)`
 - `claude-tmux.js` — the claude implementation over tmux (v0's real harness)
 - `codex-tmux.js` — the OpenAI Codex CLI implementation over tmux
-- `command-tmux.js` — runs a command line in a tmux pane instead of an agent
-  (`card start --command`): the process IS the session, its exit is the only
-  turn boundary, and `send` throws (a program has no composer)
 - `tmux-session.js` — session/window/pane plumbing shared by the tmux adapters
   (pane lifecycle, naming, launch-and-settle skeleton, turn-end tail, pane viewing)
 - `tmux.js` — shared tmux primitives (composer state, ghost-text stripping, verified submit)

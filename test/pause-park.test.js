@@ -149,15 +149,14 @@ test('worker pause --expect-exit: nothing killed, custom reason on the card, and
 
 // The move that cost a run: a lieutenant with no context sees a stopped worker
 // and reaches for `card start --resume` — the recovery the board teaches
-// everywhere else. On an expect-exit worker it re-runs the recorded command,
-// starting a second run over the one still holding the path. The recorded
-// reason is not enough; the board refuses, and quotes the door it named.
+// everywhere else. On an expect-exit worker that starts a second run over the
+// one still holding the path. The recorded reason is not enough; the board
+// refuses, and quotes the door it named.
 test('card start --resume is REFUSED on an expect-exit worker, quoting the recorded reason', async () => {
   const { s, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Gate', id: 'gate2', attributes: { repo: 'proj' } }));
-    assert.strictEqual((await s.api('POST', '/api/cards/gate2/start',
-      { harness: 'fake', command: 'archon workflow run r-42' })).status, 200);
+    assert.strictEqual((await s.api('POST', '/api/cards/gate2/start', { harness: 'fake' })).status, 200);
     assert.strictEqual((await s.api('POST', '/api/cards/gate2/worker/pause', {
       expectExit: true, actor: 'archon',
       reason: 'waiting on the lieutenant — archon workflow approve r-42 "<decision>"',
@@ -186,14 +185,13 @@ test('card start --resume is REFUSED on an expect-exit worker, quoting the recor
 });
 
 // The cosmetic lie, which is only cosmetic until it is not: the worker lease is
-// a WRITTEN signal and a --command worker writes none, so every pipeline card
-// read `worker=absent` while its run was plainly alive.
-test('card show reports a live --command worker as live, not absent', async () => {
+// a WRITTEN signal, so a worker that never writes one reads `worker=absent`
+// while its run is plainly alive and emitting milestones.
+test('card show reports a live but lease-less worker as live, not absent', async () => {
   const { s, fdir, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Runner', id: 'live', attributes: { repo: 'proj' } }));
-    assert.strictEqual((await s.api('POST', '/api/cards/live/start',
-      { harness: 'fake', command: 'archon workflow run r-7' })).status, 200);
+    assert.strictEqual((await s.api('POST', '/api/cards/live/start', { harness: 'fake' })).status, 200);
     const session = workerKey(s.dir, 'live');
 
     // nobody wrote a lease — the session itself is the answer

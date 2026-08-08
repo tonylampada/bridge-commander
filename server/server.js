@@ -292,7 +292,14 @@ function normalizeBoard(doc) {
     && typeof p.path === 'string' && p.path);
   for (const p of b.projects) delete p.mode;
   if (!Array.isArray(b.workers)) b.workers = [];
-  b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref));
+  // A ref naming the retired `command` harness is dropped the same way, and for
+  // the same reason: the registry cannot resolve it any more, so every liveness
+  // path that touched one would read a harness that no longer exists and quietly
+  // call it dead. Those records are finished work — nothing resumes them, and
+  // their cards keep their events, outcomes and the worktree/repo attributes the
+  // archive path releases from.
+  b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref)
+    && w.ref.harness !== 'command');
   for (const c of b.cards) {
     if (!Array.isArray(c.events)) c.events = [];
     if (!Array.isArray(c.thread)) c.thread = [];
@@ -1783,9 +1790,9 @@ function findWorker(cardId) { return board.workers.find((w) => w.card === cardId
 
 // The worker lease (card.status.worker) is a WRITTEN signal — status.set is its
 // only writer — so a worker that never writes one reads `absent` while its
-// session is plainly alive. An automated `--command` worker never writes one at
-// all, so its card reports an absent worker for the whole run — while that same
-// run is emitting milestones. On the SINGLE-card read (card show, status <card>)
+// session is plainly alive, and its card reports an absent worker for the whole
+// run while that same run is emitting milestones.
+// On the SINGLE-card read (card show, status <card>)
 // the truth is one call away, so ask for it: alive() on the card's registry
 // entry, whatever harness it is. The board read stays lease-only and sync — one
 // alive() per card there would be a scan, not a read.
@@ -1950,20 +1957,16 @@ async function doStartCard(card, body) {
         + 'and the brief would be silently dropped. To hand a live worker new instructions: '
         + 'bc-axi worker send ' + card.id + ' --text-file <f|->' };
     }
-    if (body.command) {
-      return { error: 'resume does not take a command — it re-runs the one the recorded worker was '
-        + 'started with. To run a different one: archive the worker and start again with --command' };
-    }
     if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
     // A worker paused with --expect-exit is stopped ON PURPOSE and already told
-    // the board the way back — and --resume is not it. Resuming re-runs the
-    // recorded command, which starts a SECOND run against a path the first one
-    // still holds, and the new session dies on arrival. Refuse, and quote the
+    // the board the way back — and --resume is not it. Resuming spawns a SECOND
+    // run against a path the first one still holds, and the new session dies on
+    // arrival. Refuse, and quote the
     // recorded reason: the caller reached for this because it is the move the
     // board teaches everywhere else, so name the door instead of just the wall.
     if (existing.expectExit) {
       return { error: 'refusing to resume ' + card.id + ': its worker stopped with --expect-exit — resuming '
-        + 're-runs the recorded command and would start a second run over the one already in flight. '
+        + 'would start a second run over the one already in flight. '
         + 'The way back, as recorded at the pause: ' + (existing.pauseReason || '(no reason recorded)'), code: 409 };
     }
     let ref;
@@ -1997,89 +2000,77 @@ async function doStartCard(card, body) {
   const project = findProject(String(repoAttr));
   if (!project) return { error: 'unregistered project: ' + repoAttr + ' (register it: bc-axi project add <url|path>)' };
 
-  // body.command starts a session that RUNS THAT LINE instead of an agent with
-  // a brief (the `command` harness — harness/command-tmux.js). Everything else
-  // about the start is identical: same worktree, same branch, same registry
-  // entry, same supervision. What the line does is not the board's business.
-  const command = String((body && body.command) || '').trim();
-  if (command && body && body.brief) {
-    return { error: 'a --command start has no brief to deliver: the session runs the command line, '
-      + 'nothing reads a brief. Drop one of the two.' };
-  }
   // The brief template is resolved and read HERE — at start, and only here, so
-  // the worker gets the card as it stands and the template as it stands. No
-  // fallback: a card with no brief does not start.
+  // the worker gets the card as it stands and the template as it stands. Every
+  // start reads it: there is no second way for a card to begin. No fallback
+  // either — a card with no brief does not start.
   // A template MAY open with frontmatter (server/brief.js) naming what runs it:
   // harness, model, the attributes it cannot work without, whether it gets a
   // branch. Parsed here, honored below.
+  const briefId = String(card.brief || '').trim();
+  if (!briefId) {
+    return { error: 'card ' + card.id + ' has no brief — pick a template before starting it: '
+      + 'bc-axi card patch ' + card.id + ' --brief <id>. Available: ' + briefsHint() };
+  }
+  const briefFile = resolveBrief(STATE_DIR, briefId);
+  if (!briefFile) {
+    return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
+      + 'matches. Available: ' + briefsHint() };
+  }
+  let raw;
+  try { raw = fs.readFileSync(briefFile, 'utf8'); }
+  catch (e) { return { error: 'brief template unreadable (' + briefFile + '): ' + String((e && e.message) || e), code: 502 }; }
   let template = '';
   let meta = {};
-  let briefFile = '';
-  if (!command) {
-    const briefId = String(card.brief || '').trim();
-    if (!briefId) {
-      return { error: 'card ' + card.id + ' has no brief — pick a template before starting it: '
-        + 'bc-axi card patch ' + card.id + ' --brief <id>. Available: ' + briefsHint() };
-    }
-    briefFile = resolveBrief(STATE_DIR, briefId);
-    if (!briefFile) {
-      return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
-        + 'matches. Available: ' + briefsHint() };
-    }
-    let raw;
-    try { raw = fs.readFileSync(briefFile, 'utf8'); }
-    catch (e) { return { error: 'brief template unreadable (' + briefFile + '): ' + String((e && e.message) || e), code: 502 }; }
-    try { ({ meta, body: template } = parseBrief(raw)); }
-    catch (e) { return { error: 'brief template ' + briefFile + ': ' + String((e && e.message) || e) }; }
-    // `requires` — the attributes this flavour of SDLC cannot work without.
-    // Refused HERE, before a worktree or a session exists: a review brief with
-    // no pr_url otherwise renders its unresolved placeholder literally — the
-    // right call for a typo — and spawns a worker to discover that for itself.
-    // Matched through brief.js's attrVar(), the same normalisation the
-    // placeholder table uses, so a template asking for PR_URL is answered by
-    // the card's pr_url — asking for a name the brief could not have read back
-    // is not a requirement anyone means to write.
-    //
-    // The question here is whether the card CARRIES the thing, not whether it
-    // has a text form to render — that second question is briefVars', and it
-    // is why the two rules differ: a review brief demanding "this card has PRs
-    // recorded" is a real requirement even though the recorded list renders
-    // into nothing. An empty list, though, carries nothing.
-    const have = new Set();
-    for (const [k, v] of Object.entries((card.attributes || {}))) {
-      if (v === null || v === undefined) continue;
-      const carried = typeof v === 'object'
-        ? (Array.isArray(v) ? v.length > 0 : Object.keys(v).length > 0)
-        : String(v).trim() !== '';
-      if (carried) have.add(attrVar(k));
-    }
-    // Named back in the form the CARD carries: the uppercase form would earn
-    // the user a second attribute resolving to the placeholder the first owns.
-    const missing = [...new Set((meta.requires || [])
-      .filter((k) => !have.has(attrVar(k)))
-      .map((k) => attrCardKey(k)))];
-    if (missing.length) {
-      const ours = missing.filter((k) => BOARD_OWNED_ATTRS.has(k));
-      const settable = missing.filter((k) => !BOARD_OWNED_ATTRS.has(k));
-      let err = 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
-        + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ') + '.';
-      if (settable.length) {
-        err += ' Set ' + (settable.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch '
-          + card.id + ' ' + settable.map((k) => '--attr ' + k + '=<value>').join(' ') + '.';
-      }
-      if (ours.length) {
-        err += ' ' + ours.join(' and ') + ' ' + (ours.length > 1 ? 'are' : 'is')
-          + ' recorded by the board itself and never set by hand — the card has to earn '
-          + (ours.length > 1 ? 'them' : 'it') + ' before this brief can run.';
-      }
-      return { error: err };
-    }
+  try { ({ meta, body: template } = parseBrief(raw)); }
+  catch (e) { return { error: 'brief template ' + briefFile + ': ' + String((e && e.message) || e) }; }
+  // `requires` — the attributes this flavour of SDLC cannot work without.
+  // Refused HERE, before a worktree or a session exists: a review brief with
+  // no pr_url otherwise renders its unresolved placeholder literally — the
+  // right call for a typo — and spawns a worker to discover that for itself.
+  // Matched through brief.js's attrVar(), the same normalisation the
+  // placeholder table uses, so a template asking for PR_URL is answered by
+  // the card's pr_url — asking for a name the brief could not have read back
+  // is not a requirement anyone means to write.
+  //
+  // The question here is whether the card CARRIES the thing, not whether it
+  // has a text form to render — that second question is briefVars', and it
+  // is why the two rules differ: a review brief demanding "this card has PRs
+  // recorded" is a real requirement even though the recorded list renders
+  // into nothing. An empty list, though, carries nothing.
+  const have = new Set();
+  for (const [k, v] of Object.entries((card.attributes || {}))) {
+    if (v === null || v === undefined) continue;
+    const carried = typeof v === 'object'
+      ? (Array.isArray(v) ? v.length > 0 : Object.keys(v).length > 0)
+      : String(v).trim() !== '';
+    if (carried) have.add(attrVar(k));
   }
-  // Harness precedence: explicit CLI --harness wins, then --command (which
-  // names the harness by implication), then the template's frontmatter, then
-  // config/default.
-  const harnessFromTemplate = !(body && body.harness) && !command && !!meta.harness;
-  const harnessName = String((body && body.harness) || (command ? 'command' : '')
+  // Named back in the form the CARD carries: the uppercase form would earn
+  // the user a second attribute resolving to the placeholder the first owns.
+  const missing = [...new Set((meta.requires || [])
+    .filter((k) => !have.has(attrVar(k)))
+    .map((k) => attrCardKey(k)))];
+  if (missing.length) {
+    const ours = missing.filter((k) => BOARD_OWNED_ATTRS.has(k));
+    const settable = missing.filter((k) => !BOARD_OWNED_ATTRS.has(k));
+    let err = 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
+      + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ') + '.';
+    if (settable.length) {
+      err += ' Set ' + (settable.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch '
+        + card.id + ' ' + settable.map((k) => '--attr ' + k + '=<value>').join(' ') + '.';
+    }
+    if (ours.length) {
+      err += ' ' + ours.join(' and ') + ' ' + (ours.length > 1 ? 'are' : 'is')
+        + ' recorded by the board itself and never set by hand — the card has to earn '
+        + (ours.length > 1 ? 'them' : 'it') + ' before this brief can run.';
+    }
+    return { error: err };
+  }
+  // Harness precedence: explicit CLI --harness wins, then the template's
+  // frontmatter, then config/default.
+  const harnessFromTemplate = !(body && body.harness) && !!meta.harness;
+  const harnessName = String((body && body.harness)
     || meta.harness || readConfig().harness || 'claude');
   let impl;
   // A name the template asked for names the template back: otherwise a typo in
@@ -2121,9 +2112,7 @@ async function doStartCard(card, body) {
   // type decides as it always has (an investigation delivers a report).
   const cuts = typeof meta.branch === 'boolean' ? meta.branch : card.type !== 'investigation';
   const branch = cuts ? 'bc/' + card.id : null;
-  // What spawn's second argument means is the harness's business: a brief for
-  // an agent, the line to run for `command`.
-  const prompt = command || workerBrief({
+  const prompt = workerBrief({
     template, card, task: body && body.brief, thread: card.thread || [],
     project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
     stateDir: STATE_DIR, cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
@@ -2274,16 +2263,15 @@ async function workerSend(card, body) {
 // worktree/branch stay intact, so `card start --resume` revives the worker
 // exactly like a died one. body.park composes the park (Working → Backlog).
 //
-// body.expectExit — the OTHER kind of deliberate stop, and the one an
-// automated `--command` worker needs: the session is about to end BY ITSELF
-// and the caller is inside it. A command that stops at an approval gate and
-// returns leaves nothing running, and without a word beforehand that reads as
-// WORKER DIED. Killing here would kill the caller mid-sentence, so the marker
-// is recorded and nothing is killed. body.reason replaces the resume hint,
-// because how you revive one of those is not `card start --resume`.
+// body.expectExit — the OTHER kind of deliberate stop: the session is about to
+// end BY ITSELF and the caller is inside it. A worker that stops at an approval
+// gate and returns leaves nothing running, and without a word beforehand that
+// reads as WORKER DIED. Killing here would kill the caller mid-sentence, so the
+// marker is recorded and nothing is killed. body.reason replaces the resume
+// hint, because how you revive one of those is not `card start --resume`.
 //
 // That replacement is not a nicety — `--resume` on an expect-exit worker is
-// ACTIVELY WRONG (it re-runs the recorded command over a run the first one is
+// ACTIVELY WRONG (it spawns a second run over the one the first is
 // still holding), so the stop is recorded on the registry entry as
 // {expectExit, pauseReason} and `card start --resume` refuses it by name. A
 // reason text alone only informs whoever reads it; the refusal is what stops
