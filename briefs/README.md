@@ -72,7 +72,7 @@ brief rather than vanishing.
 | `{{PROJECT}}` | the project name as registered on the board |
 | `{{PROJECT_PATH}}` | the project clone — read-only to a worker |
 | `{{WORKTREE}}` | the worker's own worktree |
-| `{{BRANCH}}` | `bc/{{CARD_ID}}`, empty for investigations |
+| `{{BRANCH}}` | `bc/{{CARD_ID}}`, empty when no branch is cut (`branch: false`, or an investigation card) |
 | `{{WORKSPACE}}` | this workspace root |
 | `{{CLI}}` | the `bc-axi` invocation, workspace flag included |
 | `{{REPORT_FILE}}` | `{{WORKSPACE}}/.bridge-commander/reports/{{CARD_ID}}.md` |
