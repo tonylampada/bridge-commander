@@ -440,11 +440,6 @@ body.resizing { user-select: none; cursor: col-resize; }
 .tile .t-owner:hover, .tile .t-owner.active { color: var(--text); }
 .tile .t-owner .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
 .tile .t-repo { max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* harness/model start-hint badge (attributes.harness / attributes.model) */
-.tile .t-harness {
-  font-family: var(--mono); font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
-  border: 1px solid var(--line); color: var(--dim); white-space: nowrap; flex: none;
-}
 .tile .t-ago { font-family: var(--mono); font-size: 11px; }
 .tile .t-ind { display: inline-flex; align-items: center; gap: 1px; }
 .tile .t-unread { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; box-shadow: 0 0 6px var(--accent); }
@@ -854,13 +849,12 @@ a.a-uri { color: var(--accent); }
   box-shadow: var(--shadow); animation: pop-in .15s ease-out;
 }
 .nc-title { font-weight: 650; font-size: 14px; }
-#nc-name, #nc-body, #nc-type, #nc-owner, #nc-harness, #nc-model {
+#nc-name, #nc-body, #nc-type, #nc-owner {
   background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
   padding: 8px 11px; font-size: 13px; outline: none; width: 100%;
 }
-#nc-name:focus, #nc-body:focus, #nc-type:focus, #nc-owner:focus, #nc-harness:focus, #nc-model:focus { border-color: var(--accent2); }
-#nc-type, #nc-owner, #nc-harness { cursor: pointer; }
-#nc-harness { flex: none; width: auto; min-width: 108px; }
+#nc-name:focus, #nc-body:focus, #nc-type:focus, #nc-owner:focus { border-color: var(--accent2); }
+#nc-type, #nc-owner { cursor: pointer; }
 #nc-body { resize: vertical; min-height: 80px; font-family: var(--mono); font-size: 12px; }
 .nc-actions { display: flex; gap: 8px; justify-content: flex-end; }
 #nc-cancel { color: var(--dim); border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; font-size: 12.5px; }

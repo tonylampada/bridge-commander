@@ -1,3 +1,7 @@
+---
+branch: false
+---
+
 # {{CARD_TITLE}} ({{CARD_ID}})
 
 **Load the `bridge-commander-worker` skill first.** It is your job description here: the

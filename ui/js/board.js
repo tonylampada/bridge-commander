@@ -21,12 +21,6 @@ function byRecency(a, b) {
 function tileHtml(c) {
   const at = c.attributes || {};
   const repo = at.repo || '';
-  // harness/model hint (set from the new-card modal) — a small badge so the
-  // board tells the truth about how this card will start its worker
-  const hintTxt = [at.harness, at.model].filter(Boolean).join(' · ');
-  const hint = hintTxt
-    ? '<span class="t-harness" title="starts with ' + esc(hintTxt) + '">' + esc(hintTxt) + '</span>'
-    : '';
   const msgs = (c.thread || []).length;
   const st = cardStatus(c);
   // "the lieutenant owes you a reply" balloon: SAME source as the chat typing
@@ -81,7 +75,6 @@ function tileHtml(c) {
     '<span class="t-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) +
       '" title="click: filter by lieutenant · alt-click: exclude"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +
     (repo ? '<span class="t-repo" title="repo">' + esc(repo) + '</span>' : '') +
-    hint +
     '<span class="grow"></span>' +
     (hasLink ? '<span class="t-ind" title="has link">📎</span>' : '') +
     (msgs ? '<span class="t-ind" title="' + msgs + ' messages">💬' + msgs + '</span>' : '') +
@@ -297,8 +290,6 @@ export function openNewCard(columnId) {
   }
   document.getElementById('nc-name').value = '';
   document.getElementById('nc-body').value = '';
-  document.getElementById('nc-harness').value = '';
-  document.getElementById('nc-model').value = '';
   // async: the modal opens now, the options land a tick later. `default` is
   // preselected only when it actually exists — offering an id the server would
   // reject is worse than offering none.
@@ -317,17 +308,11 @@ document.getElementById('nc-modal').onsubmit = async (e) => {
   const title = document.getElementById('nc-name').value.trim();
   if (!title) return;
   const body = document.getElementById('nc-body').value;
-  // Optional harness/model hint → stored as card attributes; card.start honors
-  // them as a fallback (an explicit CLI --harness/--model still wins).
-  const attributes = {};
-  const ncHarness = document.getElementById('nc-harness').value;
-  const ncModel = document.getElementById('nc-model').value.trim();
-  if (ncHarness) attributes.harness = ncHarness;
-  if (ncModel) attributes.model = ncModel;
+  // What a card starts on is the BRIEF's business (its frontmatter), so the
+  // modal picks a template and nothing else about the harness.
   try {
-    const r = await api.createCard(Object.assign(
-      { title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value, brief: ncBrief.value },
-      Object.keys(attributes).length ? { attributes } : {}));
+    const r = await api.createCard(
+      { title, column: ncColumnId, body, type: ncType.value, owner: ncOwner.value, brief: ncBrief.value });
     closeNewCard();
     openDetail(r.card.id);
   } catch (err) { alert(err.message); }

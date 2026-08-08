@@ -61,7 +61,7 @@ const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '.
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
-const { workerBrief, listBriefs, resolveBrief } = require(path.join(__dirname, 'brief.js'));
+const { workerBrief, listBriefs, resolveBrief, parseBrief } = require(path.join(__dirname, 'brief.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
@@ -2004,7 +2004,11 @@ async function doStartCard(card, body) {
   // The brief template is resolved and read HERE — at start, and only here, so
   // the worker gets the card as it stands and the template as it stands. No
   // fallback: a card with no brief does not start.
+  // A template MAY open with frontmatter (server/brief.js) naming what runs it:
+  // harness, model, the attributes it cannot work without, whether it gets a
+  // branch. Parsed here, honored below.
   let template = '';
+  let meta = {};
   if (!command) {
     const briefId = String(card.brief || '').trim();
     if (!briefId) {
@@ -2016,14 +2020,31 @@ async function doStartCard(card, body) {
       return { error: 'card ' + card.id + ' points at brief "' + briefId + '", which no template '
         + 'matches. Available: ' + briefsHint() };
     }
-    try { template = fs.readFileSync(file, 'utf8'); }
+    let raw;
+    try { raw = fs.readFileSync(file, 'utf8'); }
     catch (e) { return { error: 'brief template unreadable (' + file + '): ' + String((e && e.message) || e), code: 502 }; }
+    try { ({ meta, body: template } = parseBrief(raw)); }
+    catch (e) { return { error: 'brief template ' + file + ': ' + String((e && e.message) || e) }; }
+    // `requires` — the attributes this flavour of SDLC cannot work without.
+    // Refused HERE, before a worktree or a session exists: a review brief with
+    // no pr_url otherwise renders its unresolved placeholder literally — the
+    // right call for a typo — and spawns a worker to discover that for itself.
+    const missing = (meta.requires || []).filter((k) => {
+      const v = card.attributes && card.attributes[k];
+      return v === undefined || v === null || String(v).trim() === '';
+    });
+    if (missing.length) {
+      return { error: 'card ' + card.id + ' cannot start on brief "' + briefId + '": that template '
+        + 'requires the attribute' + (missing.length > 1 ? 's ' : ' ') + missing.join(', ')
+        + '. Set ' + (missing.length > 1 ? 'them' : 'it') + ' first: bc-axi card patch ' + card.id
+        + ' ' + missing.map((k) => '--attr ' + k + '=<value>').join(' ') };
+    }
   }
   // Harness precedence: explicit CLI --harness wins, then --command (which
-  // names the harness by implication), then the card's stored hint
-  // (attributes.harness, set from the new-card modal), then config/default.
+  // names the harness by implication), then the template's frontmatter, then
+  // config/default.
   const harnessName = String((body && body.harness) || (command ? 'command' : '')
-    || (card.attributes && card.attributes.harness) || readConfig().harness || 'claude');
+    || meta.harness || readConfig().harness || 'claude');
   let impl;
   try { impl = getHarness(harnessName); } catch (e) { return { error: String((e && e.message) || e) }; }
 
@@ -2053,7 +2074,11 @@ async function doStartCard(card, body) {
 
   const session = ownerSession(card);
   const window = names.workerWindow(card.id);
-  const branch = card.type === 'investigation' ? null : 'bc/' + card.id;
+  // Whether the work gets a branch is a DELIVERY contract, so the brief owns
+  // it: `branch: false` = detached HEAD, nothing to push. With no key, the card
+  // type decides as it always has (an investigation delivers a report).
+  const cuts = typeof meta.branch === 'boolean' ? meta.branch : card.type !== 'investigation';
+  const branch = cuts ? 'bc/' + card.id : null;
   // What spawn's second argument means is the harness's business: a brief for
   // an agent, the line to run for `command`.
   const prompt = command || workerBrief({
@@ -2063,9 +2088,9 @@ async function doStartCard(card, body) {
   });
   const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
   const extraArgs = [];
-  // Model precedence mirrors harness: explicit --model wins, else the card's
-  // stored hint (attributes.model, set from the new-card modal).
-  const modelHint = (body && body.model) || (card.attributes && card.attributes.model);
+  // Model precedence mirrors harness: explicit --model wins, else the
+  // template's frontmatter.
+  const modelHint = (body && body.model) || meta.model;
   if (modelHint) extraArgs.push('--model', String(modelHint));
   if (body && body.effort) extraArgs.push('--effort', String(body.effort));
   if (extraArgs.length) spawnOpts.extraArgs = extraArgs;

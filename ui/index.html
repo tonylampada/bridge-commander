@@ -245,14 +245,6 @@
          Options come from /api/briefs (the workspace's briefs/ folder). -->
     <select id="nc-brief" title="brief — the template the worker is launched with"></select>
     <textarea id="nc-body" placeholder="body (markdown, optional)" rows="5"></textarea>
-    <div class="lt-row">
-      <select id="nc-harness" title="harness hint (honored when the worker starts)">
-        <option value="">— harness</option>
-        <option value="claude">claude</option>
-        <option value="codex">codex</option>
-      </select>
-      <input id="nc-model" placeholder="model (optional)" autocomplete="off">
-    </div>
     <div class="nc-actions">
       <button type="button" id="nc-cancel">cancel</button>
       <button type="submit" id="nc-create">create</button>

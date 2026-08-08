@@ -54,6 +54,99 @@ function resolveBrief(stateDir, id) {
   return '';
 }
 
+// ---------- frontmatter ----------
+//
+// A template MAY open with a fenced header block naming how the card runs:
+//
+//   ---
+//   harness: codex
+//   model: gpt-5.6-sol
+//   requires: [pr_url, pr_number]
+//   branch: false
+//   ---
+//
+// A flavour of SDLC includes what runs it, and prose in the brief cannot act —
+// the worker reads "start this on codex" only once it is already on claude.
+// Four keys, all optional, no template without the block behaving any
+// differently. The parser is hand-written and covers only what those
+// four keys need — a general markup language is exactly what this must not
+// grow into — and anything else in the block is an error naming its line,
+// because a guess here silently starts the wrong worker.
+const FM_KEYS = ['harness', 'model', 'requires', 'branch'];
+const FM_NAME_RE = /^[\w][\w.-]*$/;
+
+function unquote(s) {
+  const m = /^(['"])([\s\S]*)\1$/.exec(s);
+  return m ? m[2] : s;
+}
+
+// One `key: value` right-hand side -> boolean | string | string[].
+function fmValue(raw, at) {
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  const list = /^\[(.*)\]$/.exec(raw);
+  if (list) {
+    const items = list[1].trim() ? list[1].split(',').map((s) => unquote(s.trim())) : [];
+    if (items.some((s) => !s)) throw new Error(at + 'empty item in the list: ' + raw);
+    return items;
+  }
+  if (/^[[{]/.test(raw)) throw new Error(at + 'unclosed list — write it as [a, b, c]: ' + raw);
+  return unquote(raw);
+}
+
+function fmCheck(key, val, at) {
+  if (key === 'branch') {
+    if (typeof val !== 'boolean') throw new Error(at + 'branch takes true or false, got: ' + JSON.stringify(val));
+    return val;
+  }
+  if (key === 'requires') {
+    const names = Array.isArray(val) ? val : [String(val)]; // a lone name is a one-item list
+    for (const n of names) {
+      if (typeof n !== 'string' || !FM_NAME_RE.test(n)) {
+        throw new Error(at + 'requires takes attribute names, e.g. [pr_url, repo_slug] — got: ' + JSON.stringify(n));
+      }
+    }
+    return names;
+  }
+  // harness, model: a bare name
+  if (typeof val !== 'string' || !val.trim()) {
+    throw new Error(at + key + ' takes a name, got: ' + JSON.stringify(val));
+  }
+  return val.trim();
+}
+
+// parseBrief(text) -> { meta, body }. No opening `---` line = no frontmatter:
+// meta is empty and the body is the text untouched, which is every template
+// that predates this. A block that opens and never closes, or holds anything
+// but the four keys, THROWS with the offending line named.
+function parseBrief(text) {
+  const src = String(text == null ? '' : text);
+  const lines = src.split('\n');
+  if (lines[0].trim() !== '---') return { meta: {}, body: src };
+  const meta = {};
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === '---') return { meta, body: lines.slice(i + 1).join('\n').replace(/^\n+/, '') };
+    if (!line.trim()) continue;
+    const at = 'frontmatter line ' + (i + 1) + ': ';
+    const m = /^([A-Za-z][\w-]*):[ \t]*(.*)$/.exec(line);
+    if (!m) {
+      throw new Error(at + 'expected `key: value`, got: ' + line.trim()
+        + ' (the block runs to the next `---` line — is that one missing?)');
+    }
+    const key = m[1];
+    if (!FM_KEYS.includes(key)) {
+      throw new Error(at + 'unknown key "' + key + '" — the block takes ' + FM_KEYS.join(', ')
+        + ' and nothing else (prose belongs in the brief, below the ---)');
+    }
+    if (key in meta) throw new Error(at + '"' + key + '" is set twice');
+    const raw = m[2].trim();
+    if (!raw) throw new Error(at + '"' + key + '" has no value');
+    meta[key] = fmCheck(key, fmValue(raw, at), at);
+  }
+  throw new Error('frontmatter opened on line 1 and is never closed — end the block with a `---` line');
+}
+
 // The captain ↔ lieutenant card thread as one block, or '' — templates drop
 // {{THREAD}} on its own line, so it carries its own heading or nothing at all.
 function threadBlock(thread) {
@@ -156,5 +249,5 @@ function seedBriefsAndDuties(stateDir, home) {
 
 module.exports = {
   PACKAGED_BRIEFS_DIR, PACKAGED_SKILL_DIR, briefsDir, listBriefs, resolveBrief,
-  briefVars, render, workerBrief, seedBriefsAndDuties,
+  parseBrief, briefVars, render, workerBrief, seedBriefsAndDuties,
 };

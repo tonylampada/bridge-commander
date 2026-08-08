@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  workerBrief, render, listBriefs, resolveBrief, briefsDir, seedBriefsAndDuties,
+  workerBrief, render, listBriefs, resolveBrief, briefsDir, seedBriefsAndDuties, parseBrief,
   PACKAGED_BRIEFS_DIR, PACKAGED_SKILL_DIR,
 } = require('../server/brief.js');
 
@@ -66,6 +66,82 @@ test('an unknown id resolves to nothing, and so does a path dressed up as one', 
   assert.strictEqual(resolveBrief(dir, '../../etc/passwd'), '');
   assert.strictEqual(resolveBrief(dir, 'sub/dir'), '');
   fs.rmSync(dir, { recursive: true, force: true });
+});
+
+// ---------- frontmatter ----------
+//
+// A brief is a flavour of SDLC, and part of that flavour is what RUNS it. The
+// block is four optional keys and deliberately not yaml — what is pinned here
+// is that a template without one is untouched, and that everything the parser
+// does not understand becomes an error naming the line rather than a guess.
+
+test('no frontmatter = the body is the file, untouched', () => {
+  const md = '# Title\n\nnot frontmatter: this is prose\n';
+  assert.deepStrictEqual(parseBrief(md), { meta: {}, body: md });
+  assert.deepStrictEqual(parseBrief(''), { meta: {}, body: '' });
+  // a --- that is not on line 1 is a horizontal rule, not an opening delimiter
+  const rule = 'intro\n\n---\nharness: codex\n---\n';
+  assert.deepStrictEqual(parseBrief(rule), { meta: {}, body: rule });
+});
+
+test('the four keys parse to their types, and the body starts after the closing ---', () => {
+  const { meta, body } = parseBrief([
+    '---',
+    'harness: codex',
+    'model: gpt-5.6-sol',
+    'requires: [pr_url, pr_number, repo_slug]',
+    'branch: false',
+    '---',
+    '',
+    '# The brief',
+  ].join('\n'));
+  assert.deepStrictEqual(meta, {
+    harness: 'codex',
+    model: 'gpt-5.6-sol',
+    requires: ['pr_url', 'pr_number', 'repo_slug'],
+    branch: false,
+  });
+  assert.strictEqual(body, '# The brief'); // the blank line under the block is not the brief
+});
+
+test('the small mercies: blank lines, quotes, an empty list, a lone required name', () => {
+  const { meta } = parseBrief([
+    '---',
+    'harness: claude',
+    '',
+    "model: 'claude-opus-5'",
+    'requires: [] ',
+    'branch: true',
+    '---',
+    'body',
+  ].join('\n'));
+  assert.deepStrictEqual(meta, { harness: 'claude', model: 'claude-opus-5', requires: [], branch: true });
+  assert.deepStrictEqual(parseBrief('---\nrequires: pr_url\n---\nb').meta.requires, ['pr_url']);
+});
+
+test('a malformed block fails with the offending line named', () => {
+  const bad = (lines, re) => assert.throws(() => parseBrief(lines.join('\n')), re);
+  bad(['---', 'harness: codex', 'this is prose', '---', 'b'], /line 3: expected `key: value`.*this is prose/);
+  bad(['---', 'hraness: codex', '---', 'b'], /line 2: unknown key "hraness"/);
+  bad(['---', 'branch: nope', '---', 'b'], /line 2: branch takes true or false/);
+  bad(['---', 'harness: [a, b]', '---', 'b'], /line 2: harness takes a name/);
+  bad(['---', 'harness: true', '---', 'b'], /line 2: harness takes a name/);
+  bad(['---', 'model:', '---', 'b'], /line 2: "model" has no value/);
+  bad(['---', 'requires: [pr_url, ]', '---', 'b'], /line 2: empty item in the list/);
+  bad(['---', 'requires: [pr url]', '---', 'b'], /line 2: requires takes attribute names/);
+  bad(['---', 'harness: codex', 'harness: claude', '---', 'b'], /line 3: "harness" is set twice/);
+  bad(['---', 'harness: codex'], /never closed/);
+  // the everyday version of "never closed": the brief itself runs into the block
+  bad(['---', 'harness: codex', '# the brief'], /line 3: expected `key: value`.*is that one missing/);
+});
+
+test('every packaged template has a parseable block, and investigation is the one that cuts no branch', () => {
+  for (const f of fs.readdirSync(PACKAGED_BRIEFS_DIR)) {
+    if (!f.endsWith('.md') || f === 'README.md') continue;
+    const { meta } = parseBrief(fs.readFileSync(path.join(PACKAGED_BRIEFS_DIR, f), 'utf8'));
+    const want = f === 'investigation.md' ? { branch: false } : {};
+    assert.deepStrictEqual(meta, want, f + ' frontmatter');
+  }
 });
 
 // ---------- rendering ----------

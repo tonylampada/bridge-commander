@@ -12,6 +12,42 @@ These are workspace-wide, one list for every project. Add one when a kind of wor
 none of these fit. Expect ten of them, not fifty — past that nobody remembers which is which,
 and the dropdown stops being a decision.
 
+A `codereview` template is the classic one to write here and the reason it ships with nothing:
+its whole value is the pointer at a review methodology, and that methodology is yours, not
+bridge-commander's.
+
+## Frontmatter — what runs the card
+
+A template MAY open with a block naming how the card starts. Everything below the closing `---`
+is the brief. A template without the block behaves exactly as it always has.
+
+```yaml
+---
+harness: codex
+model: gpt-5.6-sol
+requires: [pr_url, pr_number, repo_slug]
+branch: false
+---
+```
+
+| key | is |
+|---|---|
+| `harness` | what the worker session runs on (`claude`, `codex`, …) |
+| `model` | the model that session starts with |
+| `requires` | card attributes this template cannot work without — `card start` refuses before provisioning anything and names the missing one |
+| `branch` | `false` = detached HEAD, no branch cut, nothing to push. Omitted, the card type decides as before (an investigation gets no branch) |
+
+All four are optional. **An explicit CLI flag beats the frontmatter, which beats the config
+default** — so `--harness claude` still overrides a template that says `codex`.
+
+This is not YAML and does not want to be: `key: value`, `key: [a, b, c]`, `true`/`false`, and
+those four keys. Anything else in the block is an error naming the line, because a guess here
+silently starts the wrong worker. A template that wants a conditional wants to be two templates.
+
+`requires` is how a template says "this placeholder is not a typo": an unknown `{{NAME}}` stays
+literal on purpose, so a `codereview` brief with no `pr_url` would otherwise launch a worker to
+discover that for itself.
+
 ## Worker duties
 
 The duties are a skill, `bridge-commander-worker`, shipped inside bridge-commander and

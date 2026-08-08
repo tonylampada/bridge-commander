@@ -72,7 +72,6 @@ The prompt a worker is launched with is a markdown file you own, in
 | `default` | implement, commit, ship it the way the project allows |
 | `no-mistakes` | the same, behind a review-and-CI gate |
 | `investigation` | no branch, no PR — a written report |
-| `codereview` | review one PR and write the verdict up |
 
 Every card points at one (the dropdown in the new-card modal, `--brief <id>` on the CLI), and
 `card start` renders it against the card **as it stands at that moment** — title, body, thread
