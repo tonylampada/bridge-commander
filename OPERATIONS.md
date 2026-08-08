@@ -46,6 +46,15 @@ Which update path applies depends on how the skill dir was installed — check f
   Update = re-run `npx skills add tonylampada/bridge-commander -g`, then restart the server.
 - **Dev checkout** (`.git` present): update via `git pull`, then follow the deploy section above.
 
+Then re-run `bc-axi init --name <that lieutenant>` **in each workspace**: seeding runs from
+`init` and nowhere else, so until it does, an upgraded workspace has neither the new brief
+templates nor the `~/.claude/skills/bridge-commander-worker` symlink — and its templates order a
+skill it does not have. Re-running is idempotent: it copies only the templates that are missing,
+repoints only a symlink of ours (a hand-installed real directory is left alone), and overwrites
+nothing you edited. It does PATCH the session ref of the lieutenant whose id matches `--id` (or
+the slug of `--name`), so run it **from that lieutenant's own tmux session** — from anywhere
+else you repoint them at the wrong address.
+
 ## The stale-UI trap
 
 After a UI deploy the board can LOOK live while running old JS: SSE reconnects and re-renders

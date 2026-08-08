@@ -34,8 +34,9 @@ an early ack can lose a delivery forever, an unacked item merely re-offers. When
 
 ## Card hygiene
 
-The card **body is the deliverable**, not a log: rewrite it to current state before every
-handoff so the captain reads the result, not the history. Progress belongs in events
+The card **body is the deliverable**, not a log: rewrite it to current state — what landed and
+where: file, branch, PR — before every handoff, so the captain reads the result, not the
+history. Progress belongs in events
 (`bc-axi event <card> …` — level 2 timeline; level 1 rings the captain, use it sparingly).
 Questions on a card go through its thread (`bc-axi say card:<id>`); you are the interlocutor
 for your cards' threads, always.
@@ -124,6 +125,9 @@ it with no restart.
 refuses and names the templates. Cards created before briefs existed have none — set one
 with `card patch --brief <id>` when you get to them.
 
+A template orders only what a worker can run: the Skill tool refuses a `disable-model-invocation`
+skill to an agent — `/nobloat-pr-description` is one — so that step is yours, at handoff.
+
 ## Starting work
 
 `bc-axi card start <card-id> [--brief-file <f>]` is the ONE way work begins: it provisions
@@ -141,8 +145,7 @@ Workers report through your queue: `worker-signal` items are milestones (note th
 just trust the outcome text; **verified** means the exact end-user path was exercised, not a
 proxy (a notification feature checked via typed events but never a real chat message is not
 verified) — require the done report to name the path it exercised — then rewrite the card body
-to current state (what landed and where: file, branch, PR) and hand off (`card move <id>
-review`) — the card never leaves Working by itself.
+and hand off (`card move <id> review`) — the card never leaves Working by itself.
 The timeline never goes silent: a stalled-but-alive worker isn't just noted — peek its session,
 grasp what it's doing, and POST a level-2 timeline event narrating it, even when the wait is
 legitimate ("waiting on CI, ~15min, normal"). A silent hour on a Working card reads as dead and
@@ -153,9 +156,26 @@ while the worker is absent or dead; the server re-checks). To stop a worker ON P
 (machine pressure, deprioritized work), never kill its session by hand — that reads as a
 crash. Use `bc-axi worker pause <id>` (deliberate stop, no WORKER DIED alarm, record and
 worktree stay resumable), or `worker pause <id> --park` to also shelve the card in one
-step. Steer a live worker with a short line
-typed into its tmux session (the card's `session` attribute); anything long belongs in a rework restart
-with an updated brief. Never do the worker's job yourself.
+step. Steer a live worker with `bc-axi worker send <id> "<line>"`; anything long belongs in a
+rework restart with an updated brief.
+
+### Ruling on an escalated finding
+
+A worker on the `no-mistakes` brief drives its own review gate and signals when a finding comes
+back `ask-user` — the class that challenges what the card asked for. It is parked on that
+finding until your `worker send` reaches it:
+
+| answer | means |
+|---|---|
+| `fix` / `fix id1,id2` | fix everything offered / exactly these |
+| `fix id1 : do X not Y` | fix these, and here is what the finding got wrong |
+| `approve` / `skip` | the findings stand / skip the step |
+| `abort <reason>` | stop; card parked, reason on the timeline, no PR |
+
+Rule on a wrong finding by arguing with it — everything after the colon reaches the fixer, so
+disagreeing is its own answer rather than an approval around it. Every `ask-user` finding gets a
+ruling you typed: **never `--yes`**, which auto-resolves exactly the findings that exist to
+reach you.
 
 ## Merges are watched — never hand-archive merged work
 
