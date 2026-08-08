@@ -607,8 +607,13 @@ body.resizing { user-select: none; cursor: col-resize; }
 /* workspace screen: the board region's own mode, one section per thing the
    board owns (labels, playbooks) */
 #settings-screen { overflow: auto; padding: 16px; gap: 22px; }
+.ss-headrow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; flex: none; }
 .ss-head { font-size: 15px; font-weight: 650; color: var(--text); flex: none; }
-.ss-sec { display: flex; flex-direction: column; gap: 8px; max-width: 460px; flex: none; }
+/* one section at a time — the active tab's. #ss-tabs wears the #view-seg look
+   (see the table-view block); tabs sit on top so the screen keeps its width
+   for the content, which on a phone is the whole viewport. */
+.ss-sec { display: none; flex-direction: column; gap: 8px; max-width: 460px; flex: none; }
+.ss-sec.on { display: flex; }
 .ss-title { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: 1px; color: var(--faint); }
 .ss-note { color: var(--faint); font-size: 10.5px; font-family: var(--mono); overflow-wrap: anywhere; }
 /* the list capped itself to fit a dropdown; the screen scrolls as a whole */
@@ -1296,11 +1301,11 @@ a.a-uri { color: var(--accent); }
 }
 
 /* ---------- table view (the card ledger — dual of the kanban) ---------- */
-#view-seg { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
-#view-seg button { padding: 5px 10px; font-size: 13px; color: var(--faint); line-height: 1.2; }
-#view-seg button + button { border-left: 1px solid var(--line); }
-#view-seg button:hover { color: var(--accent); }
-#view-seg button.on { color: var(--accent); background: var(--accent-soft); }
+#view-seg, #ss-tabs { display: inline-flex; flex: none; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+#view-seg button, #ss-tabs button { padding: 5px 10px; font-size: 13px; color: var(--faint); line-height: 1.2; }
+#view-seg button + button, #ss-tabs button + button { border-left: 1px solid var(--line); }
+#view-seg button:hover, #ss-tabs button:hover { color: var(--accent); }
+#view-seg button.on, #ss-tabs button.on { color: var(--accent); background: var(--accent-soft); }
 
 #table, #archive, #filepane, #settings-screen { display: none; }
 #board-wrap.table-mode #board, #board-wrap.archive-mode #board, #board-wrap.file-mode #board, #board-wrap.settings-mode #board { display: none; }

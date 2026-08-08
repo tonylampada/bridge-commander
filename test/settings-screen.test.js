@@ -63,8 +63,72 @@ test('the workspace row and heading name the workspace, and playbooks are a sect
 test('the workspace row hands off to the screen the way monitoring hands off to the monitor', () => {
   assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?setBoardMode\('settings'\)/);
   assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?spEl\.hidden = true/);
-  // …and re-reads the playbooks off disk on the way in
-  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?renderPlaybooks\(true\)/);
+  // …landing on labels, every time: the tab is not remembered either
+  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?setWsTab\('labels'\)/);
+});
+
+// ---------- the tab strip ----------
+// The sections stack no longer: one tab per section in the heading row, one
+// section visible. The pairing is data-tab ⇄ data-sec, so the third and fourth
+// section (projects, lieutenants) are markup plus one WS_RENDER entry.
+test('the heading row carries a tab per section', () => {
+  const screen = element('settings-screen');
+  const tabs = element('ss-tabs');
+  const tabNames = [...tabs.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(tabNames, ['labels', 'playbooks'], 'a button per section');
+  const secNames = [...screen.matchAll(/data-sec="([^"]+)"/g)].map((m) => m[1]);
+  assert.deepStrictEqual(secNames, tabNames, 'every tab names a section of the screen');
+  // both sections live inside the screen, and labels is the one that starts up
+  assert.ok(screen.includes('id="ss-labels"') && screen.includes('id="ss-playbooks"'));
+  assert.match(element('ss-labels'), /class="ss-sec on"/, 'labels is the section shown at rest');
+  assert.match(element('ss-playbooks'), /class="ss-sec"/);
+  // the active tab is marked the way the ▦☰🧊 switcher marks its mode: .on
+  const css = fs.readFileSync(ui('app.css'), 'utf8');
+  assert.match(css, /#view-seg button\.on, #ss-tabs button\.on/, 'the tabs reuse the switcher rule');
+  assert.match(css, /\.ss-sec \{[^}]*display: none/, 'a section is hidden unless it is the active one');
+  assert.match(css, /\.ss-sec\.on \{[^}]*display: flex/);
+});
+
+// setWsTab, lifted with WS_RENDER and run against stubs — same spirit as
+// loadSetBoardMode below.
+function loadSetWsTab() {
+  const start = mainSrc.indexOf('const WS_RENDER');
+  const fnAt = mainSrc.indexOf('function setWsTab', start);
+  const end = mainSrc.indexOf('\n}\n', fnAt) + 3;
+  assert.ok(start > -1 && fnAt > start && end > fnAt, 'setWsTab found in main.js');
+  const secs = ['labels', 'playbooks', 'projects'].map((sec) => ({ dataset: { sec }, on: false }));
+  const tabs = ['labels', 'playbooks', 'projects'].map((tab) => ({ dataset: { tab }, on: false }));
+  for (const el of [...secs, ...tabs]) el.classList = { toggle: (c, v) => { el.on = v; } };
+  const document = {
+    querySelectorAll: (q) => (q.includes('data-sec') ? secs : tabs),
+  };
+  const painted = [];
+  const stub = (name) => (reload) => painted.push([name, reload]);
+  const make = new Function('document', 'renderLabelManager', 'renderPlaybooks',
+    mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
+  const api = make(document, stub('labels'), stub('playbooks'));
+  return { secs, tabs, painted, ...api };
+}
+
+test('switching to a tab shows that section and hides every other one', () => {
+  const { setWsTab, secs, tabs, wsTab } = loadSetWsTab();
+  setWsTab('playbooks');
+  assert.strictEqual(wsTab(), 'playbooks');
+  assert.deepStrictEqual(secs.map((s) => s.on), [false, true, false]);
+  assert.deepStrictEqual(tabs.map((t) => t.on), [false, true, false]);
+  setWsTab('labels');
+  assert.deepStrictEqual(secs.map((s) => s.on), [true, false, false]);
+  assert.deepStrictEqual(tabs.map((t) => t.on), [true, false, false]);
+});
+
+test('a section paints when its tab is shown, and only then', () => {
+  const { setWsTab, painted } = loadSetWsTab();
+  setWsTab('labels');
+  assert.deepStrictEqual(painted, [['labels', true]], 'no playbooks fetch on the way into labels');
+  setWsTab('playbooks');
+  assert.deepStrictEqual(painted[1], ['playbooks', true], 'the fetch runs when the tab is shown');
+  // …and the board-event render loop repaints only the active section
+  assert.match(mainSrc, /S\.boardMode === 'settings'\) WS_RENDER\[wsTab\]\(\)/);
 });
 
 // The one rule that keeps this from becoming a second editor: the playbooks

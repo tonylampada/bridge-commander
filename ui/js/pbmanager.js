@@ -22,9 +22,10 @@ let dir = '';      // where a copy lands
 let loading = false;
 
 // Paints from the last answer and fetches when there isn't one. `reload` is
-// what the gear row passes on the way in, so opening the screen always reads
-// disk afresh (a playbook dropped in a second ago is in the list) while the
-// renders that follow — one per board event — cost nothing.
+// what the playbooks tab passes on the way in, so showing the section always
+// reads disk afresh (a playbook dropped in a second ago is in the list) while
+// the renders that follow — one per board event — cost nothing. Nothing runs
+// at all while another tab is up: opening the screen for labels reads no disk.
 export async function renderPlaybooks(reload) {
   if (reload) items = null;
   if (items) return paint();

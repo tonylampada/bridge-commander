@@ -158,8 +158,18 @@
          to the browser looking at it. Labels and playbooks today; projects and
          lieutenants move in later. -->
     <div id="settings-screen">
-      <div class="ss-head">workspace</div>
-      <section class="ss-sec" id="ss-labels">
+      <!-- the heading row carries the tabs: one button per section, wearing the
+           same segmented look as the ▦☰🧊 switcher. data-tab pairs with the
+           section's data-sec — that pairing IS the switching logic, so a new
+           section is a section element and a button, nothing else. -->
+      <div class="ss-headrow">
+        <div class="ss-head">workspace</div>
+        <span id="ss-tabs" role="group" aria-label="workspace section">
+          <button type="button" data-tab="labels" class="on">labels</button>
+          <button type="button" data-tab="playbooks">playbooks</button>
+        </span>
+      </div>
+      <section class="ss-sec on" id="ss-labels" data-sec="labels">
         <div class="ss-title">labels</div>
         <div id="lm-list"></div>
         <form id="lm-new">
@@ -170,7 +180,7 @@
       </section>
       <!-- playbooks: the templates a card start renders. Clicking one opens it
            on the file screen — the same editor a card artifact opens in. -->
-      <section class="ss-sec" id="ss-playbooks">
+      <section class="ss-sec" id="ss-playbooks" data-sec="playbooks">
         <div class="ss-title">playbooks</div>
         <div id="pb-list"></div>
         <div id="pb-dir" class="ss-note"></div>

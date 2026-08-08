@@ -93,9 +93,34 @@ document.getElementById('workspace-open').onclick = () => {
   spEl.hidden = true;
   gearBtn.classList.remove('on');
   S.view = 'board';
-  renderPlaybooks(true); // read the playbooks off disk on the way in
+  setWsTab('labels'); // never remembered: the gear always lands on labels
   setBoardMode('settings');
 };
+
+// ---------- workspace screen tabs ----------
+// One tab per section, one section visible. The tab is a class toggle over
+// [data-sec] plus one variable — nothing is persisted, so entering from the
+// gear always lands on labels, the same way the screen itself is not
+// remembered across a reload.
+// WS_RENDER is what a section paints with: the tab shows it with `true` (read
+// the source afresh on the way in), the render loop repaints it without. A new
+// section is a <section data-sec>, a <button data-tab> and one entry here; the
+// switching below never learns its name.
+const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks };
+let wsTab = 'labels';
+function setWsTab(tab) {
+  wsTab = tab;
+  for (const el of document.querySelectorAll('#settings-screen [data-sec]')) {
+    el.classList.toggle('on', el.dataset.sec === tab);
+  }
+  for (const b of document.querySelectorAll('#ss-tabs button')) {
+    b.classList.toggle('on', b.dataset.tab === tab);
+  }
+  WS_RENDER[tab](true);
+}
+for (const b of document.querySelectorAll('#ss-tabs button')) {
+  b.onclick = () => setWsTab(b.dataset.tab);
+}
 
 // ---------- board region mode: kanban ⇄ table ⇄ archived ⇄ file ⇄ settings ----
 // Board and table are two views over the LIVE cards; 🧊 is the archived
@@ -239,7 +264,7 @@ onRender(() => {
   // The file screen owns its own DOM and is never repainted from here: a render
   // under the captain's cursor would eat what he is typing.
   if (S.boardMode === 'file') { /* nothing to repaint */ }
-  else if (S.boardMode === 'settings') { renderLabelManager(); renderPlaybooks(); }
+  else if (S.boardMode === 'settings') WS_RENDER[wsTab]();
   else if (S.boardMode === 'archive') renderArchive();
   else if (S.boardMode === 'table') renderTable();
   else renderBoard();
