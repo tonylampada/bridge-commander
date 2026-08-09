@@ -2111,6 +2111,30 @@ function claimEventKey(cardId, key) {
   catch (e) { console.error(now() + ' event key store unwritable: ' + String((e && e.message) || e)); }
 }
 
+// forgetEventKeys(id) -> true when it dropped one that was still live. The
+// counterpart the pair needed once something could RECOVER: a failure that has
+// been fixed must stop answering "duplicate", or the next one would never be
+// heard and silence would mean both "healed" and "still broken". Prunes the
+// window on the way through like the claim does, and writes nothing at all when
+// there was nothing to forget — the green path is the common one.
+function forgetEventKeys(id) {
+  const doc = readEventKeys();
+  const cutoff = Date.now() - EVENTKEY_TTL_MS;
+  let dropped = false;
+  for (const [c, keys] of Object.entries(doc)) {
+    for (const [k, ts] of Object.entries(keys)) {
+      const live = typeof ts === 'number' && ts > cutoff;
+      if (!live) { delete keys[k]; continue; }
+      if (c === id) { delete keys[k]; dropped = true; }
+    }
+    if (!Object.keys(keys).length) delete doc[c];
+  }
+  if (!dropped) return false;
+  try { fs.writeFileSync(EVENTKEYS_FILE, JSON.stringify(doc)); }
+  catch (e) { console.error(now() + ' event key store unwritable: ' + String((e && e.message) || e)); }
+  return true;
+}
+
 // ---------- lifecycle hooks (workspace-owned scripts; server/hooks.js) ----------
 // Events v1: worker-done, worker-died, card-archived. Fire-and-forget — a hook
 // never blocks or fails the lifecycle outcome it observes. The ONE ordering
@@ -3164,18 +3188,60 @@ function announceScheduleProblem(s, problem) {
   }
 }
 
+// A schedule is not a card, so it gets its own scope in the key store rather
+// than a parallel store of its own. The `@` is what keeps the two apart for
+// good: a card id has to start with a word character, so no card can ever be
+// spelled like this.
+function scheduleKeyScope(s) { return '@schedule:' + s.name; }
+
+// The SIGNATURE of a failure: how it went wrong, plus the tail of what it said.
+// Two windows that failed the same way are the same failure and are worth one
+// wake between them; a hook that starts exiting 4 instead of 3, or says
+// something new, is a different failure and is worth hearing about.
+function failureKey(run) {
+  const how = run.timedOut ? 'timeout' : run.error ? 'spawn' : 'exit:' + run.code;
+  const tail = String(run.output || '').slice(-500);
+  return how + ':' + crypto.createHash('sha1').update(tail).digest('hex').slice(0, 12);
+}
+
 // A firing that fails lands on its OWNER, carrying the hook's output — never
 // only in a log. The trace already holds the run detail; this is the wake.
+//
+// Announced ONCE, the way announceScheduleProblem announces a problem once, and
+// through the key store MNC-24 already built for this shape. A 5m schedule
+// whose hook is permanently broken fails 288 times a day, and a drain holding
+// 288 identical items is quieter than one holding a single item, because its
+// owner stops reading it. A repeat still lands on the timeline at level 2 — the
+// record stays whole; the bell and the queue item are the only things the key
+// spends.
 function landScheduleFailure(s, run) {
   const how = run.timedOut ? 'timed out' : run.error ? String(run.error)
     : run.code === null ? 'killed' : 'exit ' + run.code;
   const text = ('schedule ' + s.name + ' — hook ' + s.hook + ' FAILED (' + how + ')'
     + (run.output ? ':\n' + run.output : '')).slice(0, 2000);
-  board.events.push(mkEvent({ text, actor: 'server' }, { kind: 'schedule-failed' }));
-  if (findLieutenant(s.owner)) {
+  // ask -> deliver -> claim, the order the pair documents: claiming first would
+  // make a delivery that throws a wake forever answered "duplicate".
+  const scope = scheduleKeyScope(s);
+  const key = failureKey(run);
+  const fresh = !seenEventKey(scope, key);
+  board.events.push(mkEvent({ text, actor: 'server', level: fresh ? 1 : 2 },
+    { kind: 'schedule-failed' }));
+  if (fresh && findLieutenant(s.owner)) {
     queuePush(s.owner, { kind: 'schedule-failed', schedule: s.name, text,
       source: 'schedule ' + s.name });
   }
+  saveBoard(); broadcast();
+  if (fresh) claimEventKey(scope, key);
+}
+
+// The other half of announcing once: silence has to mean one thing. The first
+// green firing after a failing one says so on the timeline and forgets the key,
+// so the next failure is heard as new rather than swallowed as a repeat of one
+// that is already fixed.
+function landScheduleRecovery(s) {
+  if (!forgetEventKeys(scheduleKeyScope(s))) return;
+  board.events.push(mkEvent({ text: 'schedule ' + s.name + ' — hook ' + s.hook + ' is green again',
+    actor: 'server', level: 2 }, { kind: 'schedule' }));
   saveBoard(); broadcast();
 }
 
@@ -3200,8 +3266,10 @@ async function fireSchedule(s) {
         trigger, timeoutMs: HOOK_TIMEOUT_MS || 0,
       });
       // A run cancelled to make room for another already answered its own
-      // caller; only a genuine failure wakes the owner.
+      // caller; only a genuine failure wakes the owner, and only a genuine
+      // success closes a failure that is still open.
       if (!run.ok && !run.canceled) landScheduleFailure(s, run);
+      else if (run.ok) landScheduleRecovery(s);
       return 'ran';
     } catch (e) {
       if (e && e.code === 'ENOHOOK') return 'skipped'; // scheduleProblem says it on the next tick
@@ -3222,12 +3290,26 @@ async function fireSchedule(s) {
 // each of those windows, in order, and the next one starts when the last one is
 // done. Runs outside the tick, which decides and never waits.
 //
-// The cursor is already past these windows — the tick moved it at hand-off.
-// This function only ever pulls it BACK, and only for `queue`: a run that takes
-// six minutes must not undo the six windows the overlap policy accounted for
-// while it was going, or `skip` would quietly turn into back-to-back firing and
-// the trace would hold skips for windows that then ran.
-const firing = new Set();
+// Two cursors, deliberately, and the difference between them is the whole
+// durability story:
+//
+//   the CLAIM   in memory, keyed by schedule, alive for exactly as long as a
+//               pass is. The windows a pass took stop being due the moment it
+//               takes them, so the ticks that go by while a six-minute hook
+//               runs see the overlap policy and not the same backlog again.
+//   lastWindow  on disk, and it lags the claim on purpose. board.json still
+//               names the pre-pass window for the whole run, so a machine
+//               powered off mid-hook comes back and offers that window again.
+//               At-least-once is the promise a clock can keep; at-most-once
+//               would lose the firing outright, with nothing anywhere to say a
+//               window had ever come due.
+//
+// A pass writes the claim it REACHED — which the overlap policy's skips have
+// been moving all along — never the cursor it started with, or `skip` would
+// turn into back-to-back firing and the trace would hold skips for windows that
+// then ran. `queue` is the one outcome that lands somewhere earlier: the window
+// it could not take is re-offered on the next tick.
+const claimed = new Map();
 async function runSchedule(s, windows) {
   let requeue = null;
   try {
@@ -3243,11 +3325,15 @@ async function runSchedule(s, windows) {
     // by a full disk while a hook was running. It is contained like every other
     // background loop's failure.
     try {
-      if (requeue !== null) {
-        const live = findSchedule(s.name);
-        if (live) live.lastWindow = new Date(requeue).toISOString();
+      const reached = requeue !== null ? requeue : claimed.get(s.name);
+      const live = findSchedule(s.name);
+      const stamp = reached === undefined ? '' : new Date(reached).toISOString();
+      // Nothing to say is said with nothing: a serialize of the whole board and
+      // an SSE fan-out to every client is a real cost to pay for a zero-diff.
+      if (live && stamp && live.lastWindow !== stamp) {
+        live.lastWindow = stamp;
+        saveBoard(); broadcast();
       }
-      saveBoard(); broadcast();
     } catch (e) {
       console.error(now() + ' schedule ' + s.name + ': the board would not save after a firing: '
         + String((e && e.message) || e));
@@ -3266,16 +3352,17 @@ async function runSchedule(s, windows) {
 //            cursor is board state, not a list in memory
 //   restart  kill what is running (the whole process group, traced as canceled)
 //            and let the next tick start the window that displaced it
-// Returns true when the cursor was moved.
 function overlapPolicy(s, due) {
-  if (s.overlap === 'queue') return false;
+  if (s.overlap === 'queue') return;
   if (s.overlap === 'restart') {
     cancelNamedHook(WORKSPACE, s.hook).catch(() => {});
-    return false;
+    return;
   }
   for (const w of due) recordSkip(s, 'the previous firing (window ' + new Date(w).toISOString() + ') is still running');
-  s.lastWindow = new Date(due[due.length - 1]).toISOString();
-  return true;
+  // Against the CLAIM, because a skip belongs to the pass in flight: it reaches
+  // board.json when that pass finishes, and a crash before then leaves the
+  // window due again — which is the honest answer, since nothing ran.
+  claimed.set(s.name, due[due.length - 1]);
 }
 
 let scheduleTicking = false;
@@ -3302,10 +3389,14 @@ async function scheduleTick() {
       // firing, and a fresh 5m schedule that fired the instant it was created
       // would make every `add` a surprise.
       if (!s.lastWindow) { s.lastWindow = new Date(nowMs).toISOString(); changed = true; continue; }
-      const due = dueWindows(when, Date.parse(s.lastWindow), nowMs, anchor);
+      // The claim, when a pass holds one, is ahead of the stored cursor — see
+      // runSchedule. Reading past both is what stops a pass being offered the
+      // windows it already took.
+      const from = Math.max(Date.parse(s.lastWindow), claimed.get(s.name) || 0);
+      const due = dueWindows(when, from, nowMs, anchor);
       if (!due.windows.length) continue;
       // Its own previous firing is still running: that is what `overlap` is for.
-      if (firing.has(s.name)) { if (overlapPolicy(s, due.windows)) changed = true; continue; }
+      if (claimed.has(s.name)) { overlapPolicy(s, due.windows); continue; }
       const { fire, dropped } = pickWindows(due, s.catchup, SCHEDULER_BOOT);
       if (dropped) {
         // No silent caps: a policy that drops windows says how many, so `all`
@@ -3313,20 +3404,19 @@ async function scheduleTick() {
         console.error(now() + ' schedule ' + s.name + ': ' + dropped + ' due window(s) not fired (catch-up '
           + s.catchup + ')');
       }
-      firing.add(s.name);
-      // The cursor moves HERE, at hand-off, not when the run finishes: the
-      // windows this pass took stop being due the moment it takes them, so the
-      // ticks that go by while the hook runs see the overlap, not the same
-      // backlog again. It advances even for a firing that will throw —
-      // at-least-once belongs to delivery, and a schedule that retries a broken
-      // hook every tick forever is a wake storm, not a recovery. The trace and
-      // the owner's drain hold what happened.
-      s.lastWindow = new Date(due.windows[due.windows.length - 1]).toISOString();
-      changed = true;
+      // The claim is taken HERE, before anything is awaited, so no second pass
+      // can ever be handed these windows. It reaches board.json when the pass
+      // ends, and it reaches it even for a firing that threw — at-least-once
+      // belongs to delivery, and a schedule that retries a broken hook every
+      // tick forever is a wake storm, not a recovery. The trace and the owner's
+      // drain hold what happened.
+      claimed.set(s.name, due.windows[due.windows.length - 1]);
       // Deliberately not awaited: the tick's job is to decide, not to wait out
       // a hook. Every window still fires in order, one at a time, per schedule.
+      // The claim is dropped out here rather than inside, so a pass that somehow
+      // dies on the way out cannot wedge the schedule shut forever.
       runSchedule(s, fire)
-        .finally(() => firing.delete(s.name))
+        .finally(() => claimed.delete(s.name))
         .catch((e) => console.error(now() + ' schedule ' + s.name + ': '
           + String((e && e.message) || e)));
     }

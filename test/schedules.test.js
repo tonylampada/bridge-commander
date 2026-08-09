@@ -354,6 +354,7 @@ test('a firing that outlives its own windows never pulls the cursor back over th
     // watched all the way through the three-second run and well past its end
     let high = 0;
     let after = 0;
+    let settled = null;
     for (let i = 0; i < 400 && after < 20; i++) {
       await sleep(20);
       const sched = (await s.api('GET', '/api/schedules')).body.schedules[0];
@@ -361,13 +362,59 @@ test('a firing that outlives its own windows never pulls the cursor back over th
       assert.ok(cursor >= high, 'the cursor of a `skip` schedule only ever moves forward: '
         + iso(high) + ' -> ' + sched.lastWindow);
       high = cursor;
+      // read a poll LATER than the one that saw the run land, so the pass has
+      // certainly written what it reached
+      if (settled === null && after > 0) settled = cursor;
       if (runsOf(dir, 'marathon').some((r) => r.ok)) after++;
     }
     assert.ok(after >= 20, 'the long run finished and was watched past its end');
+
+    // …and forward is not enough on its own: the pass has to land on the claim
+    // its skips moved, not on the window it started with. Only the skips that
+    // belong to the FINISHED pass are asserted — a later pass is still holding
+    // its own, which is the whole point of the cursor lagging.
     const runs = runsOf(dir, 'marathon');
-    assert.ok(runs.filter((r) => r.skipped).length >= 1,
-      'and the windows it ran through were skipped, and recorded: ' + JSON.stringify(runs));
+    const done = runs.find((r) => r.ok);
+    const end = Date.parse(done.started) + done.ms;
+    const mine = runs.filter((r) => r.skipped && Date.parse(r.started) < end)
+      .map((r) => Date.parse((/window ([^)]+)\)/.exec(r.output) || [])[1]))
+      .filter((t) => !Number.isNaN(t));
+    assert.ok(mine.length >= 1, 'the windows it ran through were skipped, and recorded: '
+      + JSON.stringify(runs));
+    assert.ok(settled >= Math.max(...mine),
+      'the finished pass wrote the claim its skips reached (' + iso(Math.max(...mine))
+      + '), not the window it started with (' + iso(settled) + ')');
   } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The other half of the same guarantee, and the reason the stored cursor lags
+// the claim: a window that was in flight when the machine went away has to come
+// back. At-most-once would lose the firing outright, with nothing anywhere
+// saying a window ever came due.
+test('a window in flight when the process is killed is offered again after a restart', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-atleastonce-'));
+  const seed = (d) => seedWorkspace(d, {
+    script: 'echo ran >> ' + JSON.stringify(path.join(dir, 'fired')) + '\nsleep 10',
+    schedules: [overdue('unfinished', 2)],
+  });
+  const first = await startServer({ dir, env: FAST, seed });
+  try {
+    for (let i = 0; i < 100 && counted(dir, 'fired') < 1; i++) await sleep(50);
+    assert.strictEqual(counted(dir, 'fired'), 1, 'the due window fired and the hook is still running');
+    const sched = (await first.api('GET', '/api/schedules')).body.schedules[0];
+    assert.ok(Date.parse(sched.lastWindow) < Date.now() - 60000,
+      'and board.json still names the window BEFORE it: ' + sched.lastWindow);
+  } finally {
+    first.child.kill('SIGKILL'); // the machine going away, mid-hook
+    await sleep(200);
+  }
+
+  const again = await startServer({ dir, env: FAST });
+  try {
+    for (let i = 0; i < 100 && counted(dir, 'fired') < 2; i++) await sleep(50);
+    assert.strictEqual(counted(dir, 'fired'), 2,
+      'the interrupted window came due again — at-least-once, not silently lost');
+  } finally { await again.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
 test('overlap queue holds the window back and runs it once the firing in flight finishes', async () => {
@@ -430,6 +477,86 @@ test('a failing firing wakes the OWNER with the hook’s output — never only a
 
     const board = (await s.api('GET', '/api/board')).body;
     assert.ok(board.events.some((e) => e.kind === 'schedule-failed' && e.level === 1));
+  } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// A hook whose exit code the test can change between windows. The key a wake is
+// spent against is built from the failure SIGNATURE, so "the same failure
+// again" and "a different failure" have to be tellable apart from outside.
+function flaky(dir, name) {
+  const codeFile = path.join(dir, 'code');
+  fs.writeFileSync(codeFile, '3\n');
+  return {
+    codeFile,
+    seed: (d) => seedWorkspace(d, {
+      script: 'echo the gh call blew up >&2\nexit "$(cat ' + JSON.stringify(codeFile) + ')"',
+      schedules: [slowTicker(name)],
+    }),
+  };
+}
+async function wakes(s) {
+  const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items || [];
+  return items.filter((x) => x.kind === 'schedule-failed');
+}
+
+test('a hook failing the SAME way every window wakes the owner once — and still says so every time', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-schedrepeat-'));
+  const s = await startServer({ dir, env: FAST, seed: flaky(dir, 'flaky').seed });
+  try {
+    for (let i = 0; i < 200 && runsOf(dir, 'flaky').filter((r) => !r.ok && !r.skipped).length < 3; i++) {
+      await sleep(50);
+    }
+    const bad = runsOf(dir, 'flaky').filter((r) => !r.ok && !r.skipped);
+    assert.ok(bad.length >= 3, 'the hook failed several windows running: ' + bad.length);
+
+    assert.strictEqual((await wakes(s)).length, 1, 'the owner heard it once, not once per window');
+    const evs = (await s.api('GET', '/api/board')).body.events.filter((e) => e.kind === 'schedule-failed');
+    assert.ok(evs.length >= 3, 'every failing firing is still on the timeline: ' + evs.length);
+    assert.strictEqual(evs.filter((e) => e.level === 1).length, 1,
+      'and exactly one of them rang the bell');
+  } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a hook that starts failing DIFFERENTLY is a new failure, and is heard', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-schedchanged-'));
+  const f = flaky(dir, 'flaky');
+  const s = await startServer({ dir, env: FAST, seed: f.seed });
+  try {
+    for (let i = 0; i < 200 && (await wakes(s)).length < 1; i++) await sleep(50);
+    assert.strictEqual((await wakes(s)).length, 1);
+    await sleep(2000);
+    assert.strictEqual((await wakes(s)).length, 1, 'the same failure repeating is not a second wake');
+
+    fs.writeFileSync(f.codeFile, '4\n');
+    let woke = [];
+    for (let i = 0; i < 200 && woke.length < 2; i++) { await sleep(50); woke = await wakes(s); }
+    assert.strictEqual(woke.length, 2, 'a different exit code is a different failure');
+    assert.ok(woke.some((x) => /exit 4/.test(x.text)), 'and it carries what changed: '
+      + JSON.stringify(woke.map((x) => x.text)));
+  } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a green firing after a failing one says so, and re-arms the next wake', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-schedheal-'));
+  const f = flaky(dir, 'flaky');
+  const s = await startServer({ dir, env: FAST, seed: f.seed });
+  try {
+    for (let i = 0; i < 200 && (await wakes(s)).length < 1; i++) await sleep(50);
+
+    fs.writeFileSync(f.codeFile, '0\n');
+    let green = null;
+    for (let i = 0; i < 200 && !green; i++) {
+      await sleep(50);
+      green = (await s.api('GET', '/api/board')).body.events.find((e) => /green again/.test(e.text));
+    }
+    assert.ok(green, 'the recovery is on the timeline — silence must not mean both fixed and broken');
+    assert.strictEqual(green.level, 2, 'a recovery is not a bell');
+
+    // and because the key was forgotten, the SAME failure is a new one again
+    fs.writeFileSync(f.codeFile, '3\n');
+    let woke = [];
+    for (let i = 0; i < 200 && woke.length < 2; i++) { await sleep(50); woke = await wakes(s); }
+    assert.strictEqual(woke.length, 2, 'the next failure after a recovery wakes the owner again');
   } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
