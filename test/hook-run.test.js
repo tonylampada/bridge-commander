@@ -283,7 +283,13 @@ test('hook run over the CLI: a failing hook exits 1 and the trace says why; a bu
   const s = await startServerWithLieutenant();
   try {
     named(s.dir, 'boom', 'echo nope >&2\nexit 4');
-    named(s.dir, 'slow', 'sleep 1');
+    // Three seconds, where the in-process refusal test upstairs needs one: this
+    // assertion has to outlive a COLD node spawning the CLI — config read, port
+    // resolution, the request — before the 409 can be observed at all. The two
+    // tests do not pay the same cost, so they do not carry the same margin.
+    // Three seconds of wall in one test is nothing; a flake costs an hour every
+    // time it fires, on a branch whose author has no reason to suspect it.
+    named(s.dir, 'slow', 'sleep 3');
     const ws = ['--workspace', s.dir, '--port', String(s.port)];
 
     const bad = await runCli(['hook', 'run', 'boom', ...ws]);
