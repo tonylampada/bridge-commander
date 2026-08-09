@@ -48,12 +48,17 @@ Which update path applies depends on how the skill dir was installed — check f
 
 Then re-run `bc-axi init --name <that lieutenant> --id <their id>` **in each workspace**: seeding
 runs from `init` and nowhere else, so until it does, an upgraded workspace has neither the new
-playbooks nor the `~/.claude/skills/bridge-commander-worker` symlink — and its playbooks order a
-skill it does not have. Re-running is idempotent: it copies only the playbooks that are missing,
-repoints only a symlink of ours (a hand-installed real directory is left alone), and overwrites
-nothing you edited. It does PATCH the session ref of the lieutenant whose id matches `--id` (or
-the slug of `--name`), so run it **from that lieutenant's own tmux session** — from anywhere
-else you repoint them at the wrong address.
+playbooks and hooks nor the `~/.claude/skills/bridge-commander-worker` symlink — and its
+playbooks order a skill it does not have. Re-running is idempotent: it copies only the playbooks
+and hooks that are missing, repoints only a symlink of ours (a hand-installed real directory is
+left alone), and overwrites nothing you edited. It does PATCH the session ref of the lieutenant
+whose id matches `--id` (or the slug of `--name`), so run it **from that lieutenant's own tmux
+session** — from anywhere else you repoint them at the wrong address.
+
+The `gh-watch` schedule is the one seed that runs ONCE per workspace, not once per `init`
+(marker: `.bridge-commander/gh-watch.seeded`): an upgrade must never resurrect a schedule the
+captain paused, repointed or removed. A workspace that predates the marker adopts its existing
+`gh-watch` schedule instead, so the NEXT removal sticks.
 
 ## The stale-UI trap
 

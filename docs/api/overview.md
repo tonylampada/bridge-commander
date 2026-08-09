@@ -51,7 +51,7 @@ and its cards carry that color stripe.
 | Worker | Implementation agent bound 1:1 to a Working card: tmux **window** (`w-<card-id>`) inside its lieutenant's session + isolated worktree. Its standing duties are the `bridge-commander-worker` skill (shipped here, symlinked into the user's skills dir at `workspace.init`); the card's playbook opens by ordering it loaded, and that line is the user's to delete. Ephemeral — dies with the card's Working state; the session coupling (the lieutenant's SESSION dying takes its worker windows with it — its own `lt` window dying does not) is accepted design |
 | Event | Card timeline entry: `text`, `level` (1 = bell, 2 = timeline only), `actor`, `kind` (open token; the board's kinds registry maps kind → emoji + default level) |
 | Message | Chat utterance. `target`: a lieutenant's main chat or a card thread. May carry `attachments [{id, name, mime, path}]` (captain uploads); attachments ride the QueueItem to the lieutenant with absolute paths. A card thread is a **context folder**: the interlocutor is always the owning lieutenant, never the worker |
-| QueueItem | One durable delivery to a lieutenant. Kinds: captain `message`, `line-passed`, `start-order`, `rework-order`, `card-created` / `card-moved` (captain acts echoed to the owner), `worker-signal`, `worker-said` (a non-owner posted on the card thread), `worker-stopped`, `worker-died`, `worker-stalled`, `worker done`, `pr-merged`, `pr-closed`. `seq`-ordered, at-least-once. A `message` may carry `via: "line"` — the channel lives in the ENVELOPE, never appended to the captain's text. (`worker-paused` is an event kind only — pausing is the lieutenant's own act, it never queues) |
+| QueueItem | One durable delivery to a lieutenant. Kinds: captain `message`, `line-passed`, `start-order`, `rework-order`, `card-created` / `card-moved` (captain acts echoed to the owner), `worker-signal`, `worker-said` (a non-owner posted on the card thread), `worker-stopped`, `worker-died`, `worker-stalled`, `worker done`, `pr-merged`, `pr-closed`, `schedule-failed` / `schedule` (a schedule's firing failed, or the same schedule reporting itself healthy again — the kind on the item is what the drain dispatches on, so the recovery must not wear the failure's kind). `seq`-ordered, at-least-once. A `message` may carry `via: "line"` — the channel lives in the ENVELOPE, never appended to the captain's text. (`worker-paused` is an event kind only — pausing is the lieutenant's own act, it never queues) |
 | Line | The captain's voice channel: ONE holder at a time, held board-side (`board.line`) because the phone is not the only client. `chat.say` accepts the target `line` meaning "whoever holds it". It follows the last lieutenant to speak in a main chat, or is handed over by `line.pass`; a board that never had a conversation defaults to the founding lieutenant, and only a board with no lieutenant has nobody on the line |
 | Archive | Append-only frozen card snapshots with `reason`; `card.restore` resurrects with full state and a loud level-1 event (a snapshot frozen in Working restores to Backlog — only `card.start` may enter Working) |
 | Schedule | The board's own clock, and a board object like a card: `name`, the named `hook` it fires, `when` (a cron expression or an interval), `owner` (a lieutenant — where a firing's failure lands), `overlap` (`skip` \| `queue` \| `restart`), `catchup` (`latest` \| `all` \| `none`), `paused`, and its cursor `lastWindow` — the DUE TIME of the last window it handled, never "when it last ran". It fires a HOOK and nothing else. Lives in board state, so a clone of the workspace carries its schedules; host cron did not |
@@ -220,7 +220,7 @@ session status, window adoption):
 | lieutenant session dies | server auto-respawn (resume when possible; else relaunch with charter + owned cards + pending queue as the prompt), level-1 event, drain nudge; 3 failed attempts → level-1 needs-captain |
 | level-1 event / owed reply | captain's bell: unseen = level-1 events ∪ unseen lieutenant thread replies, per user, cleared by reading — bridge semantics |
 | `worker.done` · worker death · card archived | lifecycle hooks: the workspace's own executable scripts in `.bridge-commander/hooks/<event>/` run (see below) |
-| a schedule's window comes due | `hook.run` on its hook, `trigger: schedule:<name>` — one trace line like any other run. A firing that FAILS lands a level-1 board event and a `schedule-failed` QueueItem on the schedule's OWNER, carrying the hook's output; a firing that succeeds says so on the trace and nowhere else (a clock that narrated every success would be noise). Never the captain — owners are lieutenants |
+| a schedule's window comes due | `hook.run` on its hook, `trigger: schedule:<name>` — one trace line like any other run. A firing that FAILS lands a level-1 board event and a `schedule-failed` QueueItem on the schedule's OWNER, carrying the hook's output, once per distinct failure (see the clock, below); a firing that succeeds says so on the trace and nowhere else (a clock that narrated every success would be noise). Never the captain — owners are lieutenants |
 | a schedule's hook or owner goes missing | the schedule carries a `problem` and says so in `list`/`show`, and its owner is woken ONCE — never a silent dead window, and never one wake per window |
 
 ### Hooks
@@ -289,9 +289,15 @@ a list in memory. `restart` kills what is running (the whole process group, trac
 it drains one window at a time, in order.
 
 **A firing that fails lands on its owner** — a level-1 board event and a `schedule-failed`
-QueueItem carrying the hook's output, never only a log line. So does a schedule whose hook or
-owner has gone missing since it was added, once rather than once per window, with the reason
-sitting on the schedule where `list` and `show` print it.
+QueueItem carrying the hook's output, never only a log line. Once per DISTINCT failure, through
+the same key store `event.append --key` uses: a 5m schedule whose hook is permanently broken
+fails 288 times a day, and a drain holding 288 identical items is quieter than one holding a
+single item, because its owner stops reading it. The signature is how it went wrong plus the
+tail of what it said, so a hook that starts failing differently is heard as new; a repeat still
+lands on the timeline at level 2, so the record stays whole. The first green firing after a
+failing one says so and forgets the key, which is what makes the next failure new again. So
+does a schedule whose hook or owner has gone missing since it was added, once rather than once
+per window, with the reason sitting on the schedule where `list` and `show` print it.
 
 The board ships with one hook and one schedule, registered at `workspace.init`: **`gh-watch`**,
 every 5 minutes, polling `gh` for the `bc/` branches of live cards and waking the owner when a

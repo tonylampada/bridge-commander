@@ -149,7 +149,7 @@ A hook is an executable file the workspace owns, and where it sits says what fir
 
 ```
 .bridge-commander/hooks/worker-done/sweep.sh   a LIFECYCLE hook — that event fires it
-.bridge-commander/hooks/gh-watch               a NAMED hook — nothing fires it but you
+.bridge-commander/hooks/gh-watch               a NAMED hook — a caller fires it, not an event
 ```
 
 **Directory means event, file means name.** Both are spawned directly (cwd = workspace root)
@@ -215,18 +215,15 @@ skip rather than swallowing it, `queue` re-offers the window when the firing fin
 kills what is running and takes its place.
 
 A failed firing wakes the schedule's OWNER with the hook's output (level-1 event +
-`schedule-failed` queue item) — never only a log line. A hook or owner that goes missing under a
-live schedule puts a loud `problem` on it and wakes the owner ONCE, so a dead window is never
-silent.
+`schedule-failed` queue item) — never only a log line, and once per DISTINCT failure: a hook
+failing the same way every five minutes is one wake, not 288, and the first green firing after
+it says so and re-arms the bell. A hook or owner that goes missing under a live schedule puts a
+loud `problem` on it and wakes the owner ONCE, so a dead window is never silent.
 
 A fresh workspace is initialized with one schedule already working: **`gh-watch`**, every five
 minutes, waking the owner when a check goes red on the `bc/` branch of a live card — once per
 failure, silent on green. It is seeded ONCE (remembered in `.bridge-commander/gh-watch.seeded`):
 pause it, repoint it or remove it and a later `bc-axi init` leaves your decision alone.
-
-| var | default | meaning |
-|---|---|---|
-| `BC_SCHEDULE_INTERVAL_MS` | `15000` | how often the clock looks for due windows; `0` disables it |
 
 To tear down infrastructure one **playbook** starts (a dev container, a compose stack), reach
 for that playbook's `teardown` key instead: the command runs in the worktree immediately
