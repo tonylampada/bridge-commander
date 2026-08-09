@@ -184,6 +184,37 @@ test('a workspace reached through a SYMLINK edits its hooks like any other', asy
   }
 });
 
+// The board's own directory is one the board MAKES — `--workspace ~/boards/new`
+// through a symlinked ~/boards is the first boot of a new board, not an error.
+// Giving up on the link because the leaf is not there yet costs that whole
+// process every hook it has, and a restart quietly fixing it is what makes the
+// symptom impossible to place.
+test('a workspace directory that does not exist YET still resolves through the link', async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bc-newws-')));
+  const real = path.join(tmp, 'real');
+  fs.mkdirSync(real, { recursive: true });
+  fs.symlinkSync(real, path.join(tmp, 'link'));
+  const fresh = path.join(tmp, 'link', 'newboard'); // nothing there — the server makes it
+  const s = await startServerWithLieutenant({ dir: fresh });
+  try {
+    assert.ok(fs.existsSync(path.join(real, 'newboard')), 'the board was born through the link');
+    write(path.join(hooksDir(path.join(real, 'newboard')), 'gh-watch'), '#!/bin/sh\necho v1\n');
+    const listed = (await s.api('GET', '/api/hooks')).body.hooks.find((h) => h.name === 'gh-watch');
+    assert.ok(listed, 'the board lists it');
+    const got = await get(s, uriOf(listed.file));
+    assert.strictEqual(got.status, 200, JSON.stringify(got.body));
+    const put = await s.api('PUT', '/api/artifact',
+      { uri: uriOf(listed.file), content: '#!/bin/sh\necho v2\n', version: got.body.version });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(
+      fs.readFileSync(path.join(hooksDir(path.join(real, 'newboard')), 'gh-watch'), 'utf8'),
+      '#!/bin/sh\necho v2\n');
+  } finally {
+    await s.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // The list the refusal prints has to be the events the server really fires, or
 // it sends people to build hooks in a directory nothing will ever look at.
 test('LIFECYCLE_EVENTS is exactly what the server fires', () => {

@@ -97,10 +97,22 @@ const opts = parseArgs(process.argv.slice(2));
 // itself. A workspace reached through a symlinked parent (/tmp on macOS,
 // ~/work → /mnt/data/work anywhere) would fail that comparison for the board's
 // OWN hooks, so the link is followed once here rather than at each call site.
-// A workspace that is not on disk yet has no link to follow: the resolved path
-// stands, and the mkdirs below make it.
+// A workspace that is not on disk YET is the same question one level up: `--workspace
+// ~/work/newboard` through a ~/work → /mnt/data/work link has a link to follow even
+// though the board's own directory does not exist. So this resolves the deepest
+// ancestor that IS there and re-joins the tail the mkdirs below will create.
+// Worth the walk even though a restart would fix it: until then the whole life of
+// that process answers 404 to every hook on the tab, and nobody would ever connect
+// "the board came up before its directory did" to "the pencil stopped working".
 function realWorkspace(dir) {
-  try { return fs.realpathSync(dir); } catch (e) { return dir; }
+  const missing = [];
+  for (let at = dir; ;) {
+    try { return path.join(fs.realpathSync(at), ...missing); } catch (e) {}
+    const up = path.dirname(at);
+    if (up === at) return dir; // nothing on the way to the root resolved
+    missing.unshift(path.basename(at));
+    at = up;
+  }
 }
 const WORKSPACE = realWorkspace(path.resolve(opts.workspace || process.cwd()));
 // One-shot rename migrations (bridge-command → bridge-commander). Boot-time and
