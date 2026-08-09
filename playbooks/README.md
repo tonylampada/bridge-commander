@@ -82,7 +82,8 @@ still holding the checkout, the release refuses on its own and says why. The bud
 minutes at the handoff and at archive, where nobody is waiting on the answer, and **one minute
 at the restart**, which is awaited inside `card start` with a caller on the line
 (`BC_TEARDOWN_TIMEOUT_MS` overrides both). A run that succeeded is never repeated for the same
-worker; one that failed stays retryable at the next release point.
+worker; one that failed is tried again at the next release point that still finds the checkout
+standing — so a teardown that fails while the release goes through has had its only turn.
 
 `keep_worktree: true` runs neither at the handoff — the container is part of what is being
 kept. The **restart** does run it: that is the moment the kept checkout is actually destroyed,
