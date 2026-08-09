@@ -62,7 +62,7 @@ const crypto = require('crypto');
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
-const { runHooks } = require(path.join(__dirname, 'hooks.js'));
+const { runHooks, runTeardown } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -2060,6 +2060,76 @@ async function fireHooks(event, card, w, opts) {
   }
 }
 
+// landCardEvent(card, ev) — the card takes the event if it is still on the
+// board; an ARCHIVED card cannot (it left, and its archive.jsonl snapshot is
+// frozen), so the event goes to the board-level stream carrying a reference to
+// the card instead of being dropped.
+function landCardEvent(card, ev) {
+  const live = findCard(card.id);
+  if (live) {
+    live.events.push(ev);
+    live.updated = now();
+  } else {
+    ev.card = card.id;
+    ev.cardTitle = card.title;
+    board.events.push(ev);
+  }
+  return ev;
+}
+
+// The playbook's `teardown` command — 5 minutes, then killed and treated as a
+// failure. BC_TEARDOWN_TIMEOUT_MS overrides it (tests), mirroring the hooks.
+const TEARDOWN_TIMEOUT_MS = parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) > 0
+  ? parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) : 0; // 0 = the module default (5 min)
+const TEARDOWN_OUTPUT_TAIL = 1200; // of the event text, whose own cap is 2000
+
+// runCardTeardown(card, w, wtPath) — a container that outlives its worktree is
+// the same bug as a worktree that outlives its work, one layer down, and the
+// playbook that started the container is the thing that knows how to stop it.
+// So the command runs HERE: at the handoff, in the worktree, the last thing
+// before the release.
+//
+// BEST EFFORT, always. A non-zero exit or a timeout lands an event and the
+// release goes ahead exactly as if no teardown had been configured — a user's
+// broken script must never wedge a card, and nothing is lost by carrying on:
+// if the container really is still holding the checkout, releaseWorktree
+// refuses on its own and says why. EVERY run is an event, success included —
+// otherwise the only way to know whether a card's container was ever stopped is
+// to go looking for the container.
+//
+// Reported through the hook kinds because it IS one of those: a user-owned
+// command the board runs on a lifecycle moment, whose failure rings the same
+// bell. The text says `teardown`, so the timeline still tells them apart.
+async function runCardTeardown(card, w, wtPath) {
+  const command = String((w && w.teardown) || '').trim();
+  if (!command) return null;
+  // Nothing left to tear down in a directory that is gone — and this is what
+  // keeps the handoff's teardown from running a second time at archive.
+  if (!wtPath || !fs.existsSync(wtPath)) return null;
+  try {
+    const r = await runTeardown(command, hookContext(card, w),
+      TEARDOWN_TIMEOUT_MS ? { timeoutMs: TEARDOWN_TIMEOUT_MS } : undefined);
+    const detail = r.timedOut ? 'timed out'
+      : r.error ? String(r.error)
+      : 'exit ' + r.code;
+    const out = r.output.length > TEARDOWN_OUTPUT_TAIL
+      ? '…' + r.output.slice(-TEARDOWN_OUTPUT_TAIL) : r.output;
+    const text = 'teardown `' + command + '` ' + (r.ok ? 'ok' : 'FAILED')
+      + ' (' + detail + ', ' + (r.ms / 1000).toFixed(1) + 's)' + (out ? ': ' + out : '');
+    landCardEvent(card, mkEvent({ text, actor: 'server' },
+      { kind: r.ok ? 'hook-ran' : 'hook-failed' }));
+    if (!r.ok) {
+      console.error(now() + ' teardown for ' + card.id + ' failed (' + detail + '): ' + command);
+      queuePush(card.owner, { kind: 'hook-failed', card: card.id, text: text.slice(0, 2000) });
+    }
+    saveBoard(); broadcast(); // the release may sit behind the clone lock for minutes
+    return r;
+  } catch (e) {
+    console.error(now() + ' teardown for ' + card.id + ' failed: ' + String((e && e.message) || e));
+    return null;
+  }
+}
+
 // releaseCardWorktree(card, w, opts) — the worktree goes when the card LEAVES
 // WORKING, not whenever someone tidies up: a finished card held its checkout
 // until archive, so fifteen finished cards held fifteen worktrees on disk.
@@ -2092,6 +2162,10 @@ async function releaseCardWorktree(card, w, opts = {}) {
     if (!wtRec) return null;
     const project = findProject(String((w && w.project) || attrs.repo || ''));
     if (!project) return null; // no clone to release against — leave the directory alone
+    // The playbook's teardown gets its turn first: the release is the moment the
+    // ground goes, so stopping what stands on it happens immediately before,
+    // never after. Never throws, and its outcome never steers what follows.
+    await runCardTeardown(card, w, wtRec.path);
     const rel = await releaseWorktree(wtRec, project.path);
     const live = findCard(card.id); // archived in the meantime → the board stream carries it
     // the attribute is a pointer at a directory: a released one has to stop
@@ -2109,14 +2183,7 @@ async function releaseCardWorktree(card, w, opts = {}) {
         ? 'worktree released: ' + wtRec.path
         : 'worktree kept (' + rel.reason + '): ' + wtRec.path;
       if (!rel.released) console.error(now() + ' worktree not released for ' + card.id + ': ' + rel.reason);
-      const ev = mkEvent({ text, actor: 'server' }, { level: 2 });
-      if (live) {
-        live.events.push(ev);
-        live.updated = now();
-      } else {
-        ev.card = card.id; ev.cardTitle = card.title;
-        board.events.push(ev);
-      }
+      landCardEvent(card, mkEvent({ text, actor: 'server' }, { level: 2 }));
     }
     saveBoard(); broadcast();
     return rel;
@@ -2421,9 +2488,10 @@ async function doStartCard(card, body) {
   attachBriefArtifact(card, ref);
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
   if (branch) worker.branch = branch;
-  // Recorded at start because the handoff is where it is read, and the playbook
-  // is resolved HERE and only here.
+  // Recorded at start because the handoff is where they are read, and the
+  // playbook is resolved HERE and only here.
   if (meta.keep_worktree) worker.keepWorktree = true;
+  if (meta.teardown) worker.teardown = meta.teardown;
   board.workers.push(worker);
   enterWorking(card, 'worker ' + workerName(ref) + ' started in ' + wt.path);
   return { worker };

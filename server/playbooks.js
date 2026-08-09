@@ -64,16 +64,17 @@ function resolvePlaybook(stateDir, id) {
 //   requires: [pr_url, pr_number]
 //   branch: false
 //   keep_worktree: true
+//   teardown: .claude/skills/devcontainer/cli.sh down
 //   ---
 //
 // A playbook includes what runs it, and prose in the brief cannot act — the
 // worker reads "start this on codex" only once it is already on claude.
-// Five keys, all optional, no playbook without the block behaving any
+// Six keys, all optional, no playbook without the block behaving any
 // differently. The parser is hand-written and covers only what those
-// five keys need — a general markup language is exactly what this must not
+// six keys need — a general markup language is exactly what this must not
 // grow into — and anything else in the block is an error naming its line,
 // because a guess here silently starts the wrong worker.
-const FM_KEYS = ['harness', 'model', 'requires', 'branch', 'keep_worktree'];
+const FM_KEYS = ['harness', 'model', 'requires', 'branch', 'keep_worktree', 'teardown'];
 const FM_NAME_RE = /^[\w][\w.-]*$/;
 
 function unquote(s) {
@@ -114,6 +115,15 @@ function fmCheck(key, val, at) {
       }
     }
     return names;
+  }
+  // teardown: a command line, not a name — spaces, slashes and flags are the
+  // point of it, so the only thing to check is that there is a command there.
+  if (key === 'teardown') {
+    if (typeof val !== 'string' || !val.trim()) {
+      throw new Error(at + 'teardown takes a shell command, e.g. '
+        + '.claude/skills/devcontainer/cli.sh down — got: ' + JSON.stringify(val));
+    }
+    return val.trim();
   }
   // harness, model: a bare name
   if (typeof val !== 'string' || !val.trim()) {
@@ -250,6 +260,9 @@ const FRONTMATTER = [
     + 'before any worktree exists' },
   { key: 'branch', desc: 'false for a playbook that ships no code: no branch, no PR' },
   { key: 'keep_worktree', desc: "true keeps the worker's checkout after the card leaves Working" },
+  { key: 'teardown', desc: 'a shell command run in the worktree just before it is released, to stop '
+    + 'what the run started (a devcontainer, a compose stack). Best effort: a failure is an event '
+    + 'on the card and the release goes ahead' },
 ];
 
 // render(template, vars) — {{NAME}} → its value. An unknown name is left

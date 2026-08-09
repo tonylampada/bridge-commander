@@ -81,7 +81,8 @@ worker reads the sharpened one.
 
 A playbook may also open with a small frontmatter block naming how the card runs — `harness`,
 `model`, `requires` (attributes it cannot start without), `branch`, `keep_worktree` (never
-release the checkout automatically, for a card reworked in place) — all optional, all in
+release the checkout automatically, for a card reworked in place), `teardown` (a command that
+stops what the run started, just before the checkout goes) — all optional, all in
 [playbooks/README.md](playbooks/README.md).
 
 They are **yours**. Edit one and the next card started on it uses the edit — no restart, no
@@ -124,6 +125,7 @@ Env knobs (set on the server process):
 | `BC_TURNEND_URL` | — | default callback URL baked into installed turn-end hooks |
 | `BC_SEND_RETRIES` / `BC_SEND_SLEEP_MS` | `3` / `400` | verified-submit tuning for `harness.send` |
 | `BC_HOOK_TIMEOUT_MS` | `120000` | per-script timeout for workspace lifecycle hooks |
+| `BC_TEARDOWN_TIMEOUT_MS` | `300000` | timeout for a playbook's `teardown` command |
 | `BC_SYSLOAD_MS` | `2000` | monitoring panel (⚙️ → machine load) sample interval; the sampler runs only while the panel is open |
 
 ### Lifecycle hooks
@@ -135,8 +137,12 @@ sequential, cwd = workspace root) with context in env — `BC_EVENT`, `BC_CARD`,
 before the worktree is released — and `BC_WORKTREE` is empty when the handoff released it
 already, which is the usual case). Hooks are fire-and-forget — a failure or timeout never
 blocks the lifecycle; results land on the card timeline (`hook-ran` / `hook-failed`).
-Typical use: tearing down infrastructure a worker left running (dev containers, compose
-stacks) when its card finishes.
+Typical use: reacting to a card finishing across the whole workspace, whatever it was run by.
+
+To tear down infrastructure one **playbook** starts (a dev container, a compose stack), reach
+for that playbook's `teardown` key instead: the command runs in the worktree immediately
+before it is released, and lives beside the thing that started it rather than in a hook that
+has to recognise which cards it applies to.
 
 ### Network exposure
 

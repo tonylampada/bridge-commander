@@ -30,6 +30,7 @@ model: gpt-5.6-sol
 requires: [pr_url, pr_number, repo_slug]
 branch: false
 keep_worktree: true
+teardown: .claude/skills/devcontainer/cli.sh down
 ---
 ```
 
@@ -40,12 +41,13 @@ keep_worktree: true
 | `requires` | card attributes this playbook cannot work without — `card start` refuses before provisioning anything and names the missing one |
 | `branch` | `false` = detached HEAD, no branch cut, nothing to push. Omitted, the card type decides as before (an investigation gets no branch) |
 | `keep_worktree` | `true` = the worktree is never released automatically. Omitted, the board gives it back when the card leaves Working |
+| `teardown` | a shell command that stops what the run started, run in the worktree just before it is released |
 
-All five are optional. **An explicit CLI flag beats the frontmatter, which beats the config
+All six are optional. **An explicit CLI flag beats the frontmatter, which beats the config
 default** — so `--harness claude` still overrides a playbook that says `codex`.
 
 This is not YAML and does not want to be: `key: value`, `key: [a, b, c]`, `true`/`false`, and
-those five keys. Anything else in the block is an error naming the line, because a guess here
+those six keys. Anything else in the block is an error naming the line, because a guess here
 silently starts the wrong worker. A playbook that wants a conditional wants to be two playbooks.
 
 `requires` is how a playbook says "this placeholder is not a typo": an unknown `{{NAME}}` stays
@@ -64,6 +66,20 @@ A worktree still holding work is never released, kept or not — uncommitted cha
 on a HEAD no branch, tag or remote ref reaches (a worktree is created detached, so a run that
 commits without cutting a branch is referenced by nothing else). The release is refused, the
 card timeline says which path and why, and the directory stays exactly as it is.
+
+`teardown` is for what a playbook STARTS and nothing else stops — a devcontainer, a compose
+stack, a tunnel. A container that outlives its worktree is the same bug as a worktree that
+outlives its work, one layer down, and the playbook that started it is the thing that knows how
+to stop it. The command runs at the handoff, immediately before the release: cwd is the
+worktree, the `BC_*` environment is the one hooks get, and every run lands an event on the card
+— the command, the exit code, how long it took and the tail of its output — so a teardown that
+worked is as visible as one that did not.
+
+It is **best effort**. A non-zero exit, or a run still going at five minutes, is killed, lands
+its event and the release goes ahead exactly as if no teardown had been configured: a broken
+script must never wedge a card, and nothing is lost by carrying on — if the container really is
+still holding the checkout, the release refuses on its own and says why. `keep_worktree: true`
+runs neither: the container is part of what is being kept.
 
 ## Worker duties
 

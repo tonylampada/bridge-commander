@@ -85,7 +85,7 @@ test('no frontmatter = the body is the file, untouched', () => {
   assert.deepStrictEqual(parsePlaybook(rule), { meta: {}, body: rule });
 });
 
-test('the five keys parse to their types, and the body starts after the closing ---', () => {
+test('the six keys parse to their types, and the body starts after the closing ---', () => {
   const { meta, body } = parsePlaybook([
     '---',
     'harness: codex',
@@ -93,6 +93,7 @@ test('the five keys parse to their types, and the body starts after the closing 
     'requires: [pr_url, pr_number, repo_slug]',
     'branch: false',
     'keep_worktree: true',
+    'teardown: .claude/skills/devcontainer/cli.sh down',
     '---',
     '',
     '# The brief',
@@ -103,6 +104,7 @@ test('the five keys parse to their types, and the body starts after the closing 
     requires: ['pr_url', 'pr_number', 'repo_slug'],
     branch: false,
     keep_worktree: true,
+    teardown: '.claude/skills/devcontainer/cli.sh down',
   });
   assert.strictEqual(body, '# The brief'); // the blank line under the block is not the brief
 });
@@ -120,6 +122,9 @@ test('the small mercies: blank lines, quotes, an empty list, a lone required nam
   ].join('\n'));
   assert.deepStrictEqual(meta, { harness: 'claude', model: 'claude-opus-5', requires: [], branch: true });
   assert.deepStrictEqual(parsePlaybook('---\nrequires: pr_url\n---\nb').meta.requires, ['pr_url']);
+  // a teardown carries flags and quotes like any command line
+  assert.strictEqual(parsePlaybook('---\nteardown: "docker compose down -v"\n---\nb').meta.teardown,
+    'docker compose down -v');
 });
 
 test('a malformed block fails with the offending line named', () => {
@@ -129,6 +134,11 @@ test('a malformed block fails with the offending line named', () => {
   bad(['---', 'branch: nope', '---', 'b'], /line 2: branch takes true or false/);
   bad(['---', 'keep_worktree: yes', '---', 'b'], /line 2: keep_worktree takes true or false/);
   bad(['---', 'harness: [a, b]', '---', 'b'], /line 2: harness takes a name/);
+  // teardown is a command line, so the check is only that there IS one — a
+  // flag or a list is not a command anyone meant to run
+  bad(['---', 'teardown: true', '---', 'b'], /line 2: teardown takes a shell command.*true/);
+  bad(['---', 'teardown: [a, b]', '---', 'b'], /line 2: teardown takes a shell command/);
+  bad(['---', 'teardown:', '---', 'b'], /line 2: "teardown" has no value/);
   bad(['---', 'harness: true', '---', 'b'], /line 2: harness takes a name/);
   bad(['---', 'model:', '---', 'b'], /line 2: "model" has no value/);
   bad(['---', 'requires: [pr_url, ]', '---', 'b'], /line 2: empty item in the list/);

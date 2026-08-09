@@ -40,7 +40,8 @@ them drift.
   `bc-axi worker signal|done`; the lieutenant verifies and hands off — nothing moves a card
   out of Working automatically — and the move that takes it out of Working gives the
   worktree back (a playbook's `keep_worktree: true` holds it for a card reworked in place;
-  a worktree still holding work is never released).
+  a worktree still holding work is never released) — running the playbook's `teardown`
+  command in the checkout first, best effort, so nothing the run started outlives it.
 - **Supervision is infrastructure**: the server watches sessions, turn-ends, and PRs. Dead
   lieutenants are auto-respawned (resume), dead workers flag their owner, merged PRs archive
   the card, release the worktree, and kill the lingering worker session (never hand-archive
