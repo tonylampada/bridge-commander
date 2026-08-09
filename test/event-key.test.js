@@ -127,6 +127,37 @@ test('a key named after an Object member is an ordinary key — first lands, sec
   } finally { await s.stop(); }
 });
 
+// The key is spoken for only once the event actually landed. A delivery that
+// throws must leave it unclaimed, or the poller's next pass is answered
+// "duplicate" for a wake that never arrived — at-most-once would have become
+// never-once, for seven days.
+test('a delivery that fails leaves the key UNCLAIMED — the next poll still gets through', async () => {
+  const s = await boot();
+  try {
+    const body = { text: 'CI is red on abc123', wakeOwner: true, key: 'ci:abc123', kind: 'ci' };
+    // make the queue unwritable the bluntest way there is: a directory where
+    // the append expects a file, so queuePush throws AFTER the key was asked about
+    const queue = path.join(s.dir, '.bridge-commander', 'queue', LT + '.jsonl');
+    try { fs.unlinkSync(queue); } catch (e) {}
+    fs.mkdirSync(queue);
+    const failed = await s.api('POST', '/api/cards/watched/events', body);
+    assert.notStrictEqual(failed.status, 200, 'the wake did not happen and the caller is told so');
+    assert.ok(!fs.existsSync(path.join(s.dir, '.bridge-commander', 'eventkeys.json')),
+      'and nothing was claimed');
+
+    fs.rmdirSync(queue);
+    const retry = await s.api('POST', '/api/cards/watched/events', body);
+    assert.strictEqual(retry.status, 200);
+    assert.ok(retry.body.event, 'the retry is delivered, not swallowed as a duplicate');
+    assert.ok(!retry.body.duplicate);
+    assert.strictEqual((await feed(s)).filter((i) => i.kind === 'card-event').length, 1);
+    // and NOW the key is on record, so the pass after that one is a duplicate
+    const doc = JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-commander', 'eventkeys.json'), 'utf8'));
+    assert.ok(doc.watched && doc.watched['ci:abc123']);
+    assert.strictEqual((await s.api('POST', '/api/cards/watched/events', body)).body.duplicate, true);
+  } finally { await s.stop(); }
+});
+
 test('--source is on the timeline entry AND the queue item, and bc-axi drain says it', async () => {
   const s = await boot();
   try {

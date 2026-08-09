@@ -410,7 +410,7 @@ function hookKey(h) { return (h.event ? h.event + '/' : '') + h.name; }
 
 function lastRuns(workspace, hooks) {
   const want = hooks || listAllHooks(workspace);
-  const events = eventDirs(workspace, hooks && want);
+  const events = eventDirs(workspace, want);
   const out = new Map();
   if (!want.length) return out;
   scanBack(runsFile(workspace), (rec) => {
@@ -421,7 +421,7 @@ function lastRuns(workspace, hooks) {
       if (h.event ? rec.trigger === h.event : !events.has(rec.trigger)) out.set(k, rec);
     }
     return out.size >= want.length;
-  }, (want.length ? SCAN_BUDGET : 0));
+  });
   return out;
 }
 

@@ -2028,8 +2028,24 @@ function readEventKeys() {
   return out;
 }
 
-// claimEventKey(cardId, key) -> true when this key is NEW for that card (and it
-// is now claimed), false when it is a duplicate still inside the window.
+// The pair is deliberately two functions, and the ORDER they are called in is
+// the guarantee: ask (read-only), deliver, then claim. Claiming first would
+// make a delivery that throws — an unwritable queue file, a full disk — a wake
+// that is forever answered "duplicate" and never actually arrived. At-least-once
+// beats a silently swallowed escalation, so a failed delivery leaves the key
+// unclaimed and the next poll says the same thing again.
+
+// seenEventKey(cardId, key) -> true when that card already claimed this key
+// inside the window. Reads only; it never touches the file.
+function seenEventKey(cardId, key) {
+  const doc = readEventKeys();
+  const ts = doc[cardId] && doc[cardId][key];
+  return typeof ts === 'number' && ts > Date.now() - EVENTKEY_TTL_MS;
+}
+
+// claimEventKey(cardId, key) — the key is now spoken for. Prunes everything
+// past the window while it holds the file, which is the only thing that ever
+// expires a key.
 function claimEventKey(cardId, key) {
   const doc = readEventKeys();
   const cutoff = Date.now() - EVENTKEY_TTL_MS;
@@ -2037,11 +2053,9 @@ function claimEventKey(cardId, key) {
     for (const [k, ts] of Object.entries(keys)) if (!(typeof ts === 'number' && ts > cutoff)) delete keys[k];
     if (!Object.keys(keys).length) delete doc[c];
   }
-  if (doc[cardId] && doc[cardId][key] !== undefined) return false; // survived the prune ⇒ still fresh
   (doc[cardId] = doc[cardId] || Object.create(null))[key] = Date.now();
   try { fs.writeFileSync(EVENTKEYS_FILE, JSON.stringify(doc)); }
   catch (e) { console.error(now() + ' event key store unwritable: ' + String((e && e.message) || e)); }
-  return true;
 }
 
 // ---------- lifecycle hooks (workspace-owned scripts; server/hooks.js) ----------
@@ -3802,7 +3816,7 @@ const server = http.createServer(async (req, res) => {
         // a poller that already reported this is not in error, and a hook that
         // exits non-zero on it would ring the bell sixty times instead.
         const key = String(body.key || '').trim().slice(0, 200);
-        if (key && !claimEventKey(card.id, key)) {
+        if (key && seenEventKey(card.id, key)) {
           return sendJson(res, 200, { ok: true, duplicate: true, key });
         }
         const ev = mkEvent(body, { level: 2 });
@@ -3823,7 +3837,11 @@ const server = http.createServer(async (req, res) => {
             { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text },
             source ? { source } : {}));
         }
-        saveBoard(); broadcast();
+        saveBoard();
+        // Only now: the entry is on the card and the queue item is written, so
+        // this key really has been said.
+        if (key) claimEventKey(card.id, key);
+        broadcast();
         return sendJson(res, 200, { ok: true, event: ev });
       }
       if (sub === 'archive' && req.method === 'POST') {
