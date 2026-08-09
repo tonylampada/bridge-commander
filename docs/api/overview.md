@@ -81,7 +81,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `workspace.playbooks` | `→ [playbookId]` | ⚓ · 🤠 (the new-card dropdown, and the ✎ picker on a **Backlog** card's playbook chip — a started card rendered its brief already, so its chip shows the pointer and offers no editor) | list the playbooks a card can point at; read off disk on every call |
 | `lieutenant.create` | `charter → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + charter as launch prompt |
 | `lieutenant.patch` | `color?, avatar?, voice?, name?, charter?, prefix?, ref? → lieutenant` | 🤠 (⋯ → settings) · ⚙️ (ref re-registration on init idempotency) | cosmetics + voice + charter + the card-id `prefix` (refused when another lieutenant already holds it; already-minted ids never change — a new prefix is about what comes next); `name` changes the display only — `id` and the derived session name stay immutable; `avatar: null` clears back to the colored-dot fallback; `voice: ""`/`null` clears back to the board's voice |
-| `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first); kills its session, removes it and its queue, loud level-1 event |
+| `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first); kills its session, removes it, its queue and its chat log, loud level-1 event |
 
 ### card
 
