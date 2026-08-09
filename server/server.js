@@ -3163,6 +3163,16 @@ function scheduleTrigger(s) { return 'schedule:' + s.name; }
 // window forever.
 function scheduleProblem(s) {
   try { parseWhen(s.when); } catch (e) { return e.message; }
+  // A cursor that is not a date is a DEAD window: every due-window question is
+  // asked from it, and all of them answer nothing, forever. board.json is
+  // git-tracked, so a bad merge or a hand edit is how this arrives — and a
+  // clock that quietly stops is the exact failure this card replaces. Said out
+  // loud here for the same reason an unparseable `when` is, and healed the same
+  // way any cursor is: pause and resume re-arms it at now.
+  if (s.lastWindow && Number.isNaN(Date.parse(s.lastWindow))) {
+    return 'cursor "' + s.lastWindow + '" is not a date — this schedule cannot work out what is due'
+      + ' (bc-axi schedule pause ' + s.name + ' && bc-axi schedule resume ' + s.name + ' re-arms it at now)';
+  }
   if (!namedHookFile(WORKSPACE, s.hook)) {
     return 'hook "' + s.hook + '" is gone from ' + hooksDir(WORKSPACE) + ' — this schedule fires nothing';
   }
@@ -3293,10 +3303,13 @@ async function fireSchedule(s) {
 // Two cursors, deliberately, and the difference between them is the whole
 // durability story:
 //
-//   the CLAIM   in memory, keyed by schedule, alive for exactly as long as a
-//               pass is. The windows a pass took stop being due the moment it
-//               takes them, so the ticks that go by while a six-minute hook
-//               runs see the overlap policy and not the same backlog again.
+//   the CLAIM   in memory, keyed by the schedule OBJECT, alive for exactly as
+//               long as a pass is. The windows a pass took stop being due the
+//               moment it takes them, so the ticks that go by while a
+//               six-minute hook runs see the overlap policy and not the same
+//               backlog again. Keyed by the object and not by the name because
+//               a name can be removed and given to a new schedule while a pass
+//               is still running, and that new schedule is not the one firing.
 //   lastWindow  on disk, and it lags the claim on purpose. board.json still
 //               names the pre-pass window for the whole run, so a machine
 //               powered off mid-hook comes back and offers that window again.
@@ -3325,13 +3338,18 @@ async function runSchedule(s, windows) {
     // by a full disk while a hook was running. It is contained like every other
     // background loop's failure.
     try {
-      const reached = requeue !== null ? requeue : claimed.get(s.name);
-      const live = findSchedule(s.name);
-      const stamp = reached === undefined ? '' : new Date(reached).toISOString();
-      // Nothing to say is said with nothing: a serialize of the whole board and
-      // an SSE fan-out to every client is a real cost to pay for a zero-diff.
-      if (live && stamp && live.lastWindow !== stamp) {
-        live.lastWindow = stamp;
+      const reached = requeue !== null ? requeue : claimed.get(s);
+      // FORWARD only, and only onto the schedule this pass actually owns. Both
+      // halves are load-bearing. A `resume` that landed while the hook ran has
+      // already re-armed the cursor at now — a pause is not a queue — and
+      // stamping an older claim over it would make the whole paused interval
+      // due. And a schedule removed and re-added under the same name is a
+      // different schedule: it must not start life owing a dead pass's backlog.
+      // The `queue` pull-back is not a rewind, so it survives this: `w - 1` is
+      // never earlier than the cursor the pass started from.
+      const owned = findSchedule(s.name) === s;
+      if (owned && reached !== undefined && reached > (Date.parse(s.lastWindow) || 0)) {
+        s.lastWindow = new Date(reached).toISOString();
         saveBoard(); broadcast();
       }
     } catch (e) {
@@ -3362,7 +3380,7 @@ function overlapPolicy(s, due) {
   // Against the CLAIM, because a skip belongs to the pass in flight: it reaches
   // board.json when that pass finishes, and a crash before then leaves the
   // window due again — which is the honest answer, since nothing ran.
-  claimed.set(s.name, due[due.length - 1]);
+  claimed.set(s, due[due.length - 1]);
 }
 
 let scheduleTicking = false;
@@ -3392,11 +3410,11 @@ async function scheduleTick() {
       // The claim, when a pass holds one, is ahead of the stored cursor — see
       // runSchedule. Reading past both is what stops a pass being offered the
       // windows it already took.
-      const from = Math.max(Date.parse(s.lastWindow), claimed.get(s.name) || 0);
+      const from = Math.max(Date.parse(s.lastWindow), claimed.get(s) || 0);
       const due = dueWindows(when, from, nowMs, anchor);
       if (!due.windows.length) continue;
       // Its own previous firing is still running: that is what `overlap` is for.
-      if (claimed.has(s.name)) { overlapPolicy(s, due.windows); continue; }
+      if (claimed.has(s)) { overlapPolicy(s, due.windows); continue; }
       const { fire, dropped } = pickWindows(due, s.catchup, SCHEDULER_BOOT);
       if (dropped) {
         // No silent caps: a policy that drops windows says how many, so `all`
@@ -3410,13 +3428,13 @@ async function scheduleTick() {
       // belongs to delivery, and a schedule that retries a broken hook every
       // tick forever is a wake storm, not a recovery. The trace and the owner's
       // drain hold what happened.
-      claimed.set(s.name, due.windows[due.windows.length - 1]);
+      claimed.set(s, due.windows[due.windows.length - 1]);
       // Deliberately not awaited: the tick's job is to decide, not to wait out
       // a hook. Every window still fires in order, one at a time, per schedule.
       // The claim is dropped out here rather than inside, so a pass that somehow
       // dies on the way out cannot wedge the schedule shut forever.
       runSchedule(s, fire)
-        .finally(() => claimed.delete(s.name))
+        .finally(() => claimed.delete(s))
         .catch((e) => console.error(now() + ' schedule ' + s.name + ': '
           + String((e && e.message) || e)));
     }
@@ -3441,9 +3459,16 @@ function publicSchedules() {
     let next = null;
     try {
       const when = parseWhen(s.when);
-      const from = Date.parse(s.lastWindow) || Date.now();
-      const t = nextAfter(when, from, Date.parse(s.created) || 0);
-      next = t ? new Date(t).toISOString() : null;
+      // A schedule that has never fired will arm at now, so now is the honest
+      // answer for an empty cursor. An unparseable one is a different thing
+      // entirely: there is no next fire to compute, and printing a plausible
+      // "in 4m" for a clock that will never fire again is the lie `problem` is
+      // there to replace.
+      const from = s.lastWindow ? Date.parse(s.lastWindow) : Date.now();
+      if (!Number.isNaN(from)) {
+        const t = nextAfter(when, from, Date.parse(s.created) || 0);
+        next = t ? new Date(t).toISOString() : null;
+      }
     } catch (e) { /* an unparseable `when` has no next fire — `problem` says why */ }
     return Object.assign({}, s, { next, last: last.get(s.name) || null, describe: describeWhenSafe(s.when) });
   });

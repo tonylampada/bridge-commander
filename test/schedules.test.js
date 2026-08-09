@@ -630,6 +630,78 @@ test('pause stops the clock for one schedule; resume re-arms it at NOW, not at t
   } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
+// A pause that lands mid-hook is the case the instant-hook test above cannot
+// reach: the pass is still holding a claim from before the pause, and resume
+// has already re-armed the cursor at now. The pass finishing must not drag the
+// cursor back over the resume — a pause is not a queue, so the interval it slept
+// through is gone, not owed.
+//
+// `queue` on purpose: it is the one policy that leaves the claim exactly where
+// the pass took it, so what the finishing pass writes is visible. Under `skip`
+// the overlap policy keeps moving the claim forward after the resume, which
+// hides the rewind rather than preventing it.
+test('a pause and resume across a long firing never drags the cursor back over the resume', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-pausemid-'));
+  const s = await startServer({ dir, env: FAST, seed: (d) => seedWorkspace(d, {
+    script: 'echo ran >> ' + JSON.stringify(path.join(dir, 'fired')) + '\nsleep 3',
+    schedules: [slowTicker('interrupted', { overlap: 'queue' })],
+  }) });
+  const ws = ['--workspace', dir, '--port', String(s.port)];
+  try {
+    for (let i = 0; i < 100 && counted(dir, 'fired') < 1; i++) await sleep(50);
+    assert.strictEqual(counted(dir, 'fired'), 1, 'a window is firing, and the hook holds it for 3s');
+
+    assert.strictEqual((await runCli(['schedule', 'pause', 'interrupted', ...ws])).code, 0);
+    await sleep(1200); // a window or two goes by while it is paused
+    assert.strictEqual(counted(dir, 'fired'), 1, 'a paused schedule fires nothing, even mid-hook');
+    assert.strictEqual((await runCli(['schedule', 'resume', 'interrupted', ...ws])).code, 0);
+    const resumedAt = Date.parse((await s.api('GET', '/api/schedules')).body.schedules[0].lastWindow);
+
+    // let the pass that started BEFORE the pause finish, and then some
+    for (let i = 0; i < 200 && !runsOf(dir, 'interrupted').some((r) => r.ok); i++) await sleep(50);
+    await sleep(300);
+    const after = Date.parse((await s.api('GET', '/api/schedules')).body.schedules[0].lastWindow);
+    assert.ok(after >= resumedAt, 'the finished pass left the cursor at or after the resume ('
+      + iso(after) + ' vs ' + iso(resumedAt) + ') — the paused interval never became due');
+  } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('a cursor that is not a date SAYS SO, instead of being a healthy-looking clock that never fires', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-badcursor-'));
+  const s = await startServer({ dir, env: FAST, seed: (d) => seedWorkspace(d, {
+    script: 'echo ran >> ' + JSON.stringify(path.join(dir, 'fired')),
+    schedules: [overdue('corrupt', 5, { lastWindow: '2026-13-45T99:00' })],
+  }) });
+  const ws = ['--workspace', dir, '--port', String(s.port)];
+  try {
+    let sched = null;
+    for (let i = 0; i < 100 && !(sched && sched.problem); i++) {
+      await sleep(50);
+      sched = (await s.api('GET', '/api/schedules')).body.schedules[0];
+    }
+    assert.match(sched.problem, /cursor "2026-13-45T99:00" is not a date/);
+    assert.strictEqual(sched.next, null, 'and it does not print a plausible next fire for a dead clock');
+    assert.strictEqual(counted(dir, 'fired'), 0, 'nothing fired, which is exactly why it has to say so');
+
+    const show = await runCli(['schedule', 'show', 'corrupt', ...ws]);
+    assert.match(show.stdout, /PROBLEM:/);
+    assert.match(show.stdout, /next fire: never/, 'never, not a number it cannot honour');
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items || [];
+    assert.strictEqual(items.filter((x) => x.kind === 'schedule-failed').length, 1,
+      'the owner heard it once, the way every other problem is announced');
+
+    // and the way out the problem names actually works
+    await runCli(['schedule', 'pause', 'corrupt', ...ws]);
+    await runCli(['schedule', 'resume', 'corrupt', ...ws]);
+    for (let i = 0; i < 100 && sched.problem; i++) {
+      await sleep(50);
+      sched = (await s.api('GET', '/api/schedules')).body.schedules[0];
+    }
+    assert.strictEqual(sched.problem, '', 'pause/resume re-armed the cursor and the clock is alive again');
+    assert.ok(sched.next, 'and it has a next fire once more');
+  } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test('schedules ride board.json — a clone of the workspace carries them', async () => {
   const s = await startServerWithLieutenant();
   try {
