@@ -328,10 +328,31 @@ test('overlap skip does not run — and RECORDS the skip rather than swallowing 
     assert.strictEqual(counted(dir, 'fired'), 1, 'only one actually ran');
     assert.ok(runs.length >= 2, 'and the skips are on the trace: ' + JSON.stringify(runs));
     assert.ok(runs.every((r) => r.skipped), 'every line so far is a skip — the run is still going');
-    assert.match(runs[0].output, /previous firing/, 'a skip says what it lost to');
+    assert.match(runs[0].output, /firing in flight/, 'a skip says what it lost to');
 
     const show = await runCli(['schedule', 'show', 'slow', '--workspace', dir, '--port', String(s.port)]);
     assert.match(show.stdout, /skipped/, 'and a skip reads as a firing, because it is one');
+
+    // A skip is read AFTERWARDS, by somebody reconstructing what the clock did,
+    // so it has to name two different firings and not confuse them: the window
+    // it DROPPED, and the run that was holding the hook. Naming the dropped
+    // window as the running one would be an audit line pointing at itself.
+    const shape = /^skipped: window (\S+) — the firing in flight \(trigger (\S+), started (\S+)\) is still running$/;
+    for (const r of runs) {
+      const m = shape.exec(r.output);
+      assert.ok(m, 'a skip names the dropped window AND the firing it lost to: ' + r.output);
+      assert.strictEqual(m[2], 'schedule:slow', 'the firing in flight is this schedule\'s');
+      assert.ok(Date.parse(m[3]) < Date.parse(m[1]),
+        'the run it lost to started BEFORE the window it dropped: ' + r.output);
+    }
+    // and the start it names is the one the completed run reports on the trace
+    for (let i = 0; i < 100 && !runsOf(dir, 'slow').some((r) => !r.skipped); i++) await sleep(50);
+    const ran = runsOf(dir, 'slow').find((r) => !r.skipped);
+    assert.ok(ran, 'the firing in flight eventually lands on the trace');
+    const named = Date.parse(shape.exec(runs[0].output)[3]);
+    assert.ok(Math.abs(named - Date.parse(ran.started)) < 1000,
+      'the skip points at the run that actually held the hook (' + runs[0].output
+      + ' vs started ' + ran.started + ')');
   } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 
@@ -377,7 +398,7 @@ test('a firing that outlives its own windows never pulls the cursor back over th
     const done = runs.find((r) => r.ok);
     const end = Date.parse(done.started) + done.ms;
     const mine = runs.filter((r) => r.skipped && Date.parse(r.started) < end)
-      .map((r) => Date.parse((/window ([^)]+)\)/.exec(r.output) || [])[1]))
+      .map((r) => Date.parse((/^skipped: window (\S+) /.exec(r.output) || [])[1]))
       .filter((t) => !Number.isNaN(t));
     assert.ok(mine.length >= 1, 'the windows it ran through were skipped, and recorded: '
       + JSON.stringify(runs));

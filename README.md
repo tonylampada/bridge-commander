@@ -221,7 +221,8 @@ silent.
 
 A fresh workspace is initialized with one schedule already working: **`gh-watch`**, every five
 minutes, waking the owner when a check goes red on the `bc/` branch of a live card — once per
-failure, silent on green.
+failure, silent on green. It is seeded ONCE (remembered in `.bridge-commander/gh-watch.seeded`):
+pause it, repoint it or remove it and a later `bc-axi init` leaves your decision alone.
 
 | var | default | meaning |
 |---|---|---|

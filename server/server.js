@@ -3267,6 +3267,18 @@ function recordSkip(s, why) {
   traceSkip(WORKSPACE, { hook: s.hook, trigger: scheduleTrigger(s), reason: 'skipped: ' + why });
 }
 
+// The run this schedule's hook is holding, named the way the EBUSY refusal
+// names it — an operator reading a skip afterwards has to be able to find the
+// firing that displaced the window, and `started` + `trigger` is what identifies
+// it on the trace. A pass between windows holds no run: say so rather than
+// invent one.
+function inFlightFiring(s) {
+  const run = runningHook(WORKSPACE, s.hook);
+  if (!run) return 'the firing in flight is still running';
+  return 'the firing in flight (trigger ' + run.trigger + ', started ' + run.started
+    + (run.card ? ', card ' + run.card : '') + ') is still running';
+}
+
 // fireSchedule(s) -> 'ran' | 'skipped' | 'queued' — one window, awaited to the
 // end. The EBUSY here is the OTHER overlap: not this schedule's own previous
 // firing (the tick handles that, below) but somebody else's run of the same
@@ -3380,7 +3392,12 @@ function overlapPolicy(s, due) {
     cancelNamedHook(WORKSPACE, s.hook).catch(() => {});
     return;
   }
-  for (const w of due) recordSkip(s, 'the previous firing (window ' + new Date(w).toISOString() + ') is still running');
+  // Two different firings in one line, and keeping them apart is the whole
+  // point of writing it: the window being DROPPED, and the firing it lost to.
+  // The run in flight is read off `hook run`'s own registry (started, trigger)
+  // rather than guessed from the windows here, which are the dropped ones.
+  const lost = inFlightFiring(s);
+  for (const w of due) recordSkip(s, 'window ' + new Date(w).toISOString() + ' — ' + lost);
   // Against the CLAIM, because a skip belongs to the pass in flight: it reaches
   // board.json when that pass finishes, and a crash before then leaves the
   // window due again — which is the honest answer, since nothing ran.

@@ -394,18 +394,34 @@ function installStatusLine(workspace) {
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   excludeFromGit(workspace, '.claude/settings.local.json');
 }
-// The first schedule, registered at init and never re-registered: `add` refuses
-// a duplicate name, and a captain who removed gh-watch (or repointed it, or
-// paused it) has said what he wants — an init that put it back would be an
-// upgrade overwriting a decision.
+// The first schedule, registered ONCE per workspace and never again: a captain
+// who removed gh-watch (or repointed it, or paused it) has said what he wants,
+// and an init that put it back would be an upgrade overwriting a decision.
+//
+// A live schedule of that name cannot be the record of the seed, because
+// removing it erases the record along with the schedule — which is exactly the
+// decision that must stick. So the record is a marker in the state dir, next to
+// the rest of the board's state, written the first time the seed lands and
+// consulted before every later init. Nothing infers it from hooks/gh-watch:
+// keeping the hook and dropping the schedule is the repoint case, not a
+// missing seed.
+const GH_WATCH_MARK = 'gh-watch.seeded';
 async function seedGhWatchSchedule(owner) {
+  const mark = path.join(STATE_DIR, GH_WATCH_MARK);
+  if (fs.existsSync(mark)) return;
+  const remember = () => {
+    try { fs.writeFileSync(mark, new Date().toISOString() + '\n'); }
+    catch (e) { console.log('could not record the gh-watch seed (' + e.message + ')'); }
+  };
   let existing = [];
   try { existing = (await request('GET', '/api/schedules')).schedules || []; }
   catch (e) { return; } // an older server on this port has no clock; nothing to seed
-  if (existing.some((s) => s.name === 'gh-watch')) return;
+  // Seeded before this marker existed: adopt it, so the NEXT removal sticks.
+  if (existing.some((s) => s.name === 'gh-watch')) { remember(); return; }
   try {
     await request('POST', '/api/schedules',
       { name: 'gh-watch', hook: 'gh-watch', when: '5m', owner, actor: 'user' });
+    remember();
     console.log('schedule gh-watch registered — red checks on live bc/ branches wake ' + owner + ', every 5m');
   } catch (e) {
     console.log('gh-watch schedule not registered (' + ((e.body && e.body.error) || e.message) + ')');

@@ -118,6 +118,48 @@ test('gh-watch wakes the owner on a red check — once per failure — and stays
   }
 });
 
+// The seed is a one-time act, not a state `init` re-asserts. A captain who
+// removed gh-watch has made a decision, and the next upgrade — `init` is
+// re-enterable, that is how a workspace is upgraded — must not overwrite it.
+// Pausing and repointing already survived, because both leave a schedule of
+// that name behind; a removal leaves nothing, so the seed is remembered
+// separately, in the state dir.
+test('init seeds gh-watch ONCE: a fresh workspace gets it, a removed one stays removed', async () => {
+  const s = await startServer();
+  const bin = path.join(s.dir, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\necho bc-ada\n');
+  fs.chmodSync(path.join(bin, 'tmux'), 0o755);
+  const env = { TMUX: '/tmp/stub,1,0', PATH: bin + ':' + process.env.PATH };
+  const ws = ['--workspace', s.dir, '--port', String(s.port)];
+  const init = () => runCli(['init', '--name', 'Ada', '--id', LT, ...ws], env);
+  const names = async () => ((await s.api('GET', '/api/schedules')).body.schedules || []).map((x) => x.name);
+  try {
+    let r = await init();
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.match(r.stdout, /schedule gh-watch registered/, 'a workspace that never had it gets it');
+    assert.deepStrictEqual(await names(), ['gh-watch']);
+
+    r = await init();                                   // an upgrade over a live one
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /gh-watch registered/, 're-running init is a no-op');
+    assert.deepStrictEqual(await names(), ['gh-watch']);
+
+    // the captain drops the schedule and KEEPS the hook — the seed must not
+    // read the hook file and call that a missing seed
+    r = await runCli(['schedule', 'remove', 'gh-watch', ...ws]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.deepStrictEqual(await names(), []);
+    assert.ok(fs.existsSync(path.join(s.dir, '.bridge-commander', 'hooks', 'gh-watch')),
+      'the hook is untouched by the removal');
+
+    r = await init();
+    assert.strictEqual(r.code, 0, r.stderr);
+    assert.doesNotMatch(r.stdout, /gh-watch registered/, 'an upgrade does not overwrite a removal');
+    assert.deepStrictEqual(await names(), [], 'removed stays removed');
+  } finally { await s.stop(); fs.rmSync(s.dir, { recursive: true, force: true }); }
+});
+
 test('gh-watch is quiet and successful when there is nothing to watch, or no gh at all', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-ghwatch-idle-'));
   fs.mkdirSync(path.join(dir, '.bridge-commander'), { recursive: true });
