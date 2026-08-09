@@ -60,7 +60,7 @@ and its cards carry that color stripe.
 
 | Name | Used by | Description |
 |---|---|---|
-| Charter | lieutenant.create | Name, color, avatar?, prefix? (defaulted from the name, nudged aside when taken), mission text (one free-text blob; projects of interest are prose convention) |
+| Charter | the lieutenant's launch prompt | The lieutenant's standing mission prose — NOT a `lieutenant.create` argument and not board state: it is the memory file `lieutenants/<id>/README.md` (see Lieutenant), read at every launch. `--charter-file` on `init`/`lieutenant create` writes it when absent and never replaces it; editing the file is how a charter changes |
 | Brief | card.start | The card's Playbook rendered against the card: the task description + acceptance criteria handed to the worker |
 | HarnessRef | harness port | Opaque address of a live agent session (tmux target + resume id) |
 
@@ -79,7 +79,7 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `workspace.open` | `dir → workspace` | ⚓ · 🤠 (CLI) | boot or attach to the board WITHOUT the teleport: bootstraps `.bridge-commander/` in cwd if absent, starts the server when down, prints the URL; no founding lieutenant involved |
 | `workspace.addProject` | `url \| path → project` | ⚓ | captain asks to bring a repo into the workspace |
 | `workspace.playbooks` | `→ [playbookId]` | ⚓ · 🤠 (the new-card dropdown, and the ✎ picker on a **Backlog** card's playbook chip — a started card rendered its brief already, so its chip shows the pointer and offers no editor) | list the playbooks a card can point at; read off disk on every call |
-| `lieutenant.create` | `name → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; server spawns its tmux session via the harness port, doctrine + the charter read from `lieutenants/<id>/README.md` as launch prompt |
+| `lieutenant.create` | `name, color?, avatar?, voice?, prefix? → lieutenant` | 🤠 lane button · ⚓ on captain's ask | a new mission/domain deserves its own commander; a defaulted `prefix` is nudged aside when taken, an explicit one that clashes is refused; server spawns its tmux session via the harness port, doctrine + the charter read from `lieutenants/<id>/README.md` as launch prompt |
 | `lieutenant.patch` | `color?, avatar?, voice?, name?, prefix?, ref? → lieutenant` | 🤠 (⋯ → settings) · ⚙️ (ref re-registration on init idempotency) | cosmetics + voice + the card-id `prefix` (refused when another lieutenant already holds it; already-minted ids never change — a new prefix is about what comes next); `name` changes the display only — `id` and the derived session name stay immutable; `avatar: null` clears back to the colored-dot fallback; `voice: ""`/`null` clears back to the board's voice |
 | `lieutenant.retire` | `lieutenant` | 🤠 | explicit only; refused while the lieutenant owns non-archived cards (archive or finish them first); kills its session, removes it, its queue and its chat log, loud level-1 event; the memory file `lieutenants/<id>/README.md` belongs to the role, not the instance — it stays, and the response names its path |
 
@@ -222,6 +222,7 @@ with a card reference, and failures also queue to the owner.
 |---|---|
 | Factory doctrine (roles, columns, delegation, etiquette — ~1 page) | the skill |
 | Captain preferences | workspace `captain.md` (seedable from a global default) |
+| A lieutenant's own charter (its standing mission, hand-editable) | workspace `lieutenants/<id>/README.md` — read into every launch prompt, kept when the lieutenant retires |
 | Per-project engineering learnings | workspace memory, proactively maintained by lieutenants |
 | Project-intrinsic knowledge | the project's own `AGENTS.md`, written by workers via delivery |
 | Card-scoped state | the card: body, thread, events, attributes |
