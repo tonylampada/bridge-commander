@@ -2009,12 +2009,23 @@ async function statusWithLiveness(card, status) {
 const EVENTKEYS_FILE = path.join(STATE_DIR, 'eventkeys.json');
 const EVENTKEY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+// The store is null-prototype all the way down, and that is load-bearing: a key
+// is whatever string a hook chose, and `toString` or `constructor` on an
+// ordinary object answers as if it had already been claimed — the very first
+// event carrying one would be dropped as a duplicate, silently. `__proto__` is
+// worse on the write side: assigning it sets a prototype instead of storing a
+// key, so it never persists and never prunes.
 function readEventKeys() {
+  const out = Object.create(null);
   try {
     const doc = JSON.parse(fs.readFileSync(EVENTKEYS_FILE, 'utf8'));
-    if (doc && typeof doc === 'object' && !Array.isArray(doc)) return doc;
+    if (!doc || typeof doc !== 'object' || Array.isArray(doc)) return out;
+    for (const [c, keys] of Object.entries(doc)) {
+      if (!keys || typeof keys !== 'object' || Array.isArray(keys)) continue;
+      out[c] = Object.assign(Object.create(null), keys);
+    }
   } catch (e) {}
-  return {};
+  return out;
 }
 
 // claimEventKey(cardId, key) -> true when this key is NEW for that card (and it
@@ -2023,12 +2034,11 @@ function claimEventKey(cardId, key) {
   const doc = readEventKeys();
   const cutoff = Date.now() - EVENTKEY_TTL_MS;
   for (const [c, keys] of Object.entries(doc)) {
-    if (!keys || typeof keys !== 'object' || Array.isArray(keys)) { delete doc[c]; continue; }
     for (const [k, ts] of Object.entries(keys)) if (!(typeof ts === 'number' && ts > cutoff)) delete keys[k];
     if (!Object.keys(keys).length) delete doc[c];
   }
-  if (doc[cardId] && doc[cardId][key]) return false; // survived the prune ⇒ still fresh
-  (doc[cardId] = doc[cardId] || {})[key] = Date.now();
+  if (doc[cardId] && doc[cardId][key] !== undefined) return false; // survived the prune ⇒ still fresh
+  (doc[cardId] = doc[cardId] || Object.create(null))[key] = Date.now();
   try { fs.writeFileSync(EVENTKEYS_FILE, JSON.stringify(doc)); }
   catch (e) { console.error(now() + ' event key store unwritable: ' + String((e && e.message) || e)); }
   return true;

@@ -27,6 +27,12 @@ test('the hooks section is a section of the config screen, with the list it pain
   assert.ok(html.includes('data-sec="hooks"'));
   assert.ok(html.includes('id="hk-list"'), 'the list');
   assert.ok(html.includes('id="hk-dir"'), 'and the directory it reads, said once');
+  // A press's only answer must outlive the next board event: paint() clears the
+  // list on every repaint, so the note cannot live inside it.
+  assert.ok(html.includes('id="hk-note"'), 'the note the ▶ and the ✎ answer in');
+  assert.ok(html.indexOf('id="hk-note"') > html.indexOf('id="hk-list"'), 'outside the list, after it');
+  assert.ok(!/listEl\.appendChild\(el\)|listEl\.textContent = '⚠ cannot open/.test(src),
+    'and neither a run outcome nor a failed open is written into the list');
   // the tab is last — the four that were there keep their order
   const tabs = [...html.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
   assert.deepStrictEqual(tabs, ['labels', 'playbooks', 'projects', 'lieutenants', 'hooks']);

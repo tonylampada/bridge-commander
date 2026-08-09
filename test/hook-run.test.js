@@ -19,7 +19,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { runHooks, runNamedHook, listAllHooks, readRuns } = require('../server/hooks.js');
+const { runHooks, runNamedHook, listAllHooks, listHooks, readRuns } = require('../server/hooks.js');
 const { startServerWithLieutenant, withOwner, runCli, sleep } = require('./helper');
 
 function scratchWs() { return fs.mkdtempSync(path.join(os.tmpdir(), 'bc-hookrun-')); }
@@ -71,6 +71,24 @@ test('a non-executable file in hooks/ is not a named hook, and neither is a name
     assert.deepStrictEqual(listAllHooks(ws).map((h) => h.name), ['real']);
     await assert.rejects(() => runNamedHook(ws, 'inert', {}), (e) => e.code === 'ENOHOOK');
     await assert.rejects(() => runNamedHook(ws, '../real', {}), (e) => e.code === 'ENOHOOK');
+  } finally { fs.rmSync(ws, { recursive: true, force: true }); }
+});
+
+// The listing is what the tab and `hook list` read, and every row it prints
+// carries a ✎ that goes through the artifact gate — which matches the board's id
+// shape. A lifecycle hook the gate would refuse is left off the listing rather
+// than offered with a pencil that 404s; the RUNNER is untouched and still runs
+// whatever the workspace installed.
+test('a lifecycle hook whose name the editor gate would refuse is not listed — but still runs', async () => {
+  const ws = scratchWs();
+  try {
+    lifecycle(ws, 'worker-done', '10 deploy.sh', 'echo spacey');
+    lifecycle(ws, 'worker-done', 'sweep.sh', 'echo fine');
+    assert.deepStrictEqual(listAllHooks(ws).map((h) => [h.name, h.event]), [['sweep.sh', 'worker-done']]);
+    assert.deepStrictEqual(listHooks(ws, 'worker-done').map((f) => path.basename(f)),
+      ['10 deploy.sh', 'sweep.sh'], 'the runner still sees both');
+    const r = await runHooks('worker-done', { workspace: ws, card: 'c1' });
+    assert.deepStrictEqual(r.map((x) => x.output), ['spacey', 'fine']);
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 

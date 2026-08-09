@@ -223,6 +223,10 @@
       <section class="ss-sec" id="ss-hooks" data-sec="hooks">
         <div class="ss-title">hooks</div>
         <div id="hk-list"></div>
+        <!-- what the last ▶ or ✎ did. Outside the list on purpose: the list is
+             cleared on every repaint, and a board event a second later would
+             swallow the only answer a press gives. -->
+        <div id="hk-note" class="hk-note"></div>
         <div id="hk-dir" class="ss-note"></div>
       </section>
     </div>

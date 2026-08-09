@@ -23,6 +23,7 @@ import { ago } from './util.js';
 import { openArtifactFile } from './detail.js';
 
 const listEl = document.getElementById('hk-list');
+const noteEl = document.getElementById('hk-note');
 const dirEl = document.getElementById('hk-dir');
 
 let items = null; // [{name, event, file, last, running}] — last answer from the server
@@ -35,6 +36,7 @@ let loading = false;
 // Nothing runs at all while another tab is up.
 export async function renderHooks(reload) {
   if (reload) items = null;
+  if (reload) noteEl.textContent = ''; // entering is a fresh look, not last visit's answer
   if (items) return paint();
   if (loading) return;
   loading = true;
@@ -118,7 +120,7 @@ function action(label, title, onClick) {
   return b;
 }
 
-// The run says what it did on the row itself: the button is where he pressed,
+// The run says what it did just under the list: the button is where he pressed,
 // so it is where the answer belongs. A refusal (409 — already in flight) and a
 // non-zero exit both read here; the output tail is `bc-axi hook runs`.
 async function runNow(h, btn) {
@@ -135,10 +137,7 @@ async function runNow(h, btn) {
   btn.disabled = false;
   items = null;
   await renderHooks();
-  const el = document.createElement('div');
-  el.className = 'hk-note';
-  el.textContent = h.name + ': ' + note;
-  listEl.appendChild(el);
+  noteEl.textContent = h.name + ': ' + note;
 }
 
 // A hook is a file, so editing it is the file screen — the same 💾, the same
@@ -147,6 +146,6 @@ async function edit(h) {
   try {
     await openArtifactFile('file://' + h.file, h.name);
   } catch (e) {
-    listEl.textContent = '⚠ cannot open ' + h.name + ' — ' + e.message;
+    noteEl.textContent = '⚠ cannot open ' + h.name + ' — ' + e.message;
   }
 }

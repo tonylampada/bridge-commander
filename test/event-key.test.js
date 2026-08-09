@@ -100,6 +100,33 @@ test('a key past its 7 days is gone — the same check lands again next week', a
   } finally { await s.stop(); }
 });
 
+// A key is whatever string the hook chose, and some of those strings are the
+// names of things every JavaScript object already answers to. `toString` must
+// not be a duplicate the first time it is seen, and `__proto__` must actually
+// be stored rather than quietly setting a prototype.
+test('a key named after an Object member is an ordinary key — first lands, second dedupes', async () => {
+  const s = await boot();
+  try {
+    // a key already on record for this card, so the store holds a map for it
+    await s.api('POST', '/api/cards/watched/events', { text: 'first', key: 'ci:abc', kind: 'ci' });
+    for (const key of ['__proto__', 'toString', 'constructor', 'hasOwnProperty']) {
+      const first = await s.api('POST', '/api/cards/watched/events', { text: key, key, kind: 'proto' });
+      assert.ok(first.body.event, key + ' is new the first time');
+      assert.ok(!first.body.duplicate);
+      const again = await s.api('POST', '/api/cards/watched/events', { text: key, key, kind: 'proto' });
+      assert.strictEqual(again.body.duplicate, true, key + ' is a duplicate the second time');
+      assert.ok(!again.body.event);
+    }
+    assert.strictEqual((await events(s, 'watched')).filter((e) => e.kind === 'proto').length, 4,
+      'four keys, four entries — no eight, no zero');
+    // and each one really is on record as a key, not as the store's shape
+    const doc = JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-commander', 'eventkeys.json'), 'utf8'));
+    for (const key of ['__proto__', 'toString', 'constructor', 'hasOwnProperty']) {
+      assert.ok(Object.prototype.hasOwnProperty.call(doc.watched, key), key + ' is stored under its own name');
+    }
+  } finally { await s.stop(); }
+});
+
 test('--source is on the timeline entry AND the queue item, and bc-axi drain says it', async () => {
   const s = await boot();
   try {

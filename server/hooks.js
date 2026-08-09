@@ -241,19 +241,33 @@ function listAllHooks(workspace) {
       const file = namedHookFile(workspace, name);
       if (file) out.push({ name, event: '', file });
     } else if (st.isDirectory()) {
-      for (const f of listHooks(workspace, name)) out.push({ name: path.basename(f), event: name, file: f });
+      for (const f of listHooks(workspace, name)) {
+        // The listing is what offers a hook a ✎, and the artifact gate behind
+        // that pencil matches the same id shape — so a name the gate would
+        // refuse is not offered here rather than offered broken. listHooks()
+        // stays as it is: it is the RUNNER, and it keeps running whatever the
+        // workspace already installed.
+        const base = path.basename(f);
+        if (!NAME_RE.test(base)) continue;
+        out.push({ name: base, event: name, file: f });
+      }
     }
   }
   return out;
 }
 
-// eventDirs(workspace) -> the set of names that are event DIRECTORIES. The one
-// thing that tells a lifecycle trace line from a named one when a workspace
-// happens to hold both under the same name: a lifecycle hook's trigger IS its
-// event directory.
-function eventDirs(workspace) {
+// eventDirs(workspace, hooks?) -> the set of names that are event DIRECTORIES.
+// The one thing that tells a lifecycle trace line from a named one when a
+// workspace happens to hold both under the same name: a lifecycle hook's
+// trigger IS its event directory.
+//
+// A caller holding a listing reads the answer straight off it — the hooks tab
+// asks once per paint, and scanning every hook and every event dir a second
+// time to learn what the first scan already said is a readdir + stat per hook
+// for nothing.
+function eventDirs(workspace, hooks) {
   const out = new Set();
-  for (const h of listAllHooks(workspace)) if (h.event) out.add(h.event);
+  for (const h of (hooks || listAllHooks(workspace))) if (h.event) out.add(h.event);
   return out;
 }
 
@@ -390,8 +404,8 @@ function readRuns(workspace, opts) {
 function hookKey(h) { return (h.event ? h.event + '/' : '') + h.name; }
 
 function lastRuns(workspace, hooks) {
-  const events = eventDirs(workspace);
   const want = hooks || listAllHooks(workspace);
+  const events = eventDirs(workspace, hooks && want);
   const out = new Map();
   if (!want.length) return out;
   scanBack(runsFile(workspace), (rec) => {
