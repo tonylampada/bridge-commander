@@ -80,7 +80,7 @@ test('the config row hands off to the screen the way monitoring hands off to the
 // section visible. The pairing is data-tab ⇄ data-sec, so a fourth section
 // (lieutenants) — or a fifth (hooks) — is markup plus one WS_RENDER entry: the
 // switching below never learns its name.
-const SECTIONS = ['labels', 'playbooks', 'projects', 'lieutenants', 'hooks'];
+const SECTIONS = ['labels', 'playbooks', 'projects', 'lieutenants', 'hooks', 'schedules'];
 test('the heading row carries a tab per section', () => {
   const screen = element('settings-screen');
   const tabs = element('ss-tabs');
@@ -115,8 +115,10 @@ function loadSetWsTab() {
   const painted = [];
   const stub = (name) => (reload) => painted.push([name, reload]);
   const make = new Function('document', 'renderLabelManager', 'renderPlaybooks', 'renderProjects',
-    'renderLieutenants', 'renderHooks', mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
-  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'), stub('lieutenants'), stub('hooks'));
+    'renderLieutenants', 'renderHooks', 'renderSchedules',
+    mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
+  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'), stub('lieutenants'),
+    stub('hooks'), stub('schedules'));
   return { secs, tabs, painted, ...api };
 }
 

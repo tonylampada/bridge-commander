@@ -694,6 +694,62 @@ body.resizing { user-select: none; cursor: col-resize; }
 .hk-act:hover:not(:disabled) { color: var(--accent); border-color: var(--accent2); }
 .hk-act:disabled { opacity: 0.35; }
 .hk-note { color: var(--faint); font-size: 11px; font-family: var(--mono); overflow-wrap: anywhere; }
+/* the row a schedule's hook name sent us to — marked until the tab is entered
+   fresh, so it is still marked when he looks up from the tap */
+.hk-focus { background: var(--accent-soft); border-radius: 5px; }
+
+/* schedules: the board's own clock, beside the hooks it fires. Two lines per
+   schedule rather than the hooks tab's one — there are six facts, and the
+   `problem` is a whole sentence that must not be clipped. Otherwise the same
+   density and the same act buttons. */
+#sc-list { display: flex; flex-direction: column; gap: 8px; }
+.sc-row { display: flex; flex-direction: column; gap: 2px; padding-left: 7px;
+  border-left: 2px solid var(--line); }
+/* a broken schedule fires nothing, forever, and looks exactly like a working
+   one — so it is a red bar and a red sentence, not a subtler shade */
+.sc-row.sc-broken { border-left-color: var(--danger); }
+.sc-row.sc-off { border-left-color: var(--warn); }
+.sc-head { display: flex; gap: 8px; align-items: center; cursor: pointer; }
+.sc-name { flex: 0 1 auto; min-width: 0; color: var(--text); font-size: 12.5px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-hook { flex: none; color: var(--dim); font-size: 11px; font-family: var(--mono);
+  max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sc-hook:hover { color: var(--accent); }
+.sc-chip { flex: none; color: var(--warn); font-size: 9.5px; font-weight: 700; letter-spacing: 0.8px;
+  border: 1px solid var(--warn); border-radius: 4px; padding: 0 4px; line-height: 15px; }
+.sc-facts { color: var(--faint); font-size: 11px; font-family: var(--mono); overflow-wrap: anywhere; }
+.sc-ok { color: var(--ok); }
+.sc-bad { color: var(--danger); }
+.sc-skip { color: var(--warn); }
+.sc-never { color: var(--faint); }
+/* in full, wrapping, and loud: the whole sentence is the useful part */
+.sc-problem { color: var(--danger); font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+.sc-acts { flex: none; display: flex; gap: 4px; margin-left: auto; }
+.sc-act { color: var(--dim); font-size: 12px; line-height: 1; padding: 3px 7px;
+  border: 1px solid var(--line); border-radius: 5px; }
+.sc-act:hover:not(:disabled) { color: var(--accent); border-color: var(--accent2); }
+.sc-act:disabled { opacity: 0.35; }
+/* the firings, off the same trace `bc-axi schedule show` reads */
+.sc-runs { display: flex; flex-direction: column; gap: 6px; margin: 4px 0 2px;
+  color: var(--faint); font-size: 11px; font-family: var(--mono); }
+.sc-run-head { color: var(--dim); }
+.sc-out { color: var(--dim); font-size: 10.5px; font-family: var(--mono); line-height: 1.35;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 26vh; overflow-y: auto;
+  border-left: 1px solid var(--line); padding-left: 6px; margin-top: 2px; }
+/* a refusal reads as one — every failure in this section leads with a ⚠ */
+#sc-note.sc-warn { color: var(--danger); }
+/* the add form: closed by default — the list is what the tab is for */
+#sc-add > summary { color: var(--dim); font-size: 11px; cursor: pointer; }
+#sc-add > summary:hover { color: var(--accent); }
+#sc-form { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+#sc-form input, #sc-form select {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 5px; color: var(--text);
+  font: 12px var(--sans); padding: 3px 7px; outline: none; min-width: 0;
+}
+#sc-form #sc-name, #sc-form #sc-when { flex: 1 1 130px; }
+#sc-form input:focus, #sc-form select:focus { border-color: var(--accent2); }
+#sc-form button { background: var(--accent2); border-radius: 5px; color: #eaf6ff; font-size: 12px; padding: 3px 10px; }
+#sc-form button:hover { background: var(--accent); color: #06222f; }
 
 #lm-list { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
 .lm-row { display: flex; gap: 6px; align-items: center; }
@@ -1546,6 +1602,11 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
      opens the #mode-menu dropdown (main.js) */
   #view-seg button { display: none; }
   #view-seg button.on { display: inline-flex; padding: 5px 9px; font-size: 13px; border-left: none; }
+  /* Six config tabs are wider than a phone, and `flex: none` + `overflow:
+     hidden` clipped the last one where no gesture could reach it — a tab that
+     exists and cannot be tapped. The strip scrolls sideways instead; the buttons
+     keep their size, so the thumb targets do not shrink as tabs are added. */
+  #ss-tabs { max-width: 100%; overflow-x: auto; }
 }
 
 /* mobile board-mode dropdown — the move menu's look, anchored under the switcher */

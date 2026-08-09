@@ -174,6 +174,7 @@
           <button type="button" data-tab="projects">projects</button>
           <button type="button" data-tab="lieutenants">lieutenants</button>
           <button type="button" data-tab="hooks">hooks</button>
+          <button type="button" data-tab="schedules">schedules</button>
         </span>
       </div>
       <section class="ss-sec on" id="ss-labels" data-sec="labels">
@@ -228,6 +229,44 @@
              swallow the only answer a press gives. -->
         <div id="hk-note" class="hk-note"></div>
         <div id="hk-dir" class="ss-note"></div>
+      </section>
+      <!-- schedules: the board's own clock, beside the hooks it fires. One block
+           per schedule — what it fires (the hook name jumps to its row on the
+           hooks tab), when, next fire, last fire, owner, and PAUSED where it
+           cannot be mistaken for a greyed row. A schedule with a `problem` says
+           it in full and in red: a hook deleted out from under a schedule is the
+           exact silent failure the clock exists to end. Clicking a block opens
+           its recent firings. The form is here rather than terminal-only because
+           the pickers are the point: a hook that exists and an owner who is
+           registered are the two refusals `add` spends most of its time on. -->
+      <section class="ss-sec" id="ss-schedules" data-sec="schedules">
+        <div class="ss-title">schedules</div>
+        <div id="sc-list"></div>
+        <!-- outside the list on purpose, like the hooks note: paint() clears the
+             list on every board event and would swallow a press's only answer.
+             The server's refusal is shown VERBATIM here — it names the offending
+             `when`, which "invalid" would throw away. -->
+        <div id="sc-note" class="hk-note"></div>
+        <details id="sc-add">
+          <summary>add a schedule</summary>
+          <form id="sc-form">
+            <input id="sc-name" placeholder="name" autocomplete="off">
+            <select id="sc-hook" title="the named hook this fires"></select>
+            <input id="sc-when" placeholder="when — 5m, or 0 9 * * mon" autocomplete="off">
+            <select id="sc-owner" title="the lieutenant a failed firing wakes"></select>
+            <select id="sc-overlap" title="what a firing does when the previous one is still running">
+              <option value="skip">overlap: skip</option>
+              <option value="queue">overlap: queue</option>
+              <option value="restart">overlap: restart</option>
+            </select>
+            <select id="sc-catchup" title="what to do with windows that came due while the board was down">
+              <option value="latest">catch-up: latest</option>
+              <option value="all">catch-up: all</option>
+              <option value="none">catch-up: none</option>
+            </select>
+            <button type="submit">add</button>
+          </form>
+        </details>
       </section>
     </div>
   </section>

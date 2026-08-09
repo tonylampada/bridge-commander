@@ -22,7 +22,8 @@ import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from
 import { renderPlaybooks } from './pbmanager.js';
 import { renderProjects } from './projmanager.js';
 import { renderLieutenants } from './ltmanager.js';
-import { renderHooks } from './hkmanager.js';
+import { renderHooks, focusHook } from './hkmanager.js';
+import { renderSchedules, onOpenHook } from './scmanager.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 
@@ -110,7 +111,7 @@ document.getElementById('config-open').onclick = () => {
 // section is a <section data-sec>, a <button data-tab> and one entry here; the
 // switching below never learns its name.
 const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks, projects: renderProjects,
-  lieutenants: renderLieutenants, hooks: renderHooks };
+  lieutenants: renderLieutenants, hooks: renderHooks, schedules: renderSchedules };
 let wsTab = 'labels';
 function setWsTab(tab) {
   wsTab = tab;
@@ -125,6 +126,10 @@ function setWsTab(tab) {
 for (const b of document.querySelectorAll('#ss-tabs button')) {
   b.onclick = () => setWsTab(b.dataset.tab);
 }
+// A schedule fires a hook, so its row names one — and the name is a way there.
+// The tab switching is this file's, so the schedules section is handed the
+// action instead of reaching for it (the shape filepane's onModeSwitch uses).
+onOpenHook((name) => { setWsTab('hooks'); focusHook(name); });
 
 // ---------- board region mode: kanban ⇄ table ⇄ archived ⇄ file ⇄ settings ----
 // Board and table are two views over the LIVE cards; 🧊 is the archived

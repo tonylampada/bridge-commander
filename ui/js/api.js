@@ -106,6 +106,14 @@ export const api = {
   // ▶ — the same door `bc-axi hook run` posts to; `trigger` is what the trace
   // line records, so a board run reads as a board run forever after
   runHook: (name) => j('POST', '/api/hooks/run', { name, trigger: 'board' }),
+  // the board's own clock. Every one of these is a door `bc-axi schedule …`
+  // already posts to — the screen grew, the API did not.
+  schedules: () => j('GET', '/api/schedules'),
+  // one schedule plus its recent FIRINGS, filtered to its own trigger server-side
+  schedule: (name) => j('GET', '/api/schedules/' + encodeURIComponent(name)),
+  addSchedule: (s) => j('POST', '/api/schedules', Object.assign({ actor: 'user' }, s)),
+  pauseSchedule: (name, paused) => j('PATCH', '/api/schedules/' + encodeURIComponent(name), { paused }),
+  removeSchedule: (name) => j('DELETE', '/api/schedules/' + encodeURIComponent(name)),
   // slash commands the current chat target's harness answers (composer autocomplete)
   commands: (target) => j('GET', '/api/commands?target=' + encodeURIComponent(target)),
 };

@@ -39,6 +39,7 @@ let dir = '';
 let loading = false;
 let stale = false; // a render arrived while a read was in flight
 const running = new Set(); // hook names whose ▶ was pressed HERE — state, not a mutated button
+let focus = ''; // a hook the schedules tab sent us to — highlighted until this tab is re-entered
 
 // Same contract as the playbooks and lieutenants sections: `reload` is what the
 // tab passes on the way in. Every render ASKS, though, not just the entering
@@ -47,7 +48,7 @@ const running = new Set(); // hook names whose ▶ was pressed HERE — state, n
 // nudge this tab gets. That is also why there is no polling — nothing runs at
 // all while another tab is up.
 export async function renderHooks(reload) {
-  if (reload) noteEl.textContent = ''; // entering is a fresh look, not last visit's answer
+  if (reload) { noteEl.textContent = ''; focus = ''; } // entering is a fresh look, not last visit's answer
   if (loading) { stale = true; return; } // the read in flight answers for both askers
   loading = true;
   try {
@@ -67,17 +68,40 @@ export async function renderHooks(reload) {
   paint();
 }
 
+// The other half of the schedules tab's hook link: land on the hooks tab with
+// the hook it named marked, so "which one is nightly-digest firing" is answered
+// by looking rather than by reading a list. main.js switches the tab first, so
+// this only has to say which row — and the highlight lasts until the tab is
+// entered fresh, because a mark that vanished on the next board event would be
+// gone before he looked up.
+export function focusHook(name) {
+  focus = name;
+  renderHooks();
+}
+
 function paint() {
   if (!items) return;
   listEl.textContent = '';
-  for (const h of items) listEl.appendChild(row(h));
+  let marked = null;
+  for (const h of items) {
+    const el = row(h);
+    if (h.name === focus) marked = el;
+    listEl.appendChild(el);
+  }
   if (!items.length) listEl.textContent = 'no hooks';
+  // A hook a schedule names and this list does not have is the deleted-hook
+  // case, and the schedule's own row already says so in full — so the note says
+  // it here too rather than leaving a jump that silently did nothing.
+  if (focus) {
+    if (marked) marked.scrollIntoView({ block: 'nearest' });
+    else noteEl.textContent = 'no hook "' + focus + '" here — the schedule that fires it says so on its row';
+  }
   dirEl.textContent = dir + ' — a file here is a named hook; a directory is a lifecycle event';
 }
 
 function row(h) {
   const el = document.createElement('div');
-  el.className = 'hk-row';
+  el.className = 'hk-row' + (h.name === focus ? ' hk-focus' : '');
   const busy = running.has(h.name);
   el.append(name(h), facts(h, busy), actions(h, busy));
   return el;

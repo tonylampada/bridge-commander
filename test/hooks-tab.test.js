@@ -31,11 +31,15 @@ test('the hooks section is a section of the config screen, with the list it pain
   // list on every repaint, so the note cannot live inside it.
   assert.ok(html.includes('id="hk-note"'), 'the note the ▶ and the ✎ answer in');
   assert.ok(html.indexOf('id="hk-note"') > html.indexOf('id="hk-list"'), 'outside the list, after it');
-  assert.ok(!/listEl\.appendChild\(el\)|listEl\.textContent = '⚠ cannot open/.test(src),
-    'and neither a run outcome nor a failed open is written into the list');
-  // the tab is last — the four that were there keep their order
+  // …and both answers a press can give land in it, rather than in the list the
+  // next repaint clears
+  assert.match(src, /noteEl\.textContent = h\.name \+ ': ' \+ note/, 'the run outcome');
+  assert.match(src, /noteEl\.textContent = '⚠ cannot open/, 'and a failed open');
+  assert.ok(!/listEl\.textContent = '⚠ cannot open/.test(src), 'neither of them into the list');
+  // hooks is where it was — every tab added since goes after it, so the ones
+  // that were here keep their order and nothing moves under a finger
   const tabs = [...html.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepStrictEqual(tabs, ['labels', 'playbooks', 'projects', 'lieutenants', 'hooks']);
+  assert.deepStrictEqual(tabs, ['labels', 'playbooks', 'projects', 'lieutenants', 'hooks', 'schedules']);
 });
 
 test('a row is ONE line at a phone width: the name ellipses, the facts run stays whole', () => {
@@ -110,7 +114,7 @@ test('▶ and ✎ reuse the doors that exist — no hook API of their own', () =
 
 test('the section is wired into the screen the way every other one is', () => {
   const main = fs.readFileSync(ui('js', 'main.js'), 'utf8');
-  assert.match(main, /import \{ renderHooks \} from '\.\/hkmanager\.js'/);
+  assert.match(main, /import \{ renderHooks[^}]*\} from '\.\/hkmanager\.js'/);
   assert.match(main, /hooks: renderHooks/, 'one WS_RENDER entry, nothing else');
   assert.match(src, /export async function renderHooks\(reload\)/);
 });
