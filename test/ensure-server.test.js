@@ -10,10 +10,36 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const { runCli, freePort, sleep } = require('./helper');
+const { runCli, freePort, retryOnPortClash, sleep } = require('./helper');
 
 function tmpWorkspace() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'bc-ensure-'));
+}
+
+function serverLog(dir) {
+  try { return fs.readFileSync(path.join(dir, '.bridge-commander', 'server.log'), 'utf8'); }
+  catch (e) { return ''; }
+}
+
+// `bc-axi open` binds the port inside a server this test does not control, so
+// losing the number to another process is a real possibility and shows up as a
+// boot failure with EADDRINUSE in server.log. That — and nothing else — earns
+// another go on a fresh port; every other failure is the test's own result.
+function open(dir, env = {}) {
+  return retryOnPortClash(async () => {
+    const port = await freePort();
+    const r = await runCli(['open', '--workspace', dir, '--port', String(port)], env);
+    // Two faces of the same lost race: our boot could not bind, or somebody
+    // else's server is answering on the port — in which case `open` reports
+    // success for a board that is not ours, and says whose it is.
+    if (r.code !== 0 && /EADDRINUSE/.test(serverLog(dir))) {
+      throw new Error('EADDRINUSE: boot lost the port');
+    }
+    if (r.code === 0 && !r.stdout.includes('workspace=' + fs.realpathSync(dir))) {
+      throw new Error('EADDRINUSE: ' + port + ' answers for another workspace: ' + r.stdout.trim());
+    }
+    return r;
+  });
 }
 
 async function stopViaPidFile(dir) {
@@ -26,9 +52,8 @@ async function stopViaPidFile(dir) {
 
 test('ensureServer success path: fresh workspace auto-boots, prints the URL, logs to server.log', async () => {
   const dir = tmpWorkspace();
-  const port = await freePort();
   try {
-    const r = await runCli(['open', '--workspace', dir, '--port', String(port)]);
+    const r = await open(dir);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /http:\/\/localhost:\d+\//);
     assert.match(r.stdout, /started workspace=/);
@@ -44,11 +69,10 @@ test('ensureServer success path: fresh workspace auto-boots, prints the URL, log
 
 test('ensureServer boot failure: surfaces a real error pointing at the logfile, non-zero exit, log has the crash', async () => {
   const dir = tmpWorkspace();
-  const port = await freePort();
   const crasher = path.join(dir, 'crash-server.js');
   fs.writeFileSync(crasher, '#!/usr/bin/env node\nconsole.error("boom: simulated crash for test");\nprocess.exit(1);\n');
   try {
-    const r = await runCli(['open', '--workspace', dir, '--port', String(port)], { BC_SERVER_JS: crasher });
+    const r = await open(dir, { BC_SERVER_JS: crasher });
     assert.notStrictEqual(r.code, 0, 'non-zero exit on boot failure');
     assert.match(r.stderr, /server failed to start/);
     assert.match(r.stderr, /server\.log/);
@@ -62,7 +86,6 @@ test('ensureServer boot failure: surfaces a real error pointing at the logfile, 
 
 test('ensureServer stale pid: a live pid recycled to a non-bc process does not block a real boot', async () => {
   const dir = tmpWorkspace();
-  const port = await freePort();
   const stateDir = path.join(dir, '.bridge-commander');
   fs.mkdirSync(stateDir, { recursive: true });
   // A genuinely alive process whose cmdline does NOT mention server.js —
@@ -70,7 +93,7 @@ test('ensureServer stale pid: a live pid recycled to a non-bc process does not b
   const impostor = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 10000)'], { stdio: 'ignore' });
   fs.writeFileSync(path.join(stateDir, 'server.pid'), String(impostor.pid));
   try {
-    const r = await runCli(['open', '--workspace', dir, '--port', String(port)]);
+    const r = await open(dir);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /started workspace=/, 'boots for real instead of no-op-ing on the stale pidfile');
     const pidOnDisk = parseInt(fs.readFileSync(path.join(stateDir, 'server.pid'), 'utf8'), 10);
@@ -85,7 +108,6 @@ test('ensureServer stale pid: a live pid recycled to a non-bc process does not b
 
 test('ensureServer stale pid: a dead pid does not block a real boot (pre-existing behavior, still green)', async () => {
   const dir = tmpWorkspace();
-  const port = await freePort();
   const stateDir = path.join(dir, '.bridge-commander');
   fs.mkdirSync(stateDir, { recursive: true });
   // A pid almost certainly not alive: spawn+exit immediately, then reuse its number.
@@ -93,7 +115,7 @@ test('ensureServer stale pid: a dead pid does not block a real boot (pre-existin
   await new Promise((resolve) => dead.on('exit', resolve));
   fs.writeFileSync(path.join(stateDir, 'server.pid'), String(dead.pid));
   try {
-    const r = await runCli(['open', '--workspace', dir, '--port', String(port)]);
+    const r = await open(dir);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /started workspace=/);
   } finally {

@@ -35,6 +35,23 @@ async function lastLine(name) {
   const out = await t.capture(tgt(name), 5);
   return out.trim().split('\n').pop();
 }
+// A real shell paints its prompt, and echoes what was typed at it, whenever it
+// next gets the CPU — on a busy box that is not any fixed number of
+// milliseconds. So poll for the state the assertion is about instead of
+// sleeping at it. The timeout is only ever reached when the thing never
+// happened at all, and then the last reading is handed back so the assertion
+// below reports what was actually on screen.
+async function settle(probe, timeout = 15000) {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const seen = await probe();
+    if (seen) return seen;
+    if (Date.now() > deadline) return seen;
+    await t.sleep(50);
+  }
+}
+// The pane is ready once its shell has printed a prompt.
+const prompt = (name) => settle(() => lastLine(name));
 // Clear whatever is sitting at the shell prompt (C-u), so each payload is read
 // on a clean line.
 async function clearLine(name) {
@@ -49,12 +66,14 @@ const FLAG_SHAPED = ['-R', '--', '-l', '-N5', '-t=' + OTHER + ':=probe', '-', '-
 test('flag-shaped text is TYPED, never parsed as tmux flags', { skip }, async () => {
   await makeSession(PANE);
   try {
-    await t.sleep(250);
+    await prompt(PANE);
     for (const payload of FLAG_SHAPED) {
       await clearLine(PANE);
       await t.sendLiteral(tgt(PANE), payload);
-      await t.sleep(150);
-      const line = await lastLine(PANE);
+      const line = await settle(async () => {
+        const l = await lastLine(PANE);
+        return l.endsWith(payload) ? l : null;
+      }) || await lastLine(PANE);
       assert.ok(line.endsWith(payload),
         `${JSON.stringify(payload)} should sit at the prompt, got ${JSON.stringify(line)}`);
     }
@@ -67,20 +86,24 @@ test('text cannot retarget send-keys at a pane the caller never named', { skip }
   try {
     // Wait for BOTH shells to paint their prompt before snapshotting the
     // victim — a baseline taken from a blank pane would match a wiped one.
-    await t.sleep(700);
-    const otherBefore = await lastLine(OTHER);
+    await prompt(PANE);
+    const otherBefore = await prompt(OTHER);
     assert.ok(otherBefore, 'the victim pane painted a prompt before we snapshot it');
 
     // The attack: type into PANE, but with a payload that used to be read as
     // `-t <OTHER>` and hand the whole command to somebody else's pane.
     await clearLine(PANE);
     await t.sendLiteral(tgt(PANE), '-t=' + OTHER + ':=probe');
-    await t.sleep(200);
     // A second write that WOULD have landed in OTHER under the old parse.
     await t.sendLiteral(tgt(PANE), 'BREACH');
-    await t.sleep(200);
 
-    assert.match(await lastLine(PANE), /-t=.*BREACH$/, 'both writes stayed in the authorised pane');
+    // Both writes have to LAND before the victim means anything: once they are
+    // on screen in PANE, a retargeted write would already be on screen in OTHER.
+    const attacked = await settle(async () => {
+      const l = await lastLine(PANE);
+      return /-t=.*BREACH$/.test(l) ? l : null;
+    }) || await lastLine(PANE);
+    assert.match(attacked, /-t=.*BREACH$/, 'both writes stayed in the authorised pane');
     assert.strictEqual(await lastLine(OTHER), otherBefore, 'the unauthorised pane was never touched');
   } finally {
     await t.tryTmux('kill-session', '-t', `=${PANE}:`);
@@ -91,7 +114,7 @@ test('text cannot retarget send-keys at a pane the caller never named', { skip }
 test('sendKey still delivers every key name the port grammar allows', { skip }, async () => {
   await makeSession(PANE);
   try {
-    await t.sleep(250);
+    await prompt(PANE);
     const { KEY_RE } = require('../port.js');
     // The punctuation controls the client emits and the letters/named keys.
     // C-[ is Escape on a lot of muscle memory — it must not 502 and it must not
@@ -107,12 +130,14 @@ test('sendKey still delivers every key name the port grammar allows', { skip }, 
 test('multi-line text still rides the buffer path and lands intact', { skip }, async () => {
   await makeSession(PANE);
   try {
-    await t.sleep(250);
+    await prompt(PANE);
     await clearLine(PANE);
     // Leading '-' AND newlines: the branch that was always safe, kept safe.
     await t.sendLiteral(tgt(PANE), '-R first\n-R second');
-    await t.sleep(250);
-    const out = await t.capture(tgt(PANE), 10);
+    const out = await settle(async () => {
+      const o = await t.capture(tgt(PANE), 10);
+      return /-R first/.test(o) && /-R second/.test(o) ? o : null;
+    }) || await t.capture(tgt(PANE), 10);
     assert.match(out, /-R first/);
     assert.match(out, /-R second/);
   } finally { await t.tryTmux('kill-session', '-t', `=${PANE}:`); }
@@ -124,7 +149,7 @@ test('multi-line text still rides the buffer path and lands intact', { skip }, a
 test('a payload at PANE_INPUT_MAX actually gets through send-keys', { skip }, async () => {
   await makeSession(PANE);
   try {
-    await t.sleep(250);
+    await prompt(PANE);
     await clearLine(PANE);
     const { PANE_INPUT_MAX } = require('../port.js');
     await t.sendLiteral(tgt(PANE), 'x'.repeat(PANE_INPUT_MAX)); // rejects → test fails
@@ -137,7 +162,7 @@ test('a payload at PANE_INPUT_MAX actually gets through send-keys', { skip }, as
 test('a payload tmux refuses does not come back inside the error', { skip }, async () => {
   await makeSession(PANE);
   try {
-    await t.sleep(250);
+    await prompt(PANE);
     const payload = 'z'.repeat(64 * 1024); // past any imsg budget, whatever the target
     const err = await t.sendLiteral(tgt(PANE), payload).then(() => null, (e) => e);
     assert.ok(err, 'tmux must reject a payload this size');

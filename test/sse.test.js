@@ -7,7 +7,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { startServer, freePort } = require('./helper');
+const { startServer, freePort, retryOnPortClash } = require('./helper');
 
 // Read the first SSE event from /api/events (the server pushes the full board
 // on connect) and return { event, data }.
@@ -119,15 +119,21 @@ test('POST /api/read persists the marker without broadcasting', async () => {
 
 test('boot id changes across a server restart on the same workspace+port', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-boot-'));
-  const port = await freePort();
   try {
-    const s1 = await startServer({ dir, port });
-    const boot1 = (await s1.api('GET', '/api/board')).body.boot;
-    await s1.stop();
+    // The port is pinned on purpose — same port both times is half of what this
+    // proves — so startServer will not silently move it. Losing it to another
+    // process means running the whole pair again on a new one.
+    const [boot1, boot2] = await retryOnPortClash(async () => {
+      const port = await freePort();
+      const s1 = await startServer({ dir, port });
+      const b1 = (await s1.api('GET', '/api/board')).body.boot;
+      await s1.stop();
 
-    const s2 = await startServer({ dir, port });
-    const boot2 = (await s2.api('GET', '/api/board')).body.boot;
-    await s2.stop();
+      const s2 = await startServer({ dir, port });
+      const b2 = (await s2.api('GET', '/api/board')).body.boot;
+      await s2.stop();
+      return [b1, b2];
+    });
 
     assert.ok(boot1 && boot2);
     assert.notEqual(boot2, boot1);

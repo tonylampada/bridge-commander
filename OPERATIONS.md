@@ -80,8 +80,21 @@ retries on its own.
   `node --test test/*.test.js harness/test/*.test.js`.
 - Never run it under `/tmp` — the ui/js ESM files fail to load there and tests go red for the
   wrong reason.
-- `stale.test.js` and `prwatch.test.js` are load-sensitive: re-run the failing one alone before
-  calling it red.
+- The suite is load-independent — a red test is a real red test, and re-running it alone proves
+  nothing. Two things keep it that way, and new tests have to keep both:
+  - **Ports are reserved, not guessed.** `reservePort()` in `test/helper.js` keeps the socket
+    bound so the kernel cannot hand the same number to another test file, releases it at the
+    instant the server takes over, and `startServer` retries the boot on `EADDRINUSE`. A test
+    that spawns its own binder (the CLI) wraps it in `retryOnPortClash()`. `freePort()` on its
+    own hands back a number nobody is holding: fine as an input to a retrying boot, never as a
+    promise that the port is still yours. A lost race has two faces and both are handled — the
+    boot cannot bind (`EADDRINUSE`), or a stranger's board is already ANSWERING there, which
+    `startServer` catches by checking `/api/status` reports its own child's pid.
+  - **Real shells are polled, not slept at.** `harness/test/tmux-literal.test.js` waits for the
+    prompt (or the typed text) to actually appear; a fixed `sleep` before reading a pane is a
+    flake on any busy box.
+- Genuine saturation is still saturation: a server gets 10s to answer `/api/status`, so a box
+  with no idle core left at all can fail a boot on time alone. That is the machine, not the suite.
 - `test/install/docker-install-test.sh` verifies the README install procedure end-to-end in a
   pristine Docker container; `--demo` also populates a demo board on port 4790 (the fixture
   behind the README screenshot) and keeps the container running.
