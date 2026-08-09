@@ -707,6 +707,28 @@ function createDevServer(opts) {
       }
 
       // ----- chat -----
+      // Older history. The real server pages this off the lieutenant's
+      // append-only log; here the whole fake conversation is already in memory,
+      // so the page is a slice of it — same contract: strictly older than
+      // `before`, oldest-first (render order), an empty list and a 200 past the
+      // beginning of the conversation, `limit=0` = the whole thing. Card threads
+      // ride the board payload and have nothing to page.
+      if (route === 'GET /api/chat') {
+        const target = String(url.searchParams.get('target') || '');
+        const lm = /^lieutenant:(.+)$/.exec(target);
+        if (!lm) return sendJson(res, 400, { error: 'target must be lieutenant:<id> (card threads ride the board payload)' });
+        const lt = findLt(lm[1]);
+        if (!lt) return sendJson(res, 404, { error: 'unknown target: ' + target });
+        // Only an explicit 0 means the whole conversation; anything unreadable
+        // falls back to the default page.
+        const rawLimit = url.searchParams.get('limit');
+        const n = rawLimit == null ? NaN : parseInt(rawLimit, 10);
+        const limit = Number.isNaN(n) ? 50 : Math.max(0, n);
+        const before = String(url.searchParams.get('before') || '');
+        let msgs = lt.chat || [];
+        if (before) msgs = msgs.filter((x) => x && x.ts && x.ts < before);
+        return sendJson(res, 200, { target, before: before || null, messages: limit > 0 ? msgs.slice(-limit) : msgs });
+      }
       if (route === 'POST /api/feedback') {
         const body = JSON.parse(await readBody(req) || '{}');
         const target = String(body.target || '');
