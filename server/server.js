@@ -360,9 +360,17 @@ function saveBoard() {
   for (const lt of board.lieutenants) {
     if (!('charter' in lt)) continue;
     const text = String(lt.charter || '').trim();
+    if (text && !fs.existsSync(charterPath(WORKSPACE, lt.id))) {
+      // A workspace that cannot take the write keeps its key for the next boot
+      // to retry: one stale field must never be what stops the board booting.
+      try { writeCharter(WORKSPACE, lt.id, text); }
+      catch (e) {
+        console.error('charter migration failed for ' + lt.id + ': ' + String((e && e.message) || e));
+        continue;
+      }
+    }
     delete lt.charter;
     moved = true;
-    if (text && !fs.existsSync(charterPath(WORKSPACE, lt.id))) writeCharter(WORKSPACE, lt.id, text);
   }
   if (moved) saveBoard();
 })();
@@ -649,12 +657,17 @@ async function retireLieutenant(id, body) {
   try { fs.unlinkSync(queueFile(id)); } catch (e) { /* none */ }
   try { fs.unlinkSync(ackFile(id)); } catch (e) { /* none */ }
   try { fs.unlinkSync(drainedFile(id)); } catch (e) { /* none */ }
-  // …and so does its conversation, which used to leave with the record itself.
+  // …and so does its conversation, which used to leave with the record itself:
+  // a conversation belongs to the instance that had it. The memory file does
+  // NOT leave — lieutenants/<id>/ belongs to the ROLE, hand-written by the
+  // captain and versioned in git — so retire names the path it leaves behind
+  // rather than deleting it, and a same-slug successor inherits it knowingly.
   try { fs.unlinkSync(chatFile(id)); } catch (e) { /* none */ }
+  const memory = fs.existsSync(charterPath(WORKSPACE, id)) ? charterPath(WORKSPACE, id) : null;
   const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' retired',
     actor: (body && body.actor) || 'user', level: 1 }, {});
   board.events.push(ev);
-  return { ok: true, event: ev };
+  return { ok: true, event: ev, memory };
 }
 
 // ---------- delivery queues (per-lieutenant durable jsonl, GLOBAL seq) ----------
@@ -3234,7 +3247,7 @@ const server = http.createServer(async (req, res) => {
       const r = await retireLieutenant(decodeURIComponent(ltRoute[1]), body);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       saveBoard(); broadcast();
-      return sendJson(res, 200, { ok: true, event: r.event });
+      return sendJson(res, 200, { ok: true, event: r.event, memory: r.memory });
     }
     if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/voice/prefix/ref (init idempotency)
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));

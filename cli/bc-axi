@@ -28,7 +28,7 @@ const gitrev = require(path.join(SELF_DIR, '..', 'server', 'gitrev.js'));
 const { seedPlaybooksAndDuties } = require(path.join(SELF_DIR, '..', 'server', 'playbooks.js'));
 // --charter-file writes the lieutenant's memory file, not a board field — the
 // charter is prose the agent reads at launch (see server/charter.js).
-const { readCharter, writeCharter } = require(path.join(SELF_DIR, '..', 'server', 'charter.js'));
+const { charterPath, readCharter, writeCharter } = require(path.join(SELF_DIR, '..', 'server', 'charter.js'));
 const DEFAULT_PORT = 4780;
 
 function die(msg) { console.error(msg); process.exit(1); }
@@ -306,6 +306,21 @@ function slugId(s) {
   return String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'lt';
 }
 
+// --charter-file seeds a lieutenant's memory file; it never replaces one. The
+// file's existence is the mark — the same rule the boot migration follows —
+// because `init` is documented as safe to re-run and a re-run must not destroy
+// what the lieutenant has since written about itself. There is deliberately no
+// --force: replacing a charter means editing the file, and a flag whose only
+// job is to erase an agent's memory would get reached for in a hurry.
+// The id is checked against the SERVER's rule first, so a `--id ../../foo`
+// never reaches the filesystem on its way to a 400.
+function seedCharter(id, source) {
+  if (!/^[\w][\w.-]*$/.test(id)) die('bad lieutenant id (use [A-Za-z0-9_.-]): ' + id);
+  const file = charterPath(WORKSPACE, id);
+  if (fs.existsSync(file)) console.log('charter left alone — ' + file + ' already exists (edit it to replace it)');
+  else console.log('charter written to ' + writeCharter(WORKSPACE, id, readInput(source)));
+}
+
 // installStatusLine — MERGE the BC statusLine command into the WORKSPACE's
 // .claude/settings.local.json (create if absent), preserving every other key
 // (hooks, permissions, …). Re-run on every init/open so a rewrite self-heals.
@@ -371,7 +386,7 @@ async function cmdInit() {
   const body = { name: opts.name, id, ref, actor: 'user' };
   if (opts.color) body.color = opts.color;
   // Before the register, so a session launched off this record already finds it.
-  if (opts.charterFile) console.log('charter written to ' + writeCharter(WORKSPACE, id, readInput(opts.charterFile)));
+  if (opts.charterFile) seedCharter(id, opts.charterFile);
   try {
     await request('POST', '/api/lieutenants', body);
     console.log('founding lieutenant "' + opts.name + '" (' + id + ') registered — tmux session ' + tmuxSession);
@@ -468,7 +483,7 @@ async function cmdLtCreate() {
   // into the launch prompt.
   if (opts.charterFile) {
     body.id = body.id || slugId(opts.name);
-    writeCharter(WORKSPACE, body.id, readInput(opts.charterFile));
+    seedCharter(body.id, opts.charterFile);
   }
   if (opts.actor) body.actor = opts.actor;
   if (opts.spawn) {
@@ -505,6 +520,9 @@ async function cmdLtRetire() {
   if (!id) die('usage: bc-axi lieutenant retire <id>\n  Refuses while the lieutenant owns non-archived cards; kills its live session.');
   const r = await request('DELETE', '/api/lieutenants/' + encodeURIComponent(id), { actor: opts.actor || 'user' }, 30000);
   console.log('retired ' + id + (r.event ? ' (event #' + r.event.seq + ')' : ''));
+  // The memory file stays. Say so with the path: a later lieutenant minted on
+  // the same id inherits that charter, and that should be a choice, not a surprise.
+  if (r.memory) console.log('memory file kept: ' + r.memory + ' — a new ' + id + ' would be launched on it');
 }
 
 async function cmdLtList() {

@@ -175,9 +175,14 @@ test('cli: lieutenant retire', async () => {
   const args = ['--workspace', s.dir, '--port', String(s.port)];
   try {
     await s.api('POST', '/api/lieutenants', { name: 'Gone', id: 'gone' });
+    // The memory file outlives the record — retire has to say so, with the path,
+    // because the next lieutenant minted on this id would be launched on it.
+    writeCharter(s.dir, 'gone', 'own the departures lounge');
     const r = await runCli(['lieutenant', 'retire', 'gone', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /retired gone/);
+    assert.ok(r.stdout.includes(charterPath(s.dir, 'gone')), 'retire names the memory file it kept');
+    assert.strictEqual(fs.readFileSync(charterPath(s.dir, 'gone'), 'utf8'), 'own the departures lounge\n');
     assert.strictEqual((await s.api('GET', '/api/lieutenants')).body.lieutenants.length, 0);
   } finally {
     await s.stop();
@@ -275,6 +280,21 @@ test('cli: lieutenant create writes the charter to the memory file, and list rea
     r = await runCli(['lieutenant', 'list', '--json', ...args]);
     const parsed = JSON.parse(r.stdout);
     assert.ok(!('charter' in parsed[0]), 'the charter is not board state');
+
+    // A second create against the same id leaves the memory file alone — the
+    // lieutenant may have rewritten it, and it says so instead of clobbering.
+    fs.writeFileSync(charterPath(s.dir, 'ada'), 'What Ada learned since.\n');
+    fs.writeFileSync(charterFile, 'a replacement nobody asked for');
+    r = await runCli(['lieutenant', 'create', '--name', 'Ada', '--charter-file', charterFile, ...args]);
+    assert.notStrictEqual(r.code, 0, 'the duplicate id still 409s');
+    assert.match(r.stdout, /charter left alone/);
+    assert.strictEqual(fs.readFileSync(charterPath(s.dir, 'ada'), 'utf8'), 'What Ada learned since.\n');
+
+    // an id the server would refuse never reaches the filesystem
+    r = await runCli(['lieutenant', 'create', '--name', 'Esc', '--id', '../../escapee', '--charter-file', charterFile, ...args]);
+    assert.notStrictEqual(r.code, 0);
+    assert.match(r.stderr, /bad lieutenant id/);
+    assert.ok(!fs.existsSync(charterPath(s.dir, '../../escapee')), 'nothing written outside the workspace');
   } finally {
     await s.stop();
   }

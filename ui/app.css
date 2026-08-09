@@ -998,8 +998,6 @@ a.a-uri { color: var(--accent); }
 #ls-voice { cursor: pointer; }
 #ls-cancel { color: var(--dim); border: 1px solid var(--line); border-radius: 7px; padding: 6px 13px; font-size: 12.5px; }
 #ls-cancel:hover { color: var(--text); }
-#ls-save { background: var(--accent2); border-radius: 7px; color: #eaf6ff; padding: 6px 15px; font-size: 12.5px; }
-#ls-save:hover { background: var(--accent); color: #06222f; }
 
 /* ---------- pane peek drawer (👁: live terminal view) ---------- */
 #pane-overlay {
