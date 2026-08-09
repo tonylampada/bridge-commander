@@ -77,6 +77,8 @@ as root, so Bridget could never start. The block prints the two ways forward; **
 The normal-user route (`useradd -m dev && su - dev`, then install the skill and run again there) is
 the right default. `--allow-root` launches her with `IS_SANDBOX=1`, turning off a guard that exists
 for good reasons — offer it only for a container they are about to delete, and only if they say yes.
+Everything you hand them to run by hand from then on needs that same `IS_SANDBOX=1` in front of
+`claude --dangerously-skip-permissions`.
 
 If you install Claude Code with `curl -fsSL https://claude.ai/install.sh | bash`, note that it does
 **not** edit anyone's PATH — it prints "Installation complete" and leaves it to you. As root, whose
@@ -111,6 +113,16 @@ form that meets every one of those screens:
 ```sh
 cd <the workspace folder> && claude --dangerously-skip-permissions
 ```
+
+**As root** (only ever reachable via `--allow-root`), that line needs the escape hatch her spawn
+uses, or it dies on the root refusal instead of reaching any of those screens:
+
+```sh
+cd <the workspace folder> && IS_SANDBOX=1 claude --dangerously-skip-permissions
+```
+
+The blocks the command prints already carry the right form for the user running it — copy what it
+printed rather than retyping this.
 
 answer whatever it asks (`2. Yes, I accept` on the consent screen), `/exit`, then run the first-run
 command again. **Never answer those screens for them.** They choose a theme, a login method, what a

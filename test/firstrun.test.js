@@ -236,3 +236,45 @@ test('init --onboard refuses a code project, names what it found, and writes not
     assert.ok(!fs.existsSync(path.join(dir, 'AGENTS.md')), 'refused before scaffolding');
   } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+// Round 5: the last one the tester found. On --allow-root the spawn passes
+// IS_SANDBOX=1, but the line we printed for the PERSON did not — so following
+// the recipe verbatim as root died with the same root refusal it was meant to
+// get them past. Every hand-run line is built in one place now, and this is the
+// test that keeps it that way.
+test('a hand-run recipe printed at root carries the escape hatch root needs', () => {
+  assert.strictEqual(fr.handRunLine('claude', '/root/myfleet', { root: true }),
+    '  cd /root/myfleet && IS_SANDBOX=1 claude --dangerously-skip-permissions');
+  assert.strictEqual(fr.handRunLine('claude', '/home/dev/ws', { root: false }),
+    '  cd /home/dev/ws && claude --dangerously-skip-permissions',
+    'a normal user gets no sandbox flag they do not need');
+
+  // …and every block that prints one gets it from there. Stubbing getuid is the
+  // only way to see the root shape without being root.
+  const realUid = process.getuid;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
+  const oldHome = process.env.HOME;
+  let texts;
+  try {
+    process.getuid = () => 0;
+    process.env.HOME = home;
+    const tail = (t) => 'spawn failed; pane tail:\n' + t;
+    texts = [
+      fr.agentMissingText('claude', '/root/myfleet'),
+      fr.diagnoseSpawn(tail('WARNING: Claude Code running in Bypass Permissions mode'), '/root/myfleet').fix,
+      fr.diagnoseSpawn(tail('Quick safety check: Is this a project you created'), '/root/myfleet').fix,
+      fr.diagnoseSpawn(tail('Choose the text style that looks best'), '/root/myfleet').fix,
+    ];
+  } finally {
+    process.getuid = realUid;
+    process.env.HOME = oldHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+  for (const t of texts) {
+    for (const line of t.split('\n')) {
+      if (!/claude --dangerously-skip-permissions/.test(line)) continue;
+      assert.match(line, /IS_SANDBOX=1 claude --dangerously-skip-permissions/,
+        'a launch line printed at root that root cannot run: ' + line.trim());
+    }
+  }
+});

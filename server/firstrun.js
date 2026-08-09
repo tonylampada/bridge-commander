@@ -224,6 +224,19 @@ function rootBlockText() {
 // the PATH edit to the user; on Debian a normal login shell picks that up from
 // ~/.profile, but root's does not — so as root the very next step dies with
 // "command not found" and re-running loops forever on the same message.
+// The launch line a PERSON runs by hand to clear the setup screens. There is one
+// of these in the whole file on purpose: it is the line a stranger copies
+// verbatim, and every place that prints it has to get the same details right.
+//
+// Round 5: as root it needs IS_SANDBOX=1 — the same escape hatch --allow-root
+// passes to her spawn. Without it the line dies on sight with the very refusal
+// the person is trying to get past, which reads as "these instructions are
+// broken" at exactly the moment they have no other move.
+function handRunLine(bin, here, opts = {}) {
+  const root = opts.root === undefined ? isRoot() : opts.root;
+  return '  cd ' + here + ' && ' + (root ? 'IS_SANDBOX=1 ' : '') + bin + ' --dangerously-skip-permissions';
+}
+
 function agentAtHome(bin) {
   const home = process.env.HOME || '';
   if (!home) return '';
@@ -239,7 +252,7 @@ function agentMissingText(harness, workspace) {
   const runByHand = 'Then run it once by hand IN THE WORKSPACE — it has setup screens of its own that a spawned\n'
     + 'session cannot answer (a theme picker, a login, a trust question about this folder, and a\n'
     + 'one-time bypass-permissions consent screen that only the launch flag raises):\n'
-    + '  cd ' + here + ' && ' + bin + ' --dangerously-skip-permissions';
+    + handRunLine(bin, here);
   if (installed) {
     return '`' + bin + '` is installed at ' + installed + ' but is not on PATH, so neither I nor her\n'
       + 'session can start it. The board is up and her welcome message is on it.\n\n'
@@ -283,7 +296,7 @@ function diagnoseSpawn(text, workspace) {
       + 'skips permission prompts on this machine.',
     'Have the person run the launch line itself, once, and answer 2 (Yes, I accept) — then /exit\n'
       + 'and run the SAME command again:\n'
-      + '  cd ' + here + ' && claude --dangerously-skip-permissions\n'
+      + handRunLine('claude', here) + '\n'
       + '(The preselected option on that screen is "No, exit", so it is theirs to answer, not mine.)')
   || hit(/Quick safety check|trust this folder|Accessing workspace/, 'trust',
     'her pane is on Claude Code\'s folder-trust question for the workspace — it asks about any\n'
@@ -291,7 +304,8 @@ function diagnoseSpawn(text, workspace) {
     'Trust is inherited from a trusted ancestor, so running `claude` in their home directory MAY\n'
       + 'have cleared it (a workspace under ~ usually is) — but it may not have. Run it in the\n'
       + 'workspace itself, answer the question, quit with /exit, then run the SAME command again:\n'
-      + '  cd ' + here + ' && claude')
+      + handRunLine('claude', here) + '\n'
+      + '(The flag is in there so this one sitting also clears the consent screen behind it.)')
   || hit(/cannot be used with root\/sudo privileges/, 'root',
     'claude refuses --dangerously-skip-permissions as root, and exited.',
     'Do the first run as a normal user (`useradd -m dev && su - dev`), or, on a throwaway box,\n'
@@ -301,7 +315,7 @@ function diagnoseSpawn(text, workspace) {
       + '(theme picker), which comes BEFORE any login question.',
     'Run it once by hand IN THE WORKSPACE, answer its questions (there is a folder-trust one about\n'
       + 'this directory after the theme), quit with /exit, then run the SAME command again:\n'
-      + '  cd ' + here + ' && claude')
+      + handRunLine('claude', here))
   || hit(/command not found|ENOENT|not found: claude/, 'missing',
     'the agent CLI is not installed — the shell answered "command not found".',
     'Install it and run the SAME command again:\n  npm i -g @anthropic-ai/claude-code')
@@ -345,5 +359,5 @@ module.exports = {
   IGNORABLE, MANIFESTS, SOURCE_DIRS, SOURCE_EXT, ONBOARDING_STEPS,
   isWorkspaceDir, inspectTarget, listPhrase, refusalText,
   hasBin, isRoot, installCommand, tmuxMissingText, gitIdentity, gitIdentityText, portFree,
-  rootBlockText, agentMissingText, agentAtHome, diagnoseSpawn,
+  rootBlockText, agentMissingText, agentAtHome, handRunLine, diagnoseSpawn,
 };

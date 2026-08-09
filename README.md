@@ -47,7 +47,8 @@ Two things worth knowing before you start, because they are the only ways a firs
   enough).
 - **Not as root.** Claude Code refuses `--dangerously-skip-permissions` as root, so a lieutenant
   cannot start there. Use a normal user (a throwaway container can pass `--allow-root`, and the
-  tool will tell you what that costs). If you need to install Claude Code as that user,
+  tool will tell you what that costs — and that anything you then run by hand needs `IS_SANDBOX=1`
+  in front of it). If you need to install Claude Code as that user,
   `curl -fsSL https://claude.ai/install.sh | bash` puts it in `~/.local/bin` without root.
 
 ## Board views
