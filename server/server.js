@@ -2114,15 +2114,20 @@ const teardownInFlight = new WeakSet();
 async function runCardTeardown(card, w, wtPath, timeoutMs) {
   const command = String((w && w.teardown) || '').trim();
   if (!command) return null;
-  // Nothing left to tear down in a directory that is gone.
+  // Nothing left to tear down in a directory that is gone — nor in one that was
+  // RELEASED, whether or not it is still on disk: under `tool: 'treehouse'` a
+  // release is `treehouse return`, which hands the checkout back to a pool that
+  // may have leased it to another card by now, and tearing down a stranger's
+  // ground is worse than tearing down nothing. This is not the retry rule below
+  // being clawed back: a released worktree has no next release point for THIS
+  // card, so there is nothing left to retry against.
   if (!wtPath || !fs.existsSync(wtPath)) return null;
-  // But a directory that is THERE is not a record that this never ran: a
-  // treehouse checkout is RETURNED to its pool, not deleted, so the archive
-  // backstop would find the same path and stop the same run twice — against a
-  // directory that may already be leased to another card. The record belongs on
-  // the worker, and it records a SUCCESS: a teardown exists to be run at a
-  // release, not once per card, so a failure or a timeout stays retryable at
-  // the next release point — which is the whole reason the restart runs it.
+  if (w.worktree && w.worktree.released) return null;
+  // A directory that is still THERE, on the other hand, is not a record that
+  // this never ran. That record belongs on the worker, and it records a
+  // SUCCESS: a teardown exists to be run at a release, not once per card, so a
+  // failure or a timeout stays retryable at the next release point — which is
+  // the whole reason the restart runs it.
   if (w.teardownRan || teardownInFlight.has(w)) return null;
   teardownInFlight.add(w);
   try {
