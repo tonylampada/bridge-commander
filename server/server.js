@@ -3819,13 +3819,18 @@ const server = http.createServer(async (req, res) => {
         if (key && seenEventKey(card.id, key)) {
           return sendJson(res, 200, { ok: true, duplicate: true, key });
         }
+        // Write-ahead, then the live board — the order queuePush itself keeps.
+        // The append is the step that can throw, and a throw before the push
+        // must leave NOTHING behind in the board object for somebody else's
+        // saveBoard to write out later: the caller was told nothing happened,
+        // so a phantom entry surfacing on the next unrelated save is the one
+        // duplicate --key was never meant to buy. mkEvent has already spent a
+        // board.seq by then, which costs nothing — seq is monotonic, not dense.
         const ev = mkEvent(body, { level: 2 });
         // `source`: who put this here. Rides onto the timeline entry AND the
         // queue item below, so a drain at 2am says who woke you.
         const source = String(body.source || '').trim().slice(0, 60);
         if (source) ev.source = source;
-        card.events.push(ev);
-        card.updated = now();
         // wakeOwner: the door an outside process (a workflow, a cron, a CI hook)
         // uses to wake a card's lieutenant. Same pair every server-side wake
         // already uses — timeline entry AND a queue item — so the escalation is
@@ -3837,6 +3842,8 @@ const server = http.createServer(async (req, res) => {
             { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text },
             source ? { source } : {}));
         }
+        card.events.push(ev);
+        card.updated = now();
         saveBoard();
         // Only now: the entry is on the card and the queue item is written, so
         // this key really has been said.

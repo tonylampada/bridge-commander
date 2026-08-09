@@ -144,6 +144,8 @@ test('a delivery that fails leaves the key UNCLAIMED — the next poll still get
     assert.notStrictEqual(failed.status, 200, 'the wake did not happen and the caller is told so');
     assert.ok(!fs.existsSync(path.join(s.dir, '.bridge-commander', 'eventkeys.json')),
       'and nothing was claimed');
+    assert.strictEqual((await events(s, 'watched')).filter((e) => e.kind === 'ci').length, 0,
+      'and nothing is sitting in the live board waiting for the next unrelated save');
 
     fs.rmdirSync(queue);
     const retry = await s.api('POST', '/api/cards/watched/events', body);
@@ -151,6 +153,8 @@ test('a delivery that fails leaves the key UNCLAIMED — the next poll still get
     assert.ok(retry.body.event, 'the retry is delivered, not swallowed as a duplicate');
     assert.ok(!retry.body.duplicate);
     assert.strictEqual((await feed(s)).filter((i) => i.kind === 'card-event').length, 1);
+    assert.strictEqual((await events(s, 'watched')).filter((e) => e.kind === 'ci').length, 1,
+      'ONE timeline entry for the two attempts — the failed one left no trace');
     // and NOW the key is on record, so the pass after that one is a duplicate
     const doc = JSON.parse(fs.readFileSync(path.join(s.dir, '.bridge-commander', 'eventkeys.json'), 'utf8'));
     assert.ok(doc.watched && doc.watched['ci:abc123']);
