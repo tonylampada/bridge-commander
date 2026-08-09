@@ -301,7 +301,7 @@ test('init SYMLINKS the worker-duties skill, repoints a stale link, and leaves a
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-// ---------- the reference the workspace screen shows ----------
+// ---------- the reference the config screen shows ----------
 //
 // Two lists documenting the two vocabularies, and the whole point of them is
 // that they cannot drift: they are checked against the code that implements

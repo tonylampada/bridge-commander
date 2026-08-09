@@ -473,7 +473,7 @@ export async function artifactWritten(ev) {
 
 // Open any file the artifact routes will serve on the file screen, through the
 // SAME drafts, versions and 409 handling a card artifact gets — which is what
-// makes the workspace screen's playbooks an editing surface without a second
+// makes the config screen's playbooks an editing surface without a second
 // editor, a second file API or a second lost-update story behind them.
 // `opts` adds what the caller knows: `crumb` (where this came from) and
 // `readOnly` — the line a save is refused with, for a file that has to be

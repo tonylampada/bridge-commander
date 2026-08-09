@@ -461,6 +461,18 @@ function registerCardLabels() {
 const LT_PALETTE = ['#58b6ff', '#3ecf8e', '#e6c04a', '#c678dd', '#e2795b', '#56b6c2', '#98c379', '#e06c75'];
 function findLieutenant(id) { return board.lieutenants.find((l) => l.id === id); }
 
+// Is this lieutenant's session actually up? Three answers, and the difference
+// between the last two is why the config screen shows it at all — a dead
+// lieutenant is indistinguishable from a live one on the board:
+//   none — never spawned, so there is no session to be up (no ref)
+//   live — the harness says its session is there
+//   dead — it had one and it is gone (superviseTick is what brings it back)
+async function sessionState(lt) {
+  if (!isHarnessRef(lt.ref)) return 'none';
+  try { return (await harnessFor(lt.ref).alive(lt.ref)) ? 'live' : 'dead'; }
+  catch (e) { return 'dead'; } // an unknown harness cannot answer for it either
+}
+
 // ---------- card-id minting (prefix + counter, both the LIEUTENANT's) ----------
 // A card id is <PREFIX>-<n>: the prefix names the lieutenant that created it,
 // the number is that lieutenant's own counter — incremented at creation, never
@@ -2909,7 +2921,7 @@ function serveStatic(res, rel) {
 }
 
 // The one uri the artifact routes accept that is not listed on a card: a
-// playbook. The workspace screen edits them in the same editor a card artifact
+// playbook. The config screen edits them in the same editor a card artifact
 // opens in, which means the same GET, the same version check and the same 409 —
 // a second file API would be a second place to get all of that wrong. So the
 // widening is exactly one shape and nothing else: `<playbooks dir>/<name>.md`,
@@ -2937,6 +2949,31 @@ function playbookSource(uri) {
   try { if (fs.lstatSync(file).isSymbolicLink()) return ''; }
   catch (e) { if (e.code !== 'ENOENT') return ''; }
   return source;
+}
+
+// The second — and last — uri the artifact routes accept that is no card's:
+// a lieutenant's charter, `<workspace>/lieutenants/<id>/README.md`. The config
+// screen edits it in the same editor a playbook opens in, so it rides the same
+// GET, the same version check and the same 409.
+//
+// The widening is exactly one shape. charterPath() BUILDS the only acceptable
+// path from the workspace root and a REGISTERED id, and the uri has to equal
+// it — which is what refuses an unregistered id, another file in that folder, a
+// subdirectory of it, and a directory prefix from the client all at once.
+// Returns the path when it is one, '' otherwise.
+function charterFile(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return '';
+  const file = uri.slice('file://'.length);
+  // path.resolve is idempotent on a clean absolute path — a `..` segment or a
+  // relative path changes it, so `<dir>/../../board.json` never gets this far.
+  if (path.resolve(file) !== file) return '';
+  if (!board.lieutenants.some((l) => charterPath(WORKSPACE, l.id) === file)) return '';
+  // A symlink named README.md is not the charter: what it points at is what
+  // would be read or written. Refused here rather than followed. (ENOENT is
+  // fine — a lieutenant that has never written its memory file still opens it.)
+  try { if (fs.lstatSync(file).isSymbolicLink()) return ''; }
+  catch (e) { if (e.code !== 'ENOENT') return ''; }
+  return file;
 }
 
 // ---------- server ----------
@@ -3022,8 +3059,9 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/artifact') {
       const uri = url.searchParams.get('uri') || '';
       const raw = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
+      const charter = charterFile(uri);
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri);
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri) || !!charter;
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
       // A promoted chat attachment (attachment://id) resolves to its stored file
       // via the sidecar; file:// / bare paths read directly.
@@ -3080,7 +3118,14 @@ const server = http.createServer(async (req, res) => {
       }
       let data;
       try { data = fs.readFileSync(file); }
-      catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
+      catch (e) {
+        // A lieutenant that has never written its memory file still has one to
+        // open: the board owns the path, so "not written yet" answers as the
+        // empty document at version '' — which is exactly what the PUT below
+        // reads as "I expect no file", so the first 💾 creates it.
+        if (charter && e.code === 'ENOENT') return sendJson(res, 200, { name, content: '', version: '' });
+        return sendJson(res, 404, { error: 'unreadable: ' + e.message });
+      }
       if (data.length > 2e6) return sendJson(res, 413, { error: 'file too large to preview' });
       if (data.includes(0)) return sendJson(res, 415, { error: 'binary file' });
       // The version travels with the content so an editor can hand it back on
@@ -3094,9 +3139,10 @@ const server = http.createServer(async (req, res) => {
     // this machine. The board has no auth of its own (the network boundary is
     // the auth boundary), so every guard below is load-bearing:
     //   - the uri must ALREADY be listed on a live card, or be a WORKSPACE
-    //     playbook (playbookSource) — the GET's allowlist minus the packaged
-    //     playbooks, which are read-only. Anything else is 403, and there is no
-    //     flag to turn it off;
+    //     playbook (playbookSource), or a registered lieutenant's charter
+    //     (charterFile) — the GET's allowlist minus the packaged playbooks,
+    //     which are read-only. Anything else is 403, and there is no flag to
+    //     turn it off;
     //   - file:// only, absolute, no `..` (path.resolve is idempotent on a
     //     clean absolute path), and no symlink anywhere along it (realpath must
     //     come back unchanged), so a listed artifact can never be a door to
@@ -3120,8 +3166,9 @@ const server = http.createServer(async (req, res) => {
       const uri = String(body.uri || '');
       if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
       const pbSource = playbookSource(uri);
+      const charter = charterFile(uri);
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace';
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace' || !!charter;
       if (!listed) {
         // A packaged playbook is readable and never writable: it is a git
         // checkout of this repo, so the edit is a copy into the workspace.
@@ -3146,6 +3193,11 @@ const server = http.createServer(async (req, res) => {
           return sendJson(res, 404, { error: 'unreadable: ' + e.message });
         }
         const dir = path.dirname(file);
+        // A charter's folder is the board's to make: a lieutenant registered
+        // without one has no other way to get `lieutenants/<id>/`. mkdir is a
+        // no-op when it is already there — including when it is a symlink,
+        // which the check right below still refuses.
+        if (charter) { try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) { /* the check below answers */ } }
         try { if (fs.realpathSync(dir) !== dir) throw new Error('symlink'); }
         catch (e2) { return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' }); }
       }
@@ -3227,7 +3279,24 @@ const server = http.createServer(async (req, res) => {
     }
 
     // ----- lieutenants -----
-    if (route === 'GET /api/lieutenants') return sendJson(res, 200, { lieutenants: board.lieutenants });
+    // `live=1` adds what the config screen's lieutenants tab shows and the board
+    // payload cannot: the next card id this lieutenant would mint, how many live
+    // cards it owns, where its charter file is, and — the one fact a board tile
+    // never tells you — whether its session is actually up. The probe shells out
+    // to the harness once per lieutenant, so it is gated the way /api/projects
+    // gates its git reads: the tab asks, nobody else pays.
+    if (route === 'GET /api/lieutenants') {
+      if (!/^(1|true)$/.test(url.searchParams.get('live') || '')) {
+        return sendJson(res, 200, { lieutenants: board.lieutenants });
+      }
+      const lieutenants = await Promise.all(board.lieutenants.map(async (l) => Object.assign({}, l, {
+        cards: board.cards.filter((c) => c.owner === l.id).length,
+        next: l.prefix + '-' + ((l.cardSeq || 0) + 1),
+        memory: charterPath(WORKSPACE, l.id),
+        session: await sessionState(l),
+      })));
+      return sendJson(res, 200, { lieutenants });
+    }
     if (route === 'POST /api/lieutenants') {
       const body = JSON.parse(await readBody(req) || '{}');
       if (body.ref !== undefined && body.ref !== null && !isHarnessRef(body.ref)) {
@@ -3559,7 +3628,7 @@ const server = http.createServer(async (req, res) => {
       // `playbooks` stays the plain id list the picker and the CLI read.
       // `items` says WHERE each one comes from — resolvePlaybook already decides
       // which file wins, so where it landed is the answer, not a second guess at
-      // the same rule. That is what lets the workspace screen open a workspace
+      // the same rule. That is what lets the config screen open a workspace
       // playbook for editing and offer to copy a packaged one first.
       const items = ids.map((id) => {
         const file = resolvePlaybook(STATE_DIR, id);

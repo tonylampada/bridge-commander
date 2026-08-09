@@ -1,6 +1,7 @@
 'use strict';
-// The settings screen: labels left the gear dropdown for a board-region mode of
-// their own, beside the chat. Two things are pinned here — where the markup
+// The config screen (#settings-screen): labels left the gear dropdown for a
+// board-region mode of their own, beside the chat — the gear is this browser's
+// settings, that screen is the board's. Two things are pinned here — the markup
 // lives (ui/index.html), and the rule that decides which modes are remembered
 // (setBoardMode in ui/js/main.js). main.js binds DOM at import, so the function
 // is lifted out of the source and run against stubs, same spirit as
@@ -30,11 +31,11 @@ function element(id) {
   assert.fail('#' + id + ' is never closed');
 }
 
-test('the label manager markup lives in the workspace screen, not the gear panel', () => {
+test('the label manager markup lives in the config screen, not the gear panel', () => {
   const panel = element('settings-panel');
   assert.ok(!panel.includes('id="lm-list"'), 'the gear dropdown no longer holds the label list');
   assert.ok(!panel.includes('id="lm-new"'), 'nor the new-label form');
-  assert.ok(panel.includes('id="workspace-open"'), 'it holds the row that opens the screen instead');
+  assert.ok(panel.includes('id="config-open"'), 'it holds the row that opens the screen instead');
   assert.ok(!panel.includes('id="labels-open"'), 'and the row is no longer called labels');
 
   const screen = element('settings-screen');
@@ -44,15 +45,22 @@ test('the label manager markup lives in the workspace screen, not the gear panel
   assert.ok(element('board-wrap').includes('id="settings-screen"'));
 });
 
-// The gear row is THIS BROWSER's list; the screen it opens is the WORKSPACE —
-// the board everyone shares. The row said "labels" while the screen held one
-// section; it holds two now, so the row names the screen instead of its first
-// section, and the screen says what it is.
-test('the workspace row and heading name the workspace, and playbooks are a section of it', () => {
+// The gear row is THIS BROWSER's list; the screen it opens is the BOARD's own
+// settings — what everyone on it shares. It is what the captain calls it, which
+// is config: the same word on the row and on the heading, and the old
+// "workspace" spelling survives nowhere, id included.
+test('the gear row and the heading say config, and nothing still says workspace-open', () => {
   const panel = element('settings-panel');
-  assert.match(panel, /<button id="workspace-open"[^>]*>🗂 workspace<\/button>/);
+  assert.match(panel, /<button id="config-open"[^>]*>🗂 config<\/button>/);
   const screen = element('settings-screen');
-  assert.match(screen, /class="ss-head">workspace</, 'the screen is headed workspace');
+  assert.match(screen, /class="ss-head">config</, 'the screen is headed config');
+  for (const [where, src] of [['index.html', html], ['main.js', mainSrc], ['app.css', fs.readFileSync(ui('app.css'), 'utf8')]]) {
+    assert.ok(!src.includes('workspace-open'), where + ' carries no workspace-open');
+  }
+});
+
+test('the playbooks section is a section of that screen', () => {
+  const screen = element('settings-screen');
   assert.ok(screen.includes('id="ss-playbooks"'), 'the screen has a playbooks section');
   assert.ok(screen.includes('id="pb-list"'), 'with the list the section renders into');
   assert.ok(screen.includes('id="ss-labels"'), 'and the labels section is still there');
@@ -60,30 +68,30 @@ test('the workspace row and heading name the workspace, and playbooks are a sect
   assert.match(element('ss-playbooks'), /class="ss-title">playbooks</);
 });
 
-test('the workspace row hands off to the screen the way monitoring hands off to the monitor', () => {
-  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?setBoardMode\('settings'\)/);
-  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?spEl\.hidden = true/);
+test('the config row hands off to the screen the way monitoring hands off to the monitor', () => {
+  assert.match(mainSrc, /getElementById\('config-open'\)\.onclick[\s\S]*?setBoardMode\('settings'\)/);
+  assert.match(mainSrc, /getElementById\('config-open'\)\.onclick[\s\S]*?spEl\.hidden = true/);
   // …landing on labels, every time: the tab is not remembered either
-  assert.match(mainSrc, /getElementById\('workspace-open'\)\.onclick[\s\S]*?setWsTab\('labels'\)/);
+  assert.match(mainSrc, /getElementById\('config-open'\)\.onclick[\s\S]*?setWsTab\('labels'\)/);
 });
 
 // ---------- the tab strip ----------
 // The sections stack no longer: one tab per section in the heading row, one
-// section visible. The pairing is data-tab ⇄ data-sec, so the third and fourth
-// section (projects, lieutenants) are markup plus one WS_RENDER entry.
+// section visible. The pairing is data-tab ⇄ data-sec, so a fourth section
+// (lieutenants) is markup plus one WS_RENDER entry — the switching below never
+// learns its name.
+const SECTIONS = ['labels', 'playbooks', 'projects', 'lieutenants'];
 test('the heading row carries a tab per section', () => {
   const screen = element('settings-screen');
   const tabs = element('ss-tabs');
   const tabNames = [...tabs.matchAll(/data-tab="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepStrictEqual(tabNames, ['labels', 'playbooks', 'projects'], 'a button per section');
+  assert.deepStrictEqual(tabNames, SECTIONS, 'a button per section');
   const secNames = [...screen.matchAll(/data-sec="([^"]+)"/g)].map((m) => m[1]);
   assert.deepStrictEqual(secNames, tabNames, 'every tab names a section of the screen');
   // every section lives inside the screen, and labels is the one that starts up
-  assert.ok(screen.includes('id="ss-labels"') && screen.includes('id="ss-playbooks"')
-    && screen.includes('id="ss-projects"'));
+  for (const s of SECTIONS) assert.ok(screen.includes('id="ss-' + s + '"'), s + ' is in the screen');
   assert.match(element('ss-labels'), /class="ss-sec on"/, 'labels is the section shown at rest');
-  assert.match(element('ss-playbooks'), /class="ss-sec"/);
-  assert.match(element('ss-projects'), /class="ss-sec"/);
+  for (const s of SECTIONS.slice(1)) assert.match(element('ss-' + s), /class="ss-sec"/);
   // the active tab is marked the way the ▦☰🧊 switcher marks its mode: .on
   const css = fs.readFileSync(ui('app.css'), 'utf8');
   assert.match(css, /#view-seg button\.on, #ss-tabs button\.on/, 'the tabs reuse the switcher rule');
@@ -98,8 +106,8 @@ function loadSetWsTab() {
   const fnAt = mainSrc.indexOf('function setWsTab', start);
   const end = mainSrc.indexOf('\n}\n', fnAt) + 3;
   assert.ok(start > -1 && fnAt > start && end > fnAt, 'setWsTab found in main.js');
-  const secs = ['labels', 'playbooks', 'projects'].map((sec) => ({ dataset: { sec }, on: false }));
-  const tabs = ['labels', 'playbooks', 'projects'].map((tab) => ({ dataset: { tab }, on: false }));
+  const secs = SECTIONS.map((sec) => ({ dataset: { sec }, on: false }));
+  const tabs = SECTIONS.map((tab) => ({ dataset: { tab }, on: false }));
   for (const el of [...secs, ...tabs]) el.classList = { toggle: (c, v) => { el.on = v; } };
   const document = {
     querySelectorAll: (q) => (q.includes('data-sec') ? secs : tabs),
@@ -107,20 +115,20 @@ function loadSetWsTab() {
   const painted = [];
   const stub = (name) => (reload) => painted.push([name, reload]);
   const make = new Function('document', 'renderLabelManager', 'renderPlaybooks', 'renderProjects',
-    mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
-  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'));
+    'renderLieutenants', mainSrc.slice(start, end) + '\nreturn { setWsTab, wsTab: () => wsTab };');
+  const api = make(document, stub('labels'), stub('playbooks'), stub('projects'), stub('lieutenants'));
   return { secs, tabs, painted, ...api };
 }
 
 test('switching to a tab shows that section and hides every other one', () => {
-  const { setWsTab, secs, tabs, wsTab } = loadSetWsTab();
-  setWsTab('playbooks');
-  assert.strictEqual(wsTab(), 'playbooks');
-  assert.deepStrictEqual(secs.map((s) => s.on), [false, true, false]);
-  assert.deepStrictEqual(tabs.map((t) => t.on), [false, true, false]);
-  setWsTab('labels');
-  assert.deepStrictEqual(secs.map((s) => s.on), [true, false, false]);
-  assert.deepStrictEqual(tabs.map((t) => t.on), [true, false, false]);
+  const only = (name) => SECTIONS.map((s) => s === name);
+  for (const name of SECTIONS) {
+    const { setWsTab, secs, tabs, wsTab } = loadSetWsTab();
+    setWsTab(name);
+    assert.strictEqual(wsTab(), name);
+    assert.deepStrictEqual(secs.map((s) => s.on), only(name));
+    assert.deepStrictEqual(tabs.map((t) => t.on), only(name));
+  }
 });
 
 test('a section paints when its tab is shown, and only then', () => {
@@ -209,7 +217,7 @@ function loadScreenExits(remembered) {
   return { S, renders, ...make(document, localStorage, S, () => {}, () => renders.push(1)) };
 }
 
-test('the workspace heading row carries a back control', () => {
+test('the config heading row carries a back control', () => {
   const row = /<div class="ss-headrow">[\s\S]*?<\/div>/.exec(element('settings-screen'))[0];
   assert.match(row, /id="ss-back"/, 'the ⟵ is in the heading row');
   assert.ok(row.indexOf('id="ss-back"') < row.indexOf('class="ss-head"'), 'left of the title');
@@ -275,7 +283,7 @@ test('the playbooks section holds the reference panel, and does not restate its 
 // The third section, added the way the second one said a third would be: markup,
 // a tab, one WS_RENDER entry, and a module of its own. Showing only — the
 // registry is written from a terminal, never from here.
-test('projects are a section of the workspace screen, painted by their own module', () => {
+test('projects are a section of the config screen, painted by their own module', () => {
   const sec = element('ss-projects');
   assert.match(sec, /class="ss-title">projects</);
   assert.ok(sec.includes('id="pj-list"'), 'with the list the section renders into');
@@ -287,4 +295,49 @@ test('projects are a section of the workspace screen, painted by their own modul
   assert.ok(!/api\.addProject|POST|DELETE/.test(pj), 'and the section only ever shows');
   const apiSrc = fs.readFileSync(ui('js', 'api.js'), 'utf8');
   assert.match(apiSrc, /projects: \(git\) => j\('GET', '\/api\/projects' \+ \(git \? '\?git=1' : ''\)\)/);
+});
+
+// The fourth section, added exactly the way the third one said a fourth would
+// be: markup, a tab, one WS_RENDER entry, a module of its own — and the
+// tab-switching code untouched (asserted above, where SECTIONS drives it).
+test('lieutenants are a section of the config screen, painted by their own module', () => {
+  const sec = element('ss-lieutenants');
+  assert.match(sec, /class="ss-title">lieutenants</);
+  assert.ok(sec.includes('id="lt-list"'), 'with the list the section renders into');
+  assert.match(mainSrc, /import \{ renderLieutenants \} from '\.\/ltmanager\.js'/);
+  assert.match(mainSrc, /const WS_RENDER = \{[^}]*lieutenants: renderLieutenants/, 'one WS_RENDER entry');
+
+  const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
+  assert.match(lt, /api\.lieutenants\(true\)/, 'the tab is what asks for the session probes');
+  const apiSrc = fs.readFileSync(ui('js', 'api.js'), 'utf8');
+  assert.match(apiSrc, /lieutenants: \(live\) => j\('GET', '\/api\/lieutenants' \+ \(live \? '\?live=1' : ''\)\)/);
+});
+
+// The two actions are the point: neither is new. ⚙ calls the switcher's own
+// openLtSettings, ✎ goes through openArtifactFile — so there is no second form
+// over the same four fields and no second editor. And retire is NOT here: the
+// switcher's ⋯ menu is the one door onto it.
+test('the lieutenant row reuses the settings modal and the file screen, and offers no retire', () => {
+  const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
+  assert.match(lt, /import \{ openLtSettings \} from '\.\/ltswitcher\.js'/);
+  assert.match(lt, /onclick[^\n]*openLtSettings\(l\.id\)|\(\) => openLtSettings\(l\.id\)/,
+    'the ⚙ action calls the existing handler');
+  assert.match(fs.readFileSync(ui('js', 'ltswitcher.js'), 'utf8'), /export function openLtSettings/);
+
+  assert.match(lt, /import \{ openArtifactFile \} from '\.\/detail\.js'/);
+  assert.ok(!/mountFileEditor|CodeMirror|ls-color|ls-grid|ls-voice/.test(lt),
+    'and mounts neither an editor nor a second settings form');
+  assert.ok(!/retire/i.test(lt), 'retiring stays in the switcher — one door onto the destructive verb');
+});
+
+// The facts the row exists for. Three of them are nowhere else in the UI: the
+// next card id, the live-card count, and whether the session is up.
+test('a lieutenant row reports the prefix, the next number, the cards and the session', () => {
+  const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
+  assert.match(lt, /'mints', l\.next/, 'the id the next card would carry');
+  assert.match(lt, /l\.cards === 1 \? '1 live card'/, 'the live-card count');
+  assert.match(lt, /SESSION\[l\.session\]/, 'and the session state');
+  for (const state of ['live', 'dead', 'none']) {
+    assert.match(lt, new RegExp('\\n  ' + state + ': \\{'), state + ' is a state the row says out loud');
+  }
 });

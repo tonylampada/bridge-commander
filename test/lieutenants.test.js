@@ -506,3 +506,81 @@ test('prefix + counter are backfilled for lieutenants that predate them, without
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------- GET /api/lieutenants?live=1 ----------
+// What the config screen's lieutenants tab reads, and only it: the probe shells
+// out to the harness once per lieutenant, so the plain list stays the cheap read
+// the CLI and everything else use. Four facts the board payload cannot give —
+// the id the next card would carry, how many live cards are owned, where the
+// charter file is, and whether the session is actually up.
+test('live=1 adds the next card id, the live-card count, the charter path and the session state', async () => {
+  const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
+  const s = await startServer({
+    dir,
+    // the supervision loop is off: a dead lieutenant must stay dead long enough
+    // to be reported as dead, which is the whole point of the column
+    env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0' },
+    seed(d) {
+      fs.mkdirSync(path.join(d, '.bridge-commander'), { recursive: true });
+      fs.writeFileSync(path.join(d, '.bridge-commander', 'board.json'), JSON.stringify({
+        lieutenants: [
+          // up: the fake harness reads a session marker file as alive
+          { id: 'ada', name: 'Ada', color: '#58b6ff', prefix: 'ADA', cardSeq: 6, chat: [],
+            ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp' } },
+          // had a session, marker gone
+          { id: 'grace', name: 'Grace', color: '#3ecf8e', prefix: 'GRC', cardSeq: 0, chat: [],
+            ref: { harness: 'fake', session: 'bc-lt-grace', cwd: '/tmp' } },
+          // registered, never spawned
+          { id: 'hedy', name: 'Hedy', color: '#e6c04a', prefix: 'HED', cardSeq: 41, chat: [] },
+        ],
+        cards: [
+          { id: 'ADA-5', title: 'one', type: 'implementation', owner: 'ada', column: 'backlog',
+            labels: [], attributes: {}, body: '', events: [], thread: [] },
+          { id: 'ADA-6', title: 'two', type: 'implementation', owner: 'ada', column: 'working',
+            labels: [], attributes: {}, body: '', events: [], thread: [] },
+        ],
+      }));
+      fs.mkdirSync(fdir, { recursive: true });
+      fs.writeFileSync(path.join(fdir, 'bc-lt-ada.json'), JSON.stringify({ cwd: '/tmp', resumeId: null }) + '\n');
+    },
+  });
+  try {
+    // the plain read is untouched — no probe, no extra fields
+    const plain = (await s.api('GET', '/api/lieutenants')).body.lieutenants;
+    assert.deepStrictEqual(plain.map((l) => l.id), ['ada', 'grace', 'hedy']);
+    for (const l of plain) assert.ok(!('session' in l) && !('next' in l), l.id + ' carries no probe');
+
+    const r = await s.api('GET', '/api/lieutenants?live=1');
+    assert.strictEqual(r.status, 200);
+    const lts = r.body.lieutenants;
+    assert.deepStrictEqual(lts.map((l) => l.id), ['ada', 'grace', 'hedy'], 'ordered as the board orders them');
+    const by = Object.fromEntries(lts.map((l) => [l.id, l]));
+
+    // the number it would mint next — the id of the card he has not created yet
+    assert.strictEqual(by.ada.next, 'ADA-7');
+    assert.strictEqual(by.hedy.next, 'HED-42');
+    assert.strictEqual(by.grace.next, 'GRC-1');
+    for (const l of lts) assert.strictEqual(l.prefix, l.next.split('-')[0], l.id + ' mints under its own prefix');
+
+    // live cards owned — the count matches the board
+    const board = (await s.api('GET', '/api/board')).body;
+    for (const l of lts) {
+      assert.strictEqual(l.cards, board.cards.filter((c) => c.owner === l.id).length, l.id + ' card count');
+    }
+    assert.strictEqual(by.ada.cards, 2);
+    assert.strictEqual(by.hedy.cards, 0);
+
+    // …and the fact the board never shows
+    assert.strictEqual(by.ada.session, 'live');
+    assert.strictEqual(by.grace.session, 'dead');
+    assert.strictEqual(by.hedy.session, 'none');
+
+    // the charter path is the server's to derive — the client never spells it
+    for (const l of lts) assert.strictEqual(l.memory, charterPath(dir, l.id));
+  } finally {
+    await s.stop();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(fdir, { recursive: true, force: true });
+  }
+});

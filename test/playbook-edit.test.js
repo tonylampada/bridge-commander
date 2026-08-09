@@ -1,5 +1,5 @@
 'use strict';
-// Editing a playbook through the artifact routes — what the workspace screen's
+// Editing a playbook through the artifact routes — what the config screen's
 // playbooks section rides on.
 //
 // A playbook is a file the captain owns, so editing one is the file screen and

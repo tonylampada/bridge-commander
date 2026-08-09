@@ -21,6 +21,7 @@ import { renderNotifications, onOpenCard as notifOnOpenCard } from './notify.js'
 import { renderLabelManager, renderPicker, pickerIsOpen, closeLabelPicker } from './labels.js';
 import { renderPlaybooks } from './pbmanager.js';
 import { renderProjects } from './projmanager.js';
+import { renderLieutenants } from './ltmanager.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 
@@ -87,10 +88,10 @@ document.getElementById('mon-open').onclick = () => {
   gearBtn.classList.remove('on');
   openMonitor();
 };
-// ⚙️ → workspace: same handoff, to the workspace screen in the board region (so
-// the chat stays at its side). Mobile lives in the board tab, like the file
-// screen. The dropdown is this browser; the screen is the board everyone shares.
-document.getElementById('workspace-open').onclick = () => {
+// ⚙️ → config: same handoff, to the config screen in the board region (so the
+// chat stays at its side). Mobile lives in the board tab, like the file screen.
+// The dropdown is this browser; the screen is the board everyone shares.
+document.getElementById('config-open').onclick = () => {
   spEl.hidden = true;
   gearBtn.classList.remove('on');
   S.view = 'board';
@@ -98,7 +99,7 @@ document.getElementById('workspace-open').onclick = () => {
   setBoardMode('settings');
 };
 
-// ---------- workspace screen tabs ----------
+// ---------- config screen tabs ----------
 // One tab per section, one section visible. The tab is a class toggle over
 // [data-sec] plus one variable — nothing is persisted, so entering from the
 // gear always lands on labels, the same way the screen itself is not
@@ -107,7 +108,7 @@ document.getElementById('workspace-open').onclick = () => {
 // the source afresh on the way in), the render loop repaints it without. A new
 // section is a <section data-sec>, a <button data-tab> and one entry here; the
 // switching below never learns its name.
-const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks, projects: renderProjects };
+const WS_RENDER = { labels: renderLabelManager, playbooks: renderPlaybooks, projects: renderProjects, lieutenants: renderLieutenants };
 let wsTab = 'labels';
 function setWsTab(tab) {
   wsTab = tab;

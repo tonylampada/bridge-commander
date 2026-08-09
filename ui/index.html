@@ -94,12 +94,13 @@
   <div class="sp-row">
     <button id="mon-open" title="live machine & per-agent load (samples only while open)">📈 machine load</button>
   </div>
-  <!-- everything above this line is about THIS BROWSER. The workspace is not:
-       it is the board itself, shared by everyone on it, so it hands off to a
-       screen of its own. -->
-  <div class="sp-title">workspace</div>
+  <!-- everything above this line is about THIS BROWSER. The config screen is
+       not: it is the board itself, shared by everyone on it, so it hands off to
+       a screen of its own. This dropdown is the browser's settings; that screen
+       is the board's. -->
+  <div class="sp-title">config</div>
   <div class="sp-row">
-    <button id="workspace-open" title="labels and playbooks — the board's own settings">🗂 workspace</button>
+    <button id="config-open" title="labels, playbooks, projects and lieutenants — the board's own settings">🗂 config</button>
   </div>
 </div>
 
@@ -154,9 +155,8 @@
     <div id="table"></div>
     <div id="archive"></div>
     <div id="filepane"></div>
-    <!-- the workspace screen: one section per thing the BOARD owns, as opposed
-         to the browser looking at it. Labels and playbooks today; projects and
-         lieutenants move in later. -->
+    <!-- the config screen: one section per thing the BOARD owns, as opposed to
+         the browser looking at it — labels, playbooks, projects, lieutenants. -->
     <div id="settings-screen">
       <!-- the heading row carries the tabs: one button per section, wearing the
            same segmented look as the ▦☰🧊 switcher. data-tab pairs with the
@@ -167,11 +167,12 @@
            without the ⟵ there is no exit. Wears the file screen's crumb look. -->
       <div class="ss-headrow">
         <button type="button" id="ss-back" class="fs-back" title="back to the board">⟵</button>
-        <div class="ss-head">workspace</div>
-        <span id="ss-tabs" role="group" aria-label="workspace section">
+        <div class="ss-head">config</div>
+        <span id="ss-tabs" role="group" aria-label="config section">
           <button type="button" data-tab="labels" class="on">labels</button>
           <button type="button" data-tab="playbooks">playbooks</button>
           <button type="button" data-tab="projects">projects</button>
+          <button type="button" data-tab="lieutenants">lieutenants</button>
         </span>
       </div>
       <section class="ss-sec on" id="ss-labels" data-sec="labels">
@@ -201,6 +202,15 @@
       <section class="ss-sec" id="ss-projects" data-sec="projects">
         <div class="ss-title">projects</div>
         <div id="pj-list"></div>
+      </section>
+      <!-- lieutenants: who is on this board, what each one mints next, and the
+           one fact the board never shows — whether its session is still up.
+           Both actions reuse what exists: ⚙ opens the switcher's own settings
+           modal, ✎ opens the charter on the file screen. Retiring stays in the
+           switcher's ⋯ menu — one path to the destructive verb. -->
+      <section class="ss-sec" id="ss-lieutenants" data-sec="lieutenants">
+        <div class="ss-title">lieutenants</div>
+        <div id="lt-list"></div>
       </section>
     </div>
   </section>

@@ -220,7 +220,7 @@ function briefVars(b) {
   return vars;
 }
 
-// ---------- the reference the workspace screen shows ----------
+// ---------- the reference the config screen shows ----------
 //
 // Editing a playbook takes two vocabularies — the placeholders briefVars()
 // fills and the keys FM_KEYS accepts — and neither is readable from the UI.

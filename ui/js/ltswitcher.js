@@ -174,7 +174,9 @@ const lsPrefix = document.getElementById('ls-prefix');
 const lsVoice = document.getElementById('ls-voice');
 const lsGrid = document.getElementById('ls-grid');
 let lsLtId = null;
-function openLtSettings(ltId) {
+// Exported for the config screen's lieutenants tab: its ⚙ is THIS modal, not a
+// second form over the same four fields.
+export function openLtSettings(ltId) {
   const l = lieutenant(ltId);
   if (!l) return;
   lsLtId = ltId;

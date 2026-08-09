@@ -1,4 +1,4 @@
-// The workspace screen's projects section: the registry a card's `repo`
+// The config screen's projects section: the registry a card's `repo`
 // attribute has to name, and the facts that decide whether a start off one will
 // work — how many live cards point at it, where it pushes, and the branch a
 // fresh worktree starts detached from.

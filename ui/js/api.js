@@ -99,6 +99,7 @@ export const api = {
   // server for the two reads off each clone (remote, default branch) — the
   // projects tab wants them, nothing else does, and nothing else pays for them.
   projects: (git) => j('GET', '/api/projects' + (git ? '?git=1' : '')),
+  lieutenants: (live) => j('GET', '/api/lieutenants' + (live ? '?live=1' : '')),
   // slash commands the current chat target's harness answers (composer autocomplete)
   commands: (target) => j('GET', '/api/commands?target=' + encodeURIComponent(target)),
 };

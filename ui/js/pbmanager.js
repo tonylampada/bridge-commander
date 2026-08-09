@@ -1,4 +1,4 @@
-// The workspace screen's playbooks section: every playbook the board can start
+// The config screen's playbooks section: every playbook the board can start
 // a card with, and the way to edit one.
 //
 // A playbook is a file, so editing one is the file screen — the same editor,
