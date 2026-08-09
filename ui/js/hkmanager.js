@@ -98,7 +98,8 @@ function outcome(r) {
   if (!r) return 'never ran';
   const when = ago(r.started); // 'now' | '4m' | '2h' | '3d'
   return 'ran ' + (when === 'now' ? 'just now' : when + ' ago') + ' · '
-    + (r.timedOut ? 'timed out' : r.error ? 'never started' : 'exit ' + r.code);
+    + (r.timedOut ? 'timed out' : r.error ? 'never started'
+      : r.code === null ? 'killed' : 'exit ' + r.code);
 }
 
 // `busy` is a press this tab is still waiting on; h.running is the server's own
@@ -161,7 +162,8 @@ async function runNow(h) {
   let note;
   try {
     const r = await api.runHook(h.name);
-    note = r.run.timedOut ? 'timed out' : r.run.error ? 'never started' : 'exit ' + r.run.code;
+    note = r.run.timedOut ? 'timed out' : r.run.error ? 'never started'
+      : r.run.code === null ? 'killed' : 'exit ' + r.run.code;
   } catch (e) {
     note = e.message;
   }

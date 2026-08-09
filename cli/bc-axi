@@ -1030,7 +1030,8 @@ function ago(iso) {
 // How a run ended, in the words the board's row uses.
 function runOutcome(r) {
   if (!r) return 'never ran';
-  return 'ran ' + ago(r.started) + ' · ' + (r.timedOut ? 'timed out' : r.error ? 'failed to start' : 'exit ' + r.code);
+  return 'ran ' + ago(r.started) + ' · ' + (r.timedOut ? 'timed out' : r.error ? 'failed to start'
+    : r.code === null ? 'killed' : 'exit ' + r.code);
 }
 
 async function cmdHookList() {
@@ -1068,9 +1069,12 @@ async function cmdHookRun() {
   }
   const run = r.run;
   if (run.output) process.stdout.write(run.output.endsWith('\n') ? run.output : run.output + '\n');
-  const how = run.timedOut ? 'TIMED OUT' : run.error ? 'FAILED TO START (' + run.error + ')' : 'exit ' + run.code;
+  const how = run.timedOut ? 'TIMED OUT' : run.error ? 'FAILED TO START (' + run.error + ')'
+    : run.code === null ? 'KILLED' : 'exit ' + run.code;
   console.log('hook ' + name + ' ' + how + ' in ' + run.ms + 'ms (trigger ' + run.trigger + ')');
-  if (!run.ok) process.exit(1); // the caller's own exit code follows the hook's
+  // exitCode, not exit(): the output tail written just above is what this command
+  // exists to show, and process.exit() would drop it on the way through a pipe.
+  if (!run.ok) process.exitCode = 1; // the caller's own exit code follows the hook's
 }
 
 async function cmdHookRuns() {
@@ -1080,7 +1084,8 @@ async function cmdHookRuns() {
   if (opts.json) return console.log(JSON.stringify(r.runs, null, 2));
   if (!r.runs.length) return console.log(name ? 'no runs recorded for ' + name : 'no hook runs recorded yet');
   for (const run of r.runs) {
-    const how = run.timedOut ? 'timed out' : run.error ? 'failed to start' : 'exit ' + run.code;
+    const how = run.timedOut ? 'timed out' : run.error ? 'failed to start'
+      : run.code === null ? 'killed' : 'exit ' + run.code;
     console.log(hhmm(run.started) + '  ' + run.hook + '  ' + run.trigger
       + (run.card ? ' ' + run.card : '') + '  ' + how + '  ' + run.ms + 'ms');
     if (run.output) console.log('    ' + run.output.replace(/\n/g, '\n    '));

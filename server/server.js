@@ -3370,8 +3370,11 @@ const server = http.createServer(async (req, res) => {
         // A curated .html/.htm artifact (teach-me page, report) is a self-contained
         // document meant to be *rendered*: serve it as text/html inline so a page
         // opened here shows, not its source. Scoped to plain file artifacts, not
-        // attachments (an uploaded .html keeps its neutralized download behavior).
-        const isHtml = !am && (ext === '.html' || ext === '.htm');
+        // attachments (an uploaded .html keeps its neutralized download behavior)
+        // and never a HOOK: a hook is a script whose basename the writer chooses,
+        // so `hooks/report.html` is a legal hook path and rendering it would make
+        // the gate that writes hooks a way to run script on the board's origin.
+        const isHtml = !am && !hook && (ext === '.html' || ext === '.htm');
         const ctype = isHtml ? 'text/html; charset=utf-8'
           : am ? (attMime || 'application/octet-stream')
           : (ARTIFACT_MIME[ext] || 'application/octet-stream');

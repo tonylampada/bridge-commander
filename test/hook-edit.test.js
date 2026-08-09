@@ -116,6 +116,30 @@ test('the FIRST hook in a workspace creates hooks/ — the board owns that name'
   } finally { await s.stop(); }
 });
 
+// The gate that writes hooks lets the writer pick the basename, and NAME_RE says
+// a dot is fine — so `report.html` is a legal hook. The viewer's one exemption
+// (a curated .html artifact renders instead of downloading) exists for a file the
+// captain promoted onto a card by hand; a hook is never that. So a hook keeps the
+// sandbox and the attachment disposition every other non-card artifact gets, and
+// writing one is not a way to get script onto the board's own origin.
+test('a hook named report.html is served sandboxed and as an attachment, never rendered', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    const file = path.join(hooksDir(s.dir), 'report.html');
+    const uri = uriOf(file);
+    const body = '<!doctype html><script>fetch("/api/board")</script>';
+    const put = await s.api('PUT', '/api/artifact', { uri, content: body, version: '' });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+
+    const res = await fetch(s.base + '/api/artifact?uri=' + encodeURIComponent(uri) + '&raw=1');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-security-policy'), 'sandbox');
+    assert.match(res.headers.get('content-disposition') || '', /^attachment/);
+    assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+    assert.strictEqual(await res.text(), body);
+  } finally { await s.stop(); }
+});
+
 // The same thing at the surface a human types. The two halves above proved the
 // SHAPE — a 200 with an empty version, a PUT that creates — and missed the
 // surface: `bc-axi artifact write` guarded on a FALSY --version, so the one
