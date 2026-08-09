@@ -3186,15 +3186,19 @@ function scheduleProblem(s) {
 // board's bell is level 1 because a schedule that stopped firing is exactly the
 // silent failure this card exists to end; a level-2 line marks the recovery.
 // An unregistered owner cannot be woken, so the board stream is all there is.
+// The kind travels onto the QUEUE ITEM as well as the timeline entry, and the
+// two must be the same one: the drain dispatches on the item's kind alone, so a
+// recovery labelled `schedule-failed` reaches its owner headlined "a firing
+// failed" and advised to fix the hook and pause the schedule — advice that is
+// exactly backwards for the schedule that just told them it is working again.
 function announceScheduleProblem(s, problem) {
   const text = problem
     ? 'schedule ' + s.name + ' cannot fire: ' + problem
     : 'schedule ' + s.name + ' is healthy again';
-  board.events.push(mkEvent({ text, actor: 'server', level: problem ? 1 : 2 },
-    { kind: problem ? 'schedule-failed' : 'schedule' }));
+  const kind = problem ? 'schedule-failed' : 'schedule';
+  board.events.push(mkEvent({ text, actor: 'server', level: problem ? 1 : 2 }, { kind }));
   if (findLieutenant(s.owner)) {
-    queuePush(s.owner, { kind: 'schedule-failed', schedule: s.name, text,
-      source: 'schedule ' + s.name });
+    queuePush(s.owner, { kind, schedule: s.name, text, source: 'schedule ' + s.name });
   }
 }
 

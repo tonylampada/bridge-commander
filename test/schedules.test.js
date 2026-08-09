@@ -593,6 +593,31 @@ test('a hook deleted under a live schedule makes the schedule SAY SO, once, inst
       sched = (await s.api('GET', '/api/schedules')).body.schedules[0];
     }
     assert.strictEqual(sched.problem, '');
+
+    // …and the heal reaches the owner as a RECOVERY. The drain dispatches on
+    // the item's kind, so this is what decides whether a schedule that just
+    // came back tells its owner to go and fix the hook.
+    let healed = [];
+    for (let i = 0; i < 60 && !healed.length; i++) {
+      await sleep(50);
+      healed = ((await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items || [])
+        .filter((x) => x.kind === 'schedule');
+    }
+    assert.strictEqual(healed.length, 1, 'the recovery landed on the owner queue');
+    assert.match(healed[0].text, /healthy again/);
+    const both = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items || [];
+    assert.strictEqual(both.filter((x) => x.kind === 'schedule-failed').length, 1,
+      'and it did not arrive as a second failure');
+
+    // read it the way its owner will, with the failure already handled
+    const ws = ['--lieutenant', LT, '--workspace', dir, '--port', String(s.port)];
+    const failed = both.find((x) => x.kind === 'schedule-failed');
+    assert.strictEqual((await runCli(['ack', String(failed.seq), ...ws])).code, 0);
+    const drain = await runCli(['drain', ...ws]);
+    assert.match(drain.stdout, /SCHEDULE orphan — healthy again/);
+    assert.doesNotMatch(drain.stdout, /a firing failed/, 'a recovery is not a failure');
+    assert.doesNotMatch(drain.stdout, /Fix the hook, or pause the schedule/,
+      'and a schedule that just healed is not told to go and fix its hook');
   } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

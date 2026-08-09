@@ -1648,6 +1648,10 @@ async function cmdDrain() {
         + 'then look at the schedule (bc-axi schedule show ' + (it.schedule || '<name>') + ') and the hook it fires. '
         + 'Fix the hook, or pause the schedule (bc-axi schedule pause ' + (it.schedule || '<name>') + ') so it stops '
         + 'waking you while you do';
+    } else if (it.kind === 'schedule') {
+      head = 'SCHEDULE ' + (it.schedule || '?') + ' — healthy again';
+      hint = 'whatever stopped this schedule is gone and the clock is firing it again; '
+        + 'nothing to do beyond noting it (bc-axi schedule show ' + (it.schedule || '<name>') + ')';
     } else if (it.kind === 'card-event') {
       head = 'CARD EVENT' + (it.eventKind ? ' [' + it.eventKind + ']' : '') + ' — ' + cardBit(it.card);
       hint = 'an outside process (a workflow, a cron, a CI hook) put this on the timeline and woke you: read the text and act';
