@@ -74,15 +74,31 @@ cat /root/notmux.log
 grep -q "first run blocked (tmux-missing)" /root/notmux.log || exit 1
 grep -q "apt-get install -y tmux" /root/notmux.log || exit 1
 grep -qE "tmux (new|attach|new-session)" /root/notmux.log && { echo "it asked someone to type a tmux command"; exit 1; }
-
-echo "=== what the agent does after asking: install tmux, run the same command again ==="
-apt-get update -qq >/dev/null && apt-get install -y -qq tmux >/dev/null 2>&1
+# We are root and there is no sudo in this image: a printed `sudo ...` dies with
+# "sudo: command not found", which reads as broken instructions.
+grep -q "sudo" /root/notmux.log && { echo "it printed sudo on a box with no sudo"; exit 1; }
+# The command it printed has to actually run, verbatim.
+eval "$(grep -oE '(sudo )?apt-get update.*' /root/notmux.log | head -1)" || exit 1
 tmux -V || exit 1
 
-echo "=== the first run itself (no authenticated claude in here — the board must come up anyway) ==="
+echo "=== root: blocked BEFORE anything is spawned, with the real reason ==="
 cd /root/myfleet
-$BC init --onboard --port 4790 > /root/init.log 2>&1
+$BC init --onboard --port 4790 > /root/root.log 2>&1
+test $? -eq 1 || { echo "running as root was NOT blocked"; exit 1; }
+cat /root/root.log
+grep -q "first run blocked (root)" /root/root.log || exit 1
+grep -q "useradd" /root/root.log || exit 1
+grep -q -- "--allow-root" /root/root.log || exit 1
+
+echo "=== the first run itself, on a throwaway box (no claude in here — the board must come up anyway) ==="
+cd /root/myfleet
+$BC init --onboard --port 4790 --allow-root > /root/init.log 2>&1
 cat /root/init.log
+
+echo "=== a missing agent CLI is named as missing, and never guessed at ==="
+grep -q "is not on PATH" /root/init.log || exit 1
+grep -q "npm i -g @anthropic-ai/claude-code" /root/init.log || exit 1
+grep -q "not installed, or not logged in" /root/init.log && { echo "it guessed at a cause it did not check"; exit 1; }
 grep -q "board: http://localhost:4790/" /root/init.log || exit 1
 curl -sf http://127.0.0.1:4790/api/status | grep -q '"workspace":"/root/myfleet"' || exit 1
 
@@ -97,7 +113,7 @@ echo "=== the git-identity warning is a warning, not a wall ==="
 grep -q "git has no identity here" /root/init.log || exit 1
 
 echo "=== twice in a row: a re-run resumes, it does not restart ==="
-$BC init --onboard --port 4790 > /root/init2.log 2>&1
+$BC init --onboard --port 4790 --allow-root > /root/init2.log 2>&1
 cat /root/init2.log
 grep -q "charter left alone" /root/init2.log || exit 1
 grep -q "welcome message already on the board" /root/init2.log || exit 1

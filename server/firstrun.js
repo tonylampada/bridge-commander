@@ -108,6 +108,8 @@ function refusalText(dir, r) {
 // Nothing here installs anything. Each check either passes or hands back a
 // message written for the agent that will relay it and ask.
 
+function isRoot() { return typeof process.getuid === 'function' && process.getuid() === 0; }
+
 function hasBin(name) {
   const dirs = String(process.env.PATH || '').split(path.delimiter).filter(Boolean);
   for (const d of dirs) {
@@ -118,15 +120,22 @@ function hasBin(name) {
 
 // The install line for THIS machine, so the agent can ask a yes/no question
 // with a real command in it instead of guessing a package manager.
-function installCommand(pkg) {
-  if (process.platform === 'darwin' && hasBin('brew')) return 'brew install ' + pkg;
-  if (hasBin('apt-get')) return 'sudo apt-get update && sudo apt-get install -y ' + pkg;
-  if (hasBin('dnf')) return 'sudo dnf install -y ' + pkg;
-  if (hasBin('yum')) return 'sudo yum install -y ' + pkg;
-  if (hasBin('pacman')) return 'sudo pacman -S --noconfirm ' + pkg;
-  if (hasBin('apk')) return 'apk add --no-cache ' + pkg;
-  if (hasBin('zypper')) return 'sudo zypper install -y ' + pkg;
-  if (hasBin('brew')) return 'brew install ' + pkg;
+//
+// `sudo` is earned, not assumed: as root it is unnecessary, and in a container
+// it is usually not even installed — a printed `sudo apt-get …` there dies with
+// `sudo: command not found`, which reads as "the instructions are broken".
+function installCommand(pkg, opts = {}) {
+  const root = opts.root === undefined ? isRoot() : opts.root;
+  const has = opts.hasBin || hasBin;
+  const sudo = root || !has('sudo') ? '' : 'sudo ';
+  if (process.platform === 'darwin' && has('brew')) return 'brew install ' + pkg;
+  if (has('apt-get')) return sudo + 'apt-get update && ' + sudo + 'apt-get install -y ' + pkg;
+  if (has('dnf')) return sudo + 'dnf install -y ' + pkg;
+  if (has('yum')) return sudo + 'yum install -y ' + pkg;
+  if (has('pacman')) return sudo + 'pacman -S --noconfirm ' + pkg;
+  if (has('apk')) return sudo + 'apk add --no-cache ' + pkg;
+  if (has('zypper')) return sudo + 'zypper install -y ' + pkg;
+  if (has('brew')) return 'brew install ' + pkg;
   return '';
 }
 
@@ -170,6 +179,67 @@ function gitIdentityText(id) {
     + '  git config --global user.email "<their email>"';
 }
 
+// Root. Claude Code refuses `--dangerously-skip-permissions` as uid 0 and exits
+// immediately, so as root there is no lieutenant to be had — the board would
+// come up with nobody on it. That is checked HERE, before anything is written,
+// rather than discovered from a dead pane afterwards.
+function rootBlockText() {
+  return 'you are running as root, and Claude Code refuses --dangerously-skip-permissions as root.\n'
+    + 'Bridget is a real claude session, so as root she cannot start and you would be left with a\n'
+    + 'board nobody is on. Two honest ways forward:\n\n'
+    + '  1. RECOMMENDED — do the first run as a normal user:\n'
+    + '       useradd -m dev && su - dev        # then install the skill and run this again as dev\n\n'
+    + '  2. This is a throwaway box (a container you will delete) and you accept the risk:\n'
+    + '       bc-axi init --onboard --allow-root\n'
+    + '     That launches her with IS_SANDBOX=1, which is the escape hatch claude itself checks.\n'
+    + '     It turns off a guard that exists because an agent with skipped permissions running as\n'
+    + '     root can do anything to the machine. Never on a box you care about.\n\n'
+    + 'ASK the person which one. Do not pick --allow-root for them.';
+}
+
+// The agent CLI itself. Cheap and certain (is it on PATH?), so it is answered
+// before the spawn instead of being guessed at from a timeout afterwards.
+function agentMissingText(harness) {
+  const cmd = harness === 'codex'
+    ? 'npm i -g @openai/codex'
+    : 'npm i -g @anthropic-ai/claude-code';
+  return 'the `' + (harness || 'claude') + '` CLI is not on PATH, so Bridget has nothing to be a session of.\n'
+    + 'The board is up and her welcome message is on it — she just cannot answer yet.\n\n'
+    + 'ASK the person for permission, then install it and run the SAME command again:\n'
+    + '  ' + cmd + '\n'
+    + '  ' + (harness === 'codex' ? 'codex' : 'claude') + '        # run it once by hand: it has a setup screen of its own to get past';
+}
+
+// diagnoseSpawn — read the pane, do not guess at it.
+//
+// A spawn failure arrives with the tail of the session's own pane attached, and
+// that tail says exactly what happened. Every branch below is a signature seen
+// in a real container; the fallback is the only place a guess is allowed, and it
+// is labelled as one. Guessing "not installed, or not logged in" at a pane that
+// plainly says something else is how a tester loses an afternoon.
+function diagnoseSpawn(text) {
+  const t = String(text || '');
+  const tail = (/pane tail:\n([\s\S]*)$/.exec(t) || [, ''])[1].trim();
+  const hit = (re, cause, headline, fix) => (re.test(t) ? { cause, headline, fix, tail } : null);
+  return hit(/cannot be used with root\/sudo privileges/, 'root',
+    'claude refuses --dangerously-skip-permissions as root, and exited.',
+    'Do the first run as a normal user (`useradd -m dev && su - dev`), or, on a throwaway box,\n'
+      + 're-run with --allow-root — see the block that command prints before it starts.')
+  || hit(/Choose the text style|run \/theme|Let's get started/, 'setup',
+    'the `claude` CLI has never been run on this machine — her pane is parked on its setup wizard\n'
+      + '(theme picker), which comes BEFORE any login question.',
+    'Run it once by hand, answer its questions, quit with /exit, then run the SAME command again:\n'
+      + '  claude')
+  || hit(/command not found|ENOENT|not found: claude/, 'missing',
+    'the agent CLI is not installed — the shell answered "command not found".',
+    'Install it and run the SAME command again:\n  npm i -g @anthropic-ai/claude-code')
+  || hit(/\/login|Invalid API key|not authenticated|Please run .*login|Sign in|log in to/i, 'auth',
+    'the `claude` CLI is installed but not logged in — her pane is on its login screen.',
+    'Log in once by hand, then run the SAME command again:\n  claude   (and follow its login)')
+  || { cause: 'unknown', headline: 'I could not tell from her pane why it failed. Read it above and act on what it says.',
+    fix: 'If the pane is empty, the usual causes are the `claude` CLI missing, never run, or not\nlogged in — but that is a guess, not what this pane showed.', tail };
+}
+
 // portFree — can we bind it? An occupied port is not automatically a problem
 // (it may be this very workspace's board), so the caller probes for a board
 // first and only then walks forward.
@@ -189,5 +259,6 @@ const ONBOARDING_STEPS = ['board-up', 'tools', 'project', 'checklist', 'done'];
 module.exports = {
   IGNORABLE, MANIFESTS, SOURCE_DIRS, SOURCE_EXT, ONBOARDING_STEPS,
   isWorkspaceDir, inspectTarget, listPhrase, refusalText,
-  hasBin, installCommand, tmuxMissingText, gitIdentity, gitIdentityText, portFree,
+  hasBin, isRoot, installCommand, tmuxMissingText, gitIdentity, gitIdentityText, portFree,
+  rootBlockText, agentMissingText, diagnoseSpawn,
 };

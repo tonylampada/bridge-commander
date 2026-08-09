@@ -84,9 +84,54 @@ test('a missing directory is missing, not empty', () => {
 test('no failure message ever asks anyone to type a tmux command', () => {
   // The one rule the whole first run is judged on. `tmux new -s ...` in front of
   // a person who has never heard of tmux is the failure this flow exists to end.
-  const texts = [fr.tmuxMissingText(), fr.gitIdentityText({ ok: false, missing: false })];
+  const texts = [fr.tmuxMissingText(), fr.gitIdentityText({ ok: false, missing: false }),
+    fr.rootBlockText(), fr.agentMissingText('claude')];
   for (const t of texts) assert.doesNotMatch(t, /tmux (new|attach|new-session)/);
   assert.match(fr.tmuxMissingText(), /ASK/); // it asks for permission instead
+});
+
+test('the root block names both ways forward and lets nobody pick --allow-root for the person', () => {
+  const t = fr.rootBlockText();
+  assert.match(t, /useradd/, 'the recommended route is a normal user');
+  assert.match(t, /--allow-root/);
+  assert.match(t, /IS_SANDBOX=1/, 'it says what the escape hatch actually does');
+  assert.match(t, /ASK the person|Do not pick --allow-root for them/);
+});
+
+test('an install command earns its sudo — never as root, never when sudo is not installed', () => {
+  // `sudo apt-get …` printed at a container's root user dies with
+  // "sudo: command not found", which reads as "the instructions are broken".
+  const apt = (n) => n === 'apt-get';
+  const aptAndSudo = (n) => n === 'apt-get' || n === 'sudo';
+  assert.doesNotMatch(fr.installCommand('tmux', { root: true, hasBin: aptAndSudo }), /sudo/);
+  assert.doesNotMatch(fr.installCommand('tmux', { root: false, hasBin: apt }), /sudo/);
+  assert.match(fr.installCommand('tmux', { root: false, hasBin: aptAndSudo }), /^sudo apt-get/);
+});
+
+test('a spawn failure is diagnosed from the pane, and the pane comes back with it', () => {
+  const withTail = (tail) => 'spawn failed: claude could not start at =s:=w; pane tail:\n' + tail;
+
+  let d = fr.diagnoseSpawn(withTail(
+    '$ claude --dangerously-skip-permissions --session-id x\n'
+    + '--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons'));
+  assert.strictEqual(d.cause, 'root');
+  assert.match(d.fix, /--allow-root|normal user/);
+  assert.match(d.tail, /cannot be used with root/, 'the pane is handed back verbatim');
+  assert.doesNotMatch(d.headline, /not installed, or not logged in/);
+
+  d = fr.diagnoseSpawn(withTail(
+    'Welcome to Claude Code v2.1.226\n\n Choose the text style that looks best with your terminal\n'
+    + ' To change this later, run /theme'));
+  assert.strictEqual(d.cause, 'setup');
+  assert.match(d.fix, /claude/);
+  assert.doesNotMatch(d.headline, /not installed, or not logged in/);
+
+  assert.strictEqual(fr.diagnoseSpawn(withTail('bash: claude: command not found')).cause, 'missing');
+
+  // The ONLY place a guess is allowed — and it says it is one.
+  d = fr.diagnoseSpawn('spawn failed: something nobody has seen before');
+  assert.strictEqual(d.cause, 'unknown');
+  assert.match(d.fix, /that is a guess/);
 });
 
 test('the teleport init, run outside tmux, points at the onboarding path instead of a tmux command', async () => {

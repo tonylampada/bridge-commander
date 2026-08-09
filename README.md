@@ -39,6 +39,14 @@ runs as real cards on the board.
 You need `tmux` and `git` on the machine (your agent will offer to install `tmux` if it is
 missing). You never have to use tmux yourself.
 
+Two things worth knowing before you start, because they are the only ways a first run stops early:
+
+- **Run `claude` once by hand first** if this machine has never run it — it has a setup screen
+  (theme, then login) that a spawned session cannot answer for you.
+- **Not as root.** Claude Code refuses `--dangerously-skip-permissions` as root, so a lieutenant
+  cannot start there. Use a normal user (a throwaway container can pass `--allow-root`, and the
+  tool will tell you what that costs).
+
 ## Board views
 
 The board region has three modes, toggled next to the filter (▦ / ☰ / 🧊):

@@ -78,7 +78,20 @@ const RESUME_RE = /Resume from summary|Resume full session as-is/;
 // relax that anchor: the picker would then read as READY and every unattended
 // revival would leave a lieutenant sitting on an unanswered menu forever.
 const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
-const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, label: 'claude' };
+
+// FATAL_RE — what a pane shows when this launch is never going to come up, so
+// waiting the remaining 44 seconds only delays a wrong guess:
+//
+//   root       claude refuses --dangerously-skip-permissions as uid 0 (unless
+//              IS_SANDBOX=1 / bubblewrap) and exits — verified in the binary.
+//   first run  a claude nobody has ever run parks on its own setup wizard
+//              (theme picker) BEFORE it asks about credentials. Enter is NOT
+//              sent at it: answering a stranger's setup wizard blind is how you
+//              pick their theme, their login method and their telemetry answer
+//              for them.
+//   missing    the shell answering "command not found" — no binary at all.
+const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude/;
+const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, fatalRe: FATAL_RE, label: 'claude' };
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from
@@ -150,7 +163,13 @@ async function spawn(cwd, prompt, opts = {}) {
   await s.createPane(session, window, cwdAbs);
   try {
     const extra = (opts.extraArgs || []).map(s.shellQuote).join(' ');
-    const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
+    // allowRoot — claude refuses --dangerously-skip-permissions as uid 0 and
+    // exits, so as root there is no session to have unless the caller has said,
+    // in as many words, that this box is a throwaway. IS_SANDBOX=1 is the escape
+    // claude itself checks; it is never set on our own initiative.
+    const asRoot = opts.allowRoot && typeof process.getuid === 'function' && process.getuid() === 0;
+    const launchCmd = (asRoot ? 'IS_SANDBOX=1 ' : '')
+      + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
       + `claude --dangerously-skip-permissions --session-id ${resumeId}`
       + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(session, window), launchCmd, SETTLE);

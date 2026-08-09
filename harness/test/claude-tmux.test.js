@@ -159,3 +159,58 @@ test('adoptWindow with no live session hands back the window-granular ref (nothi
     assert.strictEqual(await claude.adoptWindow(done, 'lt', []), done);
   } finally { stub.restore(); }
 });
+
+// Round 1 of the onboarding install test, in a container, twice: the launch
+// line claude refuses outright still cost the caller the FULL 45s wait, and the
+// caller then explained the timeout with a guess ("not installed, or not logged
+// in") that the pane flatly contradicted. A screen that can never become a
+// running agent has to end the wait immediately and hand back what it said.
+test('a launch claude refuses ends the wait at once, with the pane attached', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const mock = mockTmux({ readyTail:
+    '$ CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --session-id x\n'
+    + '--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons\n$ ' });
+  try {
+    await assert.rejects(
+      () => claude.spawn(dir, 'a brief', { session: 'bc-rootfail', stateDir }),
+      (e) => {
+        assert.match(e.message, /could not start/);
+        assert.match(e.message, /cannot be used with root\/sudo privileges/, 'the pane rides on the error');
+        return true;
+      });
+    const looks = mock.calls.filter((c) => c.fn === 'capture').length;
+    assert.strictEqual(looks, 1, 'it gave up on the first look, not after 90 of them');
+  } finally {
+    mock.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// --allow-root is the ONLY thing that puts IS_SANDBOX=1 on a launch line: it is
+// the guard claude itself checks, and it is never switched off on our own say-so.
+test('IS_SANDBOX rides the launch line only when the caller asked for it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const launchLine = async (opts) => {
+    const mock = mockTmux({ readyTail: 'bypass permissions\n❯ ' });
+    try {
+      await claude.spawn(dir, 'a brief', Object.assign({ session: 'bc-sbx', stateDir }, opts));
+      return mock.calls.find((c) => c.fn === 'sendLiteral').args[1];
+    } finally { mock.restore(); }
+  };
+  try {
+    assert.doesNotMatch(await launchLine({}), /IS_SANDBOX/);
+    const asked = await launchLine({ allowRoot: true });
+    // Off root the flag is inert — the guard it lifts only exists for uid 0.
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      assert.match(asked, /^IS_SANDBOX=1 /);
+    } else {
+      assert.doesNotMatch(asked, /IS_SANDBOX/);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

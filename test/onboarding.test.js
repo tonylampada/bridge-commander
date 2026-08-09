@@ -128,12 +128,26 @@ test('init --onboard continues an existing workspace instead of refusing it', as
   }
 });
 
+// The walk-forward test needs a base OUTSIDE the ephemeral range: it binds
+// base+1 itself, and a port the OS is still handing out to freePort() is a port
+// another test in this run is about to try to bind.
+function squatLowPort() {
+  return new Promise((resolve, reject) => {
+    let port = 4900;
+    const tryOne = () => {
+      if (port > 4990) return reject(new Error('no free port in 4900-4990'));
+      const srv = require('node:net').createServer();
+      srv.once('error', () => { port += 2; tryOne(); });
+      srv.listen(port, '127.0.0.1', () => resolve({ srv, port }));
+    };
+    tryOne();
+  });
+}
+
 test('init --onboard walks forward off a port somebody else is holding', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const taken = await freePort();
-  const squatter = require('node:net').createServer();
-  await new Promise((r) => squatter.listen(taken, '127.0.0.1', r));
+  const { srv: squatter, port: taken } = await squatLowPort();
   try {
     const r = await runCli(
       ['init', '--onboard', '--workspace', dir, '--port', String(taken), '--harness', 'fake'],

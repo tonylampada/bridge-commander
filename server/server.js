@@ -673,6 +673,9 @@ async function spawnLieutenant(body) {
       stateDir: HARNESS_STATE_DIR,
       callbackUrl: TURNEND_URL,
       installHooks: false,
+      // Only the first run sends this, and only when the person said so out
+      // loud: the harness decides what it means (for claude, IS_SANDBOX=1).
+      allowRoot: !!body.allowRoot,
     });
   } catch (e) {
     return { error: 'spawn failed: ' + String((e && e.message) || e), code: 502 };

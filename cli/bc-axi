@@ -60,7 +60,7 @@ const opts = {
   playbook: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
   uri: null, file: null, version: null,
   card: null, trigger: null, key: null, source: null, limit: 0,
-  onboard: false, here: false,
+  onboard: false, here: false, allowRoot: false,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -94,6 +94,7 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--spawn') opts.spawn = true;
   else if (a === '--onboard') opts.onboard = true;
   else if (a === '--here') opts.here = true;
+  else if (a === '--allow-root') opts.allowRoot = true;
   else if (a === '--harness') opts.harness = argv[++i];
   else if (a === '--model') opts.model = argv[++i];
   else if (a === '--effort') opts.effort = argv[++i];
@@ -543,6 +544,16 @@ async function cmdInitOnboard() {
   if (tmuxBacked && !fr.hasBin('tmux')) {
     die('bc-axi: first run blocked (tmux-missing)\n\n' + fr.tmuxMissingText());
   }
+  // Root is checked HERE, not discovered from a dead pane 45 seconds later: as
+  // root claude exits on sight of --dangerously-skip-permissions, so the board
+  // would come up with nobody on it and a message that guessed wrong about why.
+  if (harness === 'claude' && fr.isRoot() && !opts.allowRoot) {
+    die('bc-axi: first run blocked (root)\n\n' + fr.rootBlockText());
+  }
+  if (opts.allowRoot && fr.isRoot()) {
+    console.error('\n⚠ --allow-root: Bridget will be launched with IS_SANDBOX=1, skipping the guard that\n'
+      + '  stops a permissions-skipping agent from running as root. Throwaway machines only.\n');
+  }
   // git identity is a precondition for the first COMMIT, not for a board, so it
   // is a warning that Bridget picks up in conversation — never a wall between a
   // stranger and a running board.
@@ -620,20 +631,36 @@ async function cmdInitOnboard() {
   // 7. Her session. The one step that needs an authenticated agent CLI, and the
   //    one step whose failure must NOT take the board down with it.
   let live = true;
-  try {
-    const body = { name, id, spawn: true, revive: true };
-    if (opts.harness) body.harness = opts.harness;
-    const r = await request('POST', '/api/lieutenants', body, 180000);
-    console.log(r.spawned === false
-      ? name + '\'s session is already live'
-      : name + '\'s session started');
-  } catch (e) {
+  if (tmuxBacked && !fr.hasBin(harness)) {
+    // Certain, and cheap to know: there is no point spawning into a binary that
+    // is not there, and no point making anyone read a pane to find that out.
     live = false;
-    const why = (e.body && e.body.error) || e.message;
-    console.log('\n⚠ ' + name + '\'s session did not start: ' + why + '\n'
-      + '  The board is up and her welcome message is on it — she just cannot answer yet.\n'
-      + '  This is almost always the `claude` CLI: not installed, or not logged in.\n'
-      + '  Sort that out and run the SAME command again; it picks up where it stopped.');
+    console.log('\n⚠ ' + fr.agentMissingText(harness).split('\n').join('\n  ')
+      + '\n  Then run the SAME command again — it picks up where it stopped.');
+  } else {
+    try {
+      const body = { name, id, spawn: true, revive: true };
+      if (opts.harness) body.harness = opts.harness;
+      if (opts.allowRoot) body.allowRoot = true;
+      const r = await request('POST', '/api/lieutenants', body, 180000);
+      console.log(r.spawned === false
+        ? name + '\'s session is already live'
+        : name + '\'s session started');
+    } catch (e) {
+      live = false;
+      // Read the pane, do not guess at it. The failure carries the tail of her
+      // own session; that tail is printed verbatim and the cause is named FROM
+      // it, with a guess only where the pane said nothing — and labelled as one.
+      const why = (e.body && e.body.error) || e.message;
+      const d = fr.diagnoseSpawn(why);
+      console.log('\n⚠ ' + name + '\'s session did not start (' + d.cause + ').');
+      if (d.tail) console.log('\n  What her session actually shows:\n'
+        + d.tail.split('\n').map((l) => '  | ' + l).join('\n'));
+      console.log('\n  ' + d.headline.split('\n').join('\n  '));
+      console.log('\n  ' + d.fix.split('\n').join('\n  '));
+      console.log('\n  The board is up and her welcome message is on it — she just cannot answer yet.\n'
+        + '  Run the SAME command again once it is fixed; it picks up where it stopped.');
+    }
   }
 
   console.log('\nboard: http://localhost:' + PORT + '/');
@@ -1545,14 +1572,15 @@ if (!commands[cmd]) {
     '                                         session as the founding lieutenant, installs the turn-end hook,\n' +
     '                                         scaffolds AGENTS.md + captain.md + learnings/, seeds the\n' +
     '                                         playbooks and symlinks the worker-duties skill. Idempotent\n' +
-    '  init --onboard [--here] [--port N] [--host H]\n' +
+    '  init --onboard [--here] [--allow-root] [--port N] [--host H]\n' +
     '                                         the FIRST run, for a session that is NOT in tmux: refuses a\n' +
     '                                         code project (naming what it found), continues an existing\n' +
     '                                         workspace, brings the board up, and leaves lieutenant Bridget\n' +
     '                                         on it — chartered, spawned in her own tmux session, with a\n' +
     '                                         welcome message already waiting. Installs nothing. Idempotent:\n' +
     '                                         a re-run resumes (see `onboarding`). --here overrides the\n' +
-    '                                         refusal for a non-empty folder — ask the person first\n' +
+    '                                         refusal for a non-empty folder, --allow-root the refusal\n' +
+    '                                         to launch an agent as uid 0 — ask the person for both\n' +
     '  onboarding [--json]                    the first-run step the board remembers\n' +
     '  onboarding set <step> [--note "..."]   advance it: board-up | tools | project | checklist | done\n' +
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +

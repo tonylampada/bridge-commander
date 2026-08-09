@@ -72,8 +72,26 @@ one — never on your own initiative.
 show the install command the block printed for this machine, **ask**, install it on a yes, and run
 the command again. On a no: there is no board without it — say so plainly and stop.
 
+**`first run blocked (root)`** — you are uid 0, and Claude Code refuses `--dangerously-skip-permissions`
+as root, so Bridget could never start. The block prints the two ways forward; **ask which one**.
+The normal-user route (`useradd -m dev && su - dev`, then install the skill and run again there) is
+the right default. `--allow-root` launches her with `IS_SANDBOX=1`, turning off a guard that exists
+for good reasons — offer it only for a container they are about to delete, and only if they say yes.
+
 **`first run blocked (port-busy)`** — everything from 4780 up is taken. Ask which port they want and
 pass `--port <N>`.
+
+**The board comes up but Bridget's session does not.** The command prints her pane verbatim and
+names the cause from what is in it. Two you will meet on a fresh machine:
+
+- **the `claude` CLI has never been run** — her pane is parked on Claude Code's own setup wizard
+  (the theme picker), which appears *before* any login question. Tell them to run `claude` once in
+  their own terminal, answer it, `/exit`, then say the word and you run the command again. Do not
+  answer that wizard for them; it picks their theme and their login method.
+- **not installed / not logged in** — the block names which, from the pane.
+
+In every one of these the board is already up and her welcome message is already on it. Re-running
+the same command is always the way forward; nothing is lost.
 
 There is also a **git identity** warning (`user.name` / `user.email` unset). It is a warning, not a
 failure: the board comes up regardless, it is recorded in the first-run state, and Bridget picks it
@@ -85,14 +103,22 @@ The command's last lines are the board URL. Hand it over as-is:
 
 > Your board is at **http://localhost:4780/** — open it. Bridget is already there with a message.
 
-**If you are on a remote machine** (ssh, a devbox, a container), `localhost` means the remote box,
-not their laptop. Tell them to forward the port from their own machine:
+**If the board is not on the machine their browser is on**, `localhost` is the wrong machine. The
+server binds `127.0.0.1` on purpose — there is no app auth, so anything that can reach the port can
+drive the fleet. Do not widen the bind to fix a browser problem. In order of preference:
 
-```sh
-ssh -L 4780:127.0.0.1:4780 <the host they ssh'd to>
-```
-
-Then the same URL works in their browser.
+1. **Run the workspace where the browser is.** This is the normal case, and the reason the default
+   is loopback. A workspace is a folder; it does not have to live on a server.
+2. **Over ssh** — a tunnel from their own machine, nothing on the board changes:
+   ```sh
+   ssh -L 4780:127.0.0.1:4780 <the host they ssh'd to>
+   ```
+   Then the same `http://localhost:4780/` works in their browser.
+3. **In a container** — `docker run -p` will *not* reach a loopback bind, and publishing the port
+   is not a workaround for it. Either ssh into the host and tunnel as above, or, if the container
+   is on a private bridge network they control, have them re-run with an address the host can
+   reach: `bc-axi init --onboard --host <container-ip>`. Say the trade plainly first: **anything
+   that can reach that address can drive the board, with no login.** Their call, not yours.
 
 **If Bridget's session did not start** (the command says so, loudly), the board is still up and her
 message is still on it — she just cannot answer. It is almost always the `claude` CLI: missing, or
