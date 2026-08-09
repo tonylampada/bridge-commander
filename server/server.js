@@ -2036,22 +2036,14 @@ async function fireHooks(event, card, w, opts) {
     const results = await runHooks(event, hookContext(card, w),
       HOOK_TIMEOUT_MS ? { timeoutMs: HOOK_TIMEOUT_MS } : undefined);
     if (!results.length) return;
-    const live = (opts && opts.boardLevel) ? null : findCard(card.id);
     for (const r of results) {
       const detail = r.timedOut ? 'timed out'
         : r.error ? String(r.error)
         : 'exit ' + r.code;
       const text = event + ' hook ' + r.hook + (r.ok ? ' ok' : ' FAILED') + ' (' + detail + ')'
         + (r.output ? ': ' + r.output : '');
-      const ev = mkEvent({ text, actor: 'server' }, { kind: r.ok ? 'hook-ran' : 'hook-failed' });
-      if (live) {
-        live.events.push(ev);
-        live.updated = now();
-      } else {
-        ev.card = card.id;
-        ev.cardTitle = card.title;
-        board.events.push(ev);
-      }
+      landCardEvent(card, mkEvent({ text, actor: 'server' },
+        { kind: r.ok ? 'hook-ran' : 'hook-failed' }), opts);
       if (!r.ok) queuePush(card.owner, { kind: 'hook-failed', card: card.id, text: text.slice(0, 2000) });
     }
     saveBoard(); broadcast();
@@ -2060,12 +2052,13 @@ async function fireHooks(event, card, w, opts) {
   }
 }
 
-// landCardEvent(card, ev) — the card takes the event if it is still on the
-// board; an ARCHIVED card cannot (it left, and its archive.jsonl snapshot is
-// frozen), so the event goes to the board-level stream carrying a reference to
-// the card instead of being dropped.
-function landCardEvent(card, ev) {
-  const live = findCard(card.id);
+// landCardEvent(card, ev, opts) — the card takes the event if it is still on
+// the board; an ARCHIVED card cannot (it left, and its archive.jsonl snapshot
+// is frozen), so the event goes to the board-level stream carrying a reference
+// to the card instead of being dropped. opts.boardLevel takes the board stream
+// without asking: the call site already knows the card is leaving.
+function landCardEvent(card, ev, opts) {
+  const live = (opts && opts.boardLevel) ? null : findCard(card.id);
   if (live) {
     live.events.push(ev);
     live.updated = now();
@@ -2103,11 +2096,22 @@ const TEARDOWN_OUTPUT_TAIL = 1200; // of the event text, whose own cap is 2000
 async function runCardTeardown(card, w, wtPath) {
   const command = String((w && w.teardown) || '').trim();
   if (!command) return null;
-  // Nothing left to tear down in a directory that is gone — and this is what
-  // keeps the handoff's teardown from running a second time at archive.
+  // Nothing left to tear down in a directory that is gone.
   if (!wtPath || !fs.existsSync(wtPath)) return null;
+  // But a directory that is THERE is not a record that this never ran: a
+  // treehouse checkout is RETURNED to its pool, not deleted, so the archive
+  // backstop would find the same path and stop the same run twice — against a
+  // directory that may already be leased to another card. What ran belongs on
+  // the worker, and it is written BEFORE the await so two call sites racing
+  // (a move immediately followed by an archive) cannot both get through.
+  if (w.teardownRan) return null;
+  w.teardownRan = true;
   try {
-    const r = await runTeardown(command, hookContext(card, w),
+    // The worktree is passed, never re-derived: hookContext() reports a
+    // released worktree as '' and runTeardown would fall back to the workspace
+    // root — the one directory a teardown must not run in.
+    const ctx = Object.assign(hookContext(card, w), { worktree: wtPath });
+    const r = await runTeardown(command, ctx,
       TEARDOWN_TIMEOUT_MS ? { timeoutMs: TEARDOWN_TIMEOUT_MS } : undefined);
     const detail = r.timedOut ? 'timed out'
       : r.error ? String(r.error)
@@ -2166,6 +2170,12 @@ async function releaseCardWorktree(card, w, opts = {}) {
     // ground goes, so stopping what stands on it happens immediately before,
     // never after. Never throws, and its outcome never steers what follows.
     await runCardTeardown(card, w, wtRec.path);
+    // The teardown is an unbounded wait (minutes), so the guard above stopped
+    // being atomic: a rework restart in the meantime re-provisions the SAME
+    // deterministic path, and releasing now would delete a live worker's fresh
+    // checkout. Whoever holds the card holds its path — ask again.
+    const after = findWorker(card.id);
+    if (after && after !== w) return null;
     const rel = await releaseWorktree(wtRec, project.path);
     const live = findCard(card.id); // archived in the meantime → the board stream carries it
     // the attribute is a pointer at a directory: a released one has to stop
@@ -2433,6 +2443,15 @@ async function doStartCard(card, body) {
       try { await harnessFor(existing.ref).kill(existing.ref); } catch (e) { /* best-effort: it has no ground left either way */ }
     }
     const prevProject = findProject(existing.project) || project;
+    // A restart is not a handoff: it is the moment that checkout is actually
+    // destroyed, so the teardown belongs here too — otherwise `keep_worktree`,
+    // which skips it at the handoff precisely because the checkout is being
+    // kept, is the one documented rework flow that deletes a worktree with its
+    // container still up. The command run is the PREVIOUS worker's recorded
+    // one, never the playbook being started: what must be stopped is what was
+    // brought up. Best effort, exactly as at the handoff — the release below
+    // makes its own decision, and still 409s if it refuses.
+    await runCardTeardown(card, existing, existing.worktree && existing.worktree.path);
     const rel = await releaseWorktree(existing.worktree, prevProject.path);
     if (!rel.released) {
       return { error: 'previous worker worktree not releasable (' + rel.reason + '): ' + existing.worktree.path, code: 409 };

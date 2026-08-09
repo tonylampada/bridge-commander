@@ -135,7 +135,7 @@ function fmCheck(key, val, at) {
 // parsePlaybook(text) -> { meta, body }. No opening `---` line = no frontmatter:
 // meta is empty and the body is the text untouched, which is every playbook
 // that predates this. A block that opens and never closes, or holds anything
-// but the five keys, THROWS with the offending line named.
+// but the six keys, THROWS with the offending line named.
 //
 // A first line of `---` is genuinely ambiguous — an opening delimiter to us, a
 // horizontal rule to a playbook written before this existed — so when the

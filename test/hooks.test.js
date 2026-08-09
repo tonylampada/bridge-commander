@@ -13,6 +13,13 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { runHooks } = require('../server/hooks.js');
 const { startServerWithLieutenant, startServer, withOwner, sleep, LT } = require('./helper');
+const { lieutenantSession, workerWindow } = require('../server/names.js');
+
+// A worker's harness key: a WINDOW in its lieutenant's session — the form the
+// fake harness's marker files carry, so a test can make a session dead.
+function workerKey(dir, cardId) {
+  return lieutenantSession(dir, LT) + ':' + workerWindow(cardId);
+}
 
 function writeHook(ws, event, name, body, mode = 0o755) {
   const dir = path.join(ws, '.bridge-commander', 'hooks', event);
@@ -515,6 +522,58 @@ test('`keep_worktree: true` runs neither the teardown nor the release; archive r
     await until('released at archive', async () => !fs.existsSync(w.worktree.path));
     assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'stopped');
   } finally { await teardown(); }
+});
+
+test('`keep_worktree: true` + teardown: the handoff runs neither, the RESTART runs both', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-hooks-redo-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    const out = path.join(root, 'redo-td.out');
+    writePlaybook(s, 'keptdown', ['---', 'keep_worktree: true',
+      'teardown: echo "stopped in $(pwd)" >> ' + out, '---', 'rework me', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Redo', id: 'td-redo', playbook: 'keptdown', attributes: { repo: 'proj' } }));
+    const first = (await s.api('POST', '/api/cards/td-redo/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-redo/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/td-redo/move', { column: 'review', actor: 'agent' });
+    await sleep(500);
+    assert.ok(fs.existsSync(first.worktree.path), 'the checkout is kept for the rework');
+    assert.ok(!fs.existsSync(out), 'and its container with it — the handoff ran neither');
+
+    // the session dies (a live one is never spawned over), then the rework
+    // restart — the moment that checkout is actually destroyed
+    await s.stop();
+    fs.rmSync(path.join(fdir, workerKey(wsDir, 'td-redo') + '.json'), { force: true });
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    const r = await s.api('POST', '/api/cards/td-redo/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+
+    // the teardown ran, in the OLD checkout, before it went
+    assert.strictEqual(fs.readFileSync(out, 'utf8').trim(), 'stopped in ' + first.worktree.path);
+    const ev = (await s.api('GET', '/api/cards/td-redo')).body.events
+      .find((e) => /^teardown /.test(e.text));
+    assert.ok(ev, 'and said so on the timeline');
+    assert.strictEqual(ev.kind, 'hook-ran');
+
+    // ...and the release followed it: one linked worktree, the new worker's
+    const clone = path.join(wsDir, 'projects', 'proj');
+    const wtList = execFileSync('git', ['-C', clone, 'worktree', 'list'],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim().split('\n').filter(Boolean);
+    assert.strictEqual(wtList.length, 2, 'clone + exactly one linked worktree:\n' + wtList.join('\n'));
+    assert.ok(fs.existsSync(r.body.worker.worktree.path), 'new worktree provisioned');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('the handoff teardown does not run a second time when the card is archived', async () => {

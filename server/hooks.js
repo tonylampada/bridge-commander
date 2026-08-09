@@ -165,6 +165,17 @@ function bcEnv(event, ctx) {
 // One result, never a rejection — the caller lands it on the timeline and
 // carries on either way. Output keeps the TAIL: a teardown that failed says so
 // at the end, and the head is the noise of a container coming down.
+//
+// KNOWN AND ACCEPTED: `command` reaches here from a playbook file, and a
+// WORKSPACE playbook is writable over the unauthenticated artifact API
+// (PUT /api/artifact) — so anything that can reach the board's port can put a
+// shell command in this spawn. That is not a new capability the teardown opens:
+// the same write puts arbitrary text in the BRIEF, and the next card start
+// hands that to an agent running with bypass permissions on a real checkout.
+// The board binds to loopback and its threat model is already "reaching this
+// port means starting workers". Anyone WIDENING that gate — binding to a
+// non-loopback address, proxying the API, accepting playbooks from elsewhere —
+// is widening this too, and owes it an auth boundary.
 function runTeardown(command, ctx, opts) {
   const cmd = String(command || '').trim();
   if (!cmd) throw new Error('runTeardown: command required');
