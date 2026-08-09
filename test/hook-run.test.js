@@ -122,6 +122,29 @@ test('a named hook gets its OWN name in BC_EVENT, empty card context, and bc-axi
   } finally { fs.rmSync(ws, { recursive: true, force: true }); }
 });
 
+// The PATH guarantee is *reachable*, not *mine*: a `bc-axi` the operator put
+// earlier on PATH is the one that runs. Shadowing it would make a hook resolve
+// a name differently from the shell he tested it in.
+test('the CLI is APPENDED to PATH, so an operator-installed bc-axi still wins', async () => {
+  const ws = scratchWs();
+  const mine = path.join(ws, 'bin');
+  const savedPath = process.env.PATH;
+  try {
+    fs.mkdirSync(mine, { recursive: true });
+    fs.writeFileSync(path.join(mine, 'bc-axi'), '#!/bin/sh\necho operator\n');
+    fs.chmodSync(path.join(mine, 'bc-axi'), 0o755);
+    process.env.PATH = mine + path.delimiter + savedPath;
+    named(ws, 'which-cli', 'command -v bc-axi > cli.out');
+    const run = await runNamedHook(ws, 'which-cli', {});
+    assert.strictEqual(run.ok, true);
+    assert.strictEqual(fs.readFileSync(path.join(ws, 'cli.out'), 'utf8').trim(),
+      path.join(mine, 'bc-axi'), 'the board makes its CLI reachable, it does not take the name');
+  } finally {
+    process.env.PATH = savedPath;
+    fs.rmSync(ws, { recursive: true, force: true });
+  }
+});
+
 test('a card supplied by the caller fills BC_CARD/BC_WORKTREE/BC_BRANCH', async () => {
   const ws = scratchWs();
   try {

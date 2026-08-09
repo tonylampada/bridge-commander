@@ -16,7 +16,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
-const { startServerWithLieutenant } = require('./helper');
+const { startServerWithLieutenant, runCli } = require('./helper');
 const { LIFECYCLE_EVENTS } = require('../server/hooks.js');
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
@@ -80,8 +80,14 @@ test('a hook written where none was is born EXECUTABLE — there is no chmod on 
   try {
     const file = path.join(hooksDir(s.dir), 'brand-new');
     const uri = uriOf(file);
+    // A board-owned file that is not written yet reads as the empty document at
+    // version '' — whatever kind it is. The board built this path, so "not
+    // there" is a state, not a 404, and '' is exactly what the PUT reads as "I
+    // expect no file". A charter already worked this way; so does a hook.
     const got = await get(s, uri);
-    assert.strictEqual(got.status, 404, 'nothing there yet');
+    assert.strictEqual(got.status, 200, JSON.stringify(got.body));
+    assert.deepStrictEqual(
+      { content: got.body.content, version: got.body.version }, { content: '', version: '' });
 
     const put = await s.api('PUT', '/api/artifact', { uri, content: '#!/bin/sh\necho hi\n', version: '' });
     assert.strictEqual(put.status, 200, JSON.stringify(put.body));
@@ -107,6 +113,41 @@ test('the FIRST hook in a workspace creates hooks/ — the board owns that name'
     assert.strictEqual(fs.readFileSync(file, 'utf8'), '#!/bin/sh\necho hi\n');
     assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111, 'and born executable');
     assert.ok((await s.api('GET', '/api/hooks')).body.hooks.some((h) => h.name === 'gh-watch'));
+  } finally { await s.stop(); }
+});
+
+// The same thing at the surface a human types. The two halves above proved the
+// SHAPE — a 200 with an empty version, a PUT that creates — and missed the
+// surface: `bc-axi artifact write` guarded on a FALSY --version, so the one
+// version `artifact read` hands you for a file nobody wrote yet was the one
+// version it would not take. A rule whose reason cannot be executed is not a
+// rule, so it is asserted here, through the CLI, end to end.
+test('cli: artifact read then write CREATES the first hook — the empty version is a real one', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    const file = path.join(hooksDir(s.dir), 'gh-watch');
+    const uri = uriOf(file);
+    const args = ['--workspace', s.dir, '--port', String(s.port)];
+
+    const read = await runCli(['artifact', 'read', uri, ...args]);
+    assert.strictEqual(read.code, 0, read.stderr);
+    assert.strictEqual(read.stdout, '', 'a board-owned file nobody wrote yet reads as the empty document');
+    assert.match(read.stderr, /^version: *$/m, 'at version ""');
+
+    const body = path.join(s.dir, 'draft.sh');
+    fs.writeFileSync(body, '#!/bin/sh\nbc-axi event "$BC_CARD" --kind note\n');
+    const wrote = await runCli(['artifact', 'write', uri, '--file', body, '--version', '', ...args]);
+    assert.strictEqual(wrote.code, 0, wrote.stderr);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), '#!/bin/sh\nbc-axi event "$BC_CARD" --kind note\n');
+    assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111, 'and born executable, like any other hook');
+    assert.ok((await s.api('GET', '/api/hooks')).body.hooks.some((h) => h.name === 'gh-watch'),
+      'a lieutenant wrote a hook with nothing but the CLI');
+
+    // …and the door still closes behind it: the version that just landed is the
+    // only one the next write may carry.
+    const stale = await runCli(['artifact', 'write', uri, '--file', body, '--version', '', ...args]);
+    assert.strictEqual(stale.code, 1, 'an empty version means "no file yet" — and there is one now');
+    assert.match(stale.stderr, /NOT WRITTEN/);
   } finally { await s.stop(); }
 });
 

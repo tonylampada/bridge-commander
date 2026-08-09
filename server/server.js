@@ -3396,11 +3396,14 @@ const server = http.createServer(async (req, res) => {
       let data;
       try { data = fs.readFileSync(file); }
       catch (e) {
-        // A lieutenant that has never written its memory file still has one to
-        // open: the board owns the path, so "not written yet" answers as the
-        // empty document at version '' — which is exactly what the PUT below
-        // reads as "I expect no file", so the first 💾 creates it.
-        if (charter && e.code === 'ENOENT') return sendJson(res, 200, { name, content: '', version: '' });
+        // A BOARD-OWNED file that is not written yet reads as the empty document
+        // at version '' — whatever kind it is. The board owns the path (it built
+        // it, not the client), so the file's absence is a state, not a 404: a
+        // lieutenant that has never written its memory, a hook nobody has typed
+        // yet. And '' is exactly what the PUT below reads as "I expect no file",
+        // so the first 💾 creates it. A card artifact is NOT board-owned — that
+        // path came from the card, and a missing one is genuinely unreadable.
+        if ((charter || hook) && e.code === 'ENOENT') return sendJson(res, 200, { name, content: '', version: '' });
         return sendJson(res, 404, { error: 'unreadable: ' + e.message });
       }
       if (data.length > 2e6) return sendJson(res, 413, { error: 'file too large to preview' });

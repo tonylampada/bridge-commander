@@ -144,7 +144,9 @@ and `BC_WORKTREE` is empty when the handoff released it already, which is the us
 Lifecycle hooks are fire-and-forget — a failure or timeout never blocks the lifecycle; results
 land on the card timeline (`hook-ran` / `hook-failed`).
 
-There is no hook API: a hook is bash with `bc-axi` on its `PATH`, so it wakes a lieutenant the
+There is no hook API: a hook is bash with `bc-axi` on its `PATH` (appended, so a `bc-axi` you
+put there yourself still wins — the board makes its CLI reachable, it does not take the name),
+so it wakes a lieutenant the
 way anything else does — `bc-axi event <card> --wake-owner`. Add `--key <s>` and a five-minute
 poll seeing the same red check wakes that lieutenant once instead of sixty times (keys are
 per-card, kept 7 days); `--source <n>` says who woke them, on the timeline and in the drain.
@@ -153,6 +155,12 @@ per-card, kept 7 days); `--source <n>` says who woke them, on the timeline and i
 bc-axi hook list                       # every hook, and how its last run ended
 bc-axi hook run gh-watch               # run a named one — the same door the board's ▶ posts to
 bc-axi hook runs gh-watch              # its trace
+
+# writing one: a hook nobody wrote yet reads as empty at version "", and "" is
+# what the write reads as "there is no file yet", so this creates it (executable)
+f=file://$PWD/.bridge-commander/hooks/gh-watch
+bc-axi artifact read $f                # empty, `version:` blank on stderr
+bc-axi artifact write $f --file draft.sh --version ''
 ```
 
 `hook run` is the ONE door: an outside trigger already running on this machine, the board's ▶

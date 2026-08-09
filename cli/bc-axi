@@ -819,11 +819,17 @@ async function cmdArtifactRead() {
 }
 async function cmdArtifactWrite() {
   const uri = positional[0];
-  if (!uri || !opts.file || !opts.version) {
-    die('usage: bc-axi artifact write <uri> --file <f|-> --version <sha256>\n' +
+  // `--version ''` is a REAL version — the one `artifact read` prints for a
+  // board-owned file nobody has written yet — and it means "I expect no file".
+  // So the guard is "absent", not "falsy": creating the first hook or the first
+  // charter through this door is exactly the empty-version case.
+  if (!uri || !opts.file || opts.version === null) {
+    die('usage: bc-axi artifact write <uri> --file <f|-> --version <sha256|"">\n' +
       '  Write a card artifact THROUGH the board — the ONLY way to write one that\n' +
       '  someone may have open in the editor. --version is the one artifact read\n' +
       '  handed you: if the file moved since, NOTHING is written and this exits 1.\n' +
+      '  An empty --version means "there is no file yet" — how a board-owned file\n' +
+      '  (a hook, a charter) gets written the first time.\n' +
       '  (No --version on purpose: a write that re-reads the version itself would\n' +
       '  silently overwrite whatever landed while you were thinking.)');
   }
@@ -1424,10 +1430,13 @@ if (!commands[cmd]) {
     '  card artifact rm <card-id> --uri <...>  remove an artifact entry by uri\n' +
     '\nartifact (co-edited files — the captain may have one open RIGHT NOW):\n' +
     '  artifact read <uri> [--json]           read a card artifact through the board: content on\n' +
-    '                                         stdout, "version: <sha256>" on stderr\n' +
-    '  artifact write <uri> --file <f|-> --version <sha256>\n' +
+    '                                         stdout, "version: <sha256>" on stderr. A board-owned\n' +
+    '                                         file nobody wrote yet (a hook, a charter) reads as\n' +
+    '                                         empty at version ""\n' +
+    '  artifact write <uri> --file <f|-> --version <sha256|"">\n' +
     '                                         write it back through the board — the ONLY way to\n' +
-    '                                         write an artifact someone may be editing. A stale\n' +
+    '                                         write an artifact someone may be editing. An empty\n' +
+    '                                         --version means "no file yet" and creates it. A stale\n' +
     '                                         --version writes NOTHING and exits 1 (never silent);\n' +
     '                                         a write that lands updates the captain\'s open editor\n' +
     '                                         live. Writing the file directly on disk instead skips\n' +

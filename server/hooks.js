@@ -63,9 +63,12 @@ const { spawn } = require('node:child_process');
 const STATE_DIRNAME = '.bridge-commander';
 const HOOKS_DIRNAME = 'hooks'; // under <workspace>/.bridge-commander/
 const RUNS_FILENAME = 'hookruns.jsonl'; // the trace, under <workspace>/.bridge-commander/
-// Where `bc-axi` lives, prepended to every hook's PATH. A hook's whole API is
+// Where `bc-axi` lives, APPENDED to every hook's PATH. A hook's whole API is
 // that CLI, so "it is on your PATH" has to be true no matter what shell the
-// board's server was started from.
+// board's server was started from — but the guarantee is *reachable*, not
+// *mine*: prepending would shadow whatever the operator put earlier on PATH,
+// and a hook that resolves a name differently from the shell he tested it in
+// is a debugging afternoon nobody asked for.
 const CLI_DIR = path.join(__dirname, '..', 'cli');
 // A hook name, and an event directory name: the id shape the rest of the
 // board uses (playbook ids, lieutenant ids). Keeps `../` and an empty name out
@@ -207,7 +210,7 @@ async function runHooks(event, ctx, opts) {
 // named one — either way, "what am I running as".
 function bcEnv(event, ctx) {
   return Object.assign({}, process.env, {
-    PATH: CLI_DIR + path.delimiter + (process.env.PATH || ''),
+    PATH: (process.env.PATH ? process.env.PATH + path.delimiter : '') + CLI_DIR,
     BC_EVENT: String(event || ''),
     BC_CARD: String((ctx && ctx.card) || ''),
     BC_REPO: String((ctx && ctx.repo) || ''),

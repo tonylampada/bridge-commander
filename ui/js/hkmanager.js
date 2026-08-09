@@ -14,6 +14,14 @@
 // opens in, which is where "he asks a lieutenant to help build one" happens: a
 // file on a screen he can point at.
 //
+// One rule governs every ▶ here: a refusal is visible. Enabled-and-works and
+// disabled-with-a-reason are both fine; enabled-and-silently-refuses is the
+// worst of the three, because it teaches him the tab is broken and he is right.
+// So the ▶ on a lifecycle row is disabled WITH a title saying why, and the ▶ on
+// a hook someone else is already running is not disabled at all — the server
+// locks per name, so the tab does too, and a press it would refuse never looks
+// live. Same principle, opposite answer.
+//
 // Deliberately absent: run detail (the output tail lives in hookruns.jsonl and
 // is read with `bc-axi hook runs`) and a create button (naming a file, making it
 // executable and typing bash into a text box on a phone is the worst way to do
@@ -30,7 +38,7 @@ let items = null; // [{name, event, file, last, running}] — last answer from t
 let dir = '';
 let loading = false;
 let stale = false; // a render arrived while a read was in flight
-let running = ''; // the hook whose ▶ was pressed HERE — state, not a mutated button
+const running = new Set(); // hook names whose ▶ was pressed HERE — state, not a mutated button
 
 // Same contract as the playbooks and lieutenants sections: `reload` is what the
 // tab passes on the way in. Every render ASKS, though, not just the entering
@@ -70,7 +78,7 @@ function paint() {
 function row(h) {
   const el = document.createElement('div');
   el.className = 'hk-row';
-  const busy = running === h.name;
+  const busy = running.has(h.name);
   el.append(name(h), facts(h, busy), actions(h, busy));
   return el;
 }
@@ -141,9 +149,14 @@ function action(label, title, onClick) {
 // every row mid-run: a button that came back enabled under his thumb would be
 // the second press the server then has to refuse, and the '…' would vanish with
 // nothing left saying anything is happening.
+//
+// It is a Set keyed per name, not one name, because the server's lock is per
+// workspace + name: two hooks running at once is what it permits, and a
+// five-minute poll still going while he presses another row is the ordinary
+// case. One concurrency rule in this feature, not two.
 async function runNow(h) {
-  if (running) return;
-  running = h.name;
+  if (running.has(h.name)) return;
+  running.add(h.name);
   paint();
   let note;
   try {
@@ -152,7 +165,7 @@ async function runNow(h) {
   } catch (e) {
     note = e.message;
   }
-  running = '';
+  running.delete(h.name);
   await renderHooks();
   noteEl.textContent = h.name + ': ' + note;
 }

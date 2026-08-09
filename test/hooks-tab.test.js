@@ -121,8 +121,14 @@ test('the section is wired into the screen the way every other one is', () => {
 // survives the repaint that answer causes.
 test('every render asks the server, and an in-flight ▶ outlives the repaint', () => {
   assert.ok(!/if \(items\) return paint\(\)/.test(src), 'a list read last time is not the answer');
-  assert.match(src, /let running = ''/, 'the press is state, not a mutated button');
-  assert.match(src, /const busy = running === h\.name/, 'and paint() is what draws it');
+  assert.match(src, /const running = new Set\(\)/, 'the press is state, not a mutated button');
+  assert.match(src, /const busy = running\.has\(h\.name\)/, 'and paint() is what draws it');
+  // Keyed PER NAME, because the server's lock is per workspace + name: a tab
+  // stricter than the thing it drives owes an argument for being stricter, and
+  // there is none. Two hooks running at once is what the server permits.
+  assert.match(src, /running\.add\(h\.name\)/);
+  assert.match(src, /running\.delete\(h\.name\)/);
+  assert.ok(!/if \(running\) return/.test(src), 'one hook in flight never blocks another row');
   assert.ok(!/btn\.disabled|btn\.textContent/.test(src),
     'nothing writes to a button a repaint may already have thrown away');
   assert.ok(!/setInterval|setTimeout/.test(src), 'no polling — the board events are the nudge');
