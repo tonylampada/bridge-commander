@@ -60,6 +60,16 @@ export function cardEmoji(card) {
   return '▫️';
 }
 
+// The kanban tile carries the card's NUMBER, never the prefix: the owner's
+// color already says whose card it is, so MNC- on forty tiles is noise. The
+// rule is the trailing -<digits> of the id — an explicit id like
+// pipeline-test-b6 has no number and gets no element at all, rather than a
+// guess. (The table and the detail panel keep the full id — you copy ids there.)
+export function cardNumHtml(id) {
+  const m = /-(\d+)$/.exec(String(id || ''));
+  return m ? '<span class="t-num">' + m[1] + '</span>' : '';
+}
+
 // attributes.prs — [{url, state: open|merged|closed}] — the only PR source on a card
 const PR_STATES = new Set(['open', 'merged', 'closed']);
 export function cardPrs(card) {

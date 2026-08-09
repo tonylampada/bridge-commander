@@ -3,7 +3,7 @@
 // ltswitcher.js — not on the board.)
 import { S, columns, cards, lieutenants, lieutenant, lieutenantColor, cardVisible, cardStatus, cardRecency, targetOwedState, targetOwedStale, toggleFilter, filterSelected, workerFor, render } from './state.js';
 import { api } from './api.js';
-import { esc, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, ctxBarHtml } from './util.js';
+import { esc, agoSpanHtml, cardEmoji, cardNumHtml, cardPrs, prChipHtml, ctxBarHtml } from './util.js';
 import { labelChipHtml } from './labels.js';
 import { openDetail } from './detail.js';
 import { openLieutenantChat } from './chat.js';
@@ -69,7 +69,7 @@ function tileHtml(c) {
     stripe +
     '<div class="t-row1">' + box + '<span class="t-emoji">' + esc(cardEmoji(c)) + '</span>' +
     '<span class="t-title">' + esc(c.title || c.id) + '</span>' +
-    cornerInd + '</div>' +
+    cardNumHtml(c.id) + cornerInd + '</div>' +
     (labels || prs || order ? '<div class="t-chips">' + order + labels + prs + '</div>' : '') +
     '<div class="t-foot">' +
     '<span class="t-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) +
