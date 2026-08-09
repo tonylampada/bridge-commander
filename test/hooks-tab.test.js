@@ -113,5 +113,17 @@ test('the section is wired into the screen the way every other one is', () => {
   assert.match(main, /import \{ renderHooks \} from '\.\/hkmanager\.js'/);
   assert.match(main, /hooks: renderHooks/, 'one WS_RENDER entry, nothing else');
   assert.match(src, /export async function renderHooks\(reload\)/);
-  assert.match(src, /if \(reload\) items = null;/, 'entering the tab reads disk afresh');
+});
+
+// The tab's only nudge is the board event that already arrives. A hook run from
+// the CLI, or a lifecycle hook firing, is exactly what a row must not go on
+// lying about — so every render asks, and the press that is still in flight
+// survives the repaint that answer causes.
+test('every render asks the server, and an in-flight ▶ outlives the repaint', () => {
+  assert.ok(!/if \(items\) return paint\(\)/.test(src), 'a list read last time is not the answer');
+  assert.match(src, /let running = ''/, 'the press is state, not a mutated button');
+  assert.match(src, /const busy = running === h\.name/, 'and paint() is what draws it');
+  assert.ok(!/btn\.disabled|btn\.textContent/.test(src),
+    'nothing writes to a button a repaint may already have thrown away');
+  assert.ok(!/setInterval|setTimeout/.test(src), 'no polling — the board events are the nudge');
 });

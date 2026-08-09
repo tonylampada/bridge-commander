@@ -13,6 +13,7 @@
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { startServerWithLieutenant } = require('./helper');
@@ -139,6 +140,48 @@ test('an event directory that IS there takes the write, and the board never inve
     assert.strictEqual(put.status, 200, JSON.stringify(put.body));
     assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111);
   } finally { await s.stop(); }
+});
+
+// A workspace reached through a symlinked parent is ordinary, not exotic: /tmp
+// is one on macOS, and ~/work → /mnt/data/work is one anywhere. The gate
+// realpaths the directory a hook sits in, so the path it compares against has to
+// be resolved the same way — or the board refuses its OWN hooks, every ✎ on the
+// tab answers "unknown artifact", and nothing in that message points at why.
+test('a workspace reached through a SYMLINK edits its hooks like any other', async () => {
+  const tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'bc-linkws-')));
+  const real = path.join(tmp, 'real');
+  const link = path.join(tmp, 'link');
+  fs.mkdirSync(real, { recursive: true });
+  fs.symlinkSync(real, link);
+  const s = await startServerWithLieutenant({ dir: link });
+  try {
+    write(path.join(hooksDir(real), 'gh-watch'), '#!/bin/sh\necho v1\n');
+    // the uri under test is the one the tab is handed, not one the test spells
+    const listed = (await s.api('GET', '/api/hooks')).body.hooks.find((h) => h.name === 'gh-watch');
+    assert.ok(listed, 'the board lists it');
+
+    const got = await get(s, uriOf(listed.file));
+    assert.strictEqual(got.status, 200, JSON.stringify(got.body));
+    assert.strictEqual(got.body.content, '#!/bin/sh\necho v1\n');
+    const put = await s.api('PUT', '/api/artifact',
+      { uri: uriOf(listed.file), content: '#!/bin/sh\necho v2\n', version: got.body.version });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(fs.readFileSync(path.join(hooksDir(real), 'gh-watch'), 'utf8'), '#!/bin/sh\necho v2\n');
+
+    // …and a lifecycle hook, two levels down, through the same link
+    const sweep = write(path.join(hooksDir(real), 'worker-done', 'sweep.sh'), '#!/bin/sh\nexit 0\n');
+    const two = (await s.api('GET', '/api/hooks')).body.hooks.find((h) => h.event === 'worker-done');
+    assert.ok(two, 'the board lists that one too');
+    const g2 = await get(s, uriOf(two.file));
+    assert.strictEqual(g2.status, 200, JSON.stringify(g2.body));
+    const p2 = await s.api('PUT', '/api/artifact',
+      { uri: uriOf(two.file), content: '#!/bin/sh\nexit 1\n', version: g2.body.version });
+    assert.strictEqual(p2.status, 200, JSON.stringify(p2.body));
+    assert.strictEqual(fs.readFileSync(sweep, 'utf8'), '#!/bin/sh\nexit 1\n');
+  } finally {
+    await s.stop();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // The list the refusal prints has to be the events the server really fires, or

@@ -92,7 +92,17 @@ function parseArgs(argv) {
 const opts = parseArgs(process.argv.slice(2));
 
 // ---------- paths (workspace-scoped; no global state) ----------
-const WORKSPACE = path.resolve(opts.workspace || process.cwd());
+// Resolved AND real: every path the board hands out is built from this one, and
+// hookTarget() compares a hook's containing directory against realpathSync of
+// itself. A workspace reached through a symlinked parent (/tmp on macOS,
+// ~/work → /mnt/data/work anywhere) would fail that comparison for the board's
+// OWN hooks, so the link is followed once here rather than at each call site.
+// A workspace that is not on disk yet has no link to follow: the resolved path
+// stands, and the mkdirs below make it.
+function realWorkspace(dir) {
+  try { return fs.realpathSync(dir); } catch (e) { return dir; }
+}
+const WORKSPACE = realWorkspace(path.resolve(opts.workspace || process.cwd()));
 // One-shot rename migrations (bridge-command → bridge-commander). Boot-time and
 // idempotent: the server owns this workspace as it starts, so renaming the state
 // dir before any path below is used is safe. Legacy installs survive the flag day.

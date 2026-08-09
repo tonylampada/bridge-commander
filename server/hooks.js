@@ -408,6 +408,14 @@ function readRuns(workspace, opts) {
 // (`<event>/<name>` or bare `<name>`), holding its most recent trace record.
 // ONE backward walk for the whole list — the hooks tab asks this once per
 // paint, so it must not be one scan per row.
+//
+// And a SHORT walk. The scan only stops early once every hook has been found, so
+// a single hook that has never run — a freshly dropped one, the common case —
+// would otherwise read the whole 4MB budget on every paint, every ▶ and every
+// `hook list`. What the bound costs: a hook whose last run is older than this
+// tail reads as "never ran" on the tab. `hook runs` still walks the full budget,
+// so the history is never lost, only the summary's reach.
+const LAST_RUN_BYTES = 512 * 1024;
 function hookKey(h) { return (h.event ? h.event + '/' : '') + h.name; }
 
 function lastRuns(workspace, hooks) {
@@ -423,7 +431,7 @@ function lastRuns(workspace, hooks) {
       if (h.event ? rec.trigger === h.event : !events.has(rec.trigger)) out.set(k, rec);
     }
     return out.size >= want.length;
-  });
+  }, LAST_RUN_BYTES);
   return out;
 }
 
