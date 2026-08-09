@@ -846,7 +846,12 @@ async function cmdStart() {
   if (opts.model) body.model = opts.model;
   if (opts.effort) body.effort = opts.effort;
   console.log((opts.resume ? 'resuming' : 'starting') + ' a worker for ' + id + ' (worktree + real session — can take a minute)...');
-  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/start', body, 180000);
+  // Five minutes, because everything this waits on is slow and real: a cold
+  // clone of a big repo, and on a rework restart the previous run's teardown
+  // (capped at 60s server-side) before provisioning even begins. A caller that
+  // gives up early sees a timeout while the worker starts perfectly well behind
+  // it — and cannot retry, since the start is already in flight.
+  const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/start', body, 300000);
   const w = r.worker;
   console.log((r.resumed ? 'resumed' : 'started') + ' worker ' + w.ref.harness + ':' + w.ref.session
     + (w.ref.window ? ':' + w.ref.window : '')

@@ -125,7 +125,7 @@ Env knobs (set on the server process):
 | `BC_TURNEND_URL` | — | default callback URL baked into installed turn-end hooks |
 | `BC_SEND_RETRIES` / `BC_SEND_SLEEP_MS` | `3` / `400` | verified-submit tuning for `harness.send` |
 | `BC_HOOK_TIMEOUT_MS` | `120000` | per-script timeout for workspace lifecycle hooks |
-| `BC_TEARDOWN_TIMEOUT_MS` | `300000` | timeout for a playbook's `teardown` command |
+| `BC_TEARDOWN_TIMEOUT_MS` | `300000` / `60000` | timeout for a playbook's `teardown` command — 5 min at the handoff and archive (un-awaited), 60s at a rework restart (awaited inside `card start`); set, it overrides both |
 | `BC_SYSLOAD_MS` | `2000` | monitoring panel (⚙️ → machine load) sample interval; the sampler runs only while the panel is open |
 
 ### Lifecycle hooks

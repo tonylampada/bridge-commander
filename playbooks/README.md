@@ -70,16 +70,23 @@ card timeline says which path and why, and the directory stays exactly as it is.
 `teardown` is for what a playbook STARTS and nothing else stops — a devcontainer, a compose
 stack, a tunnel. A container that outlives its worktree is the same bug as a worktree that
 outlives its work, one layer down, and the playbook that started it is the thing that knows how
-to stop it. The command runs at the handoff, immediately before the release: cwd is the
-worktree, the `BC_*` environment is the one hooks get, and every run lands an event on the card
-— the command, the exit code, how long it took and the tail of its output — so a teardown that
-worked is as visible as one that did not.
+to stop it. The command runs immediately before a release — at the handoff, at archive, and at
+a rework restart: cwd is the worktree, the `BC_*` environment is the one hooks get, and every
+run lands an event on the card — the command, the exit code, how long it took and the tail of
+its output — so a teardown that worked is as visible as one that did not.
 
-It is **best effort**. A non-zero exit, or a run still going at five minutes, is killed, lands
+It is **best effort**. A non-zero exit, or a run still going past its budget, is killed, lands
 its event and the release goes ahead exactly as if no teardown had been configured: a broken
 script must never wedge a card, and nothing is lost by carrying on — if the container really is
-still holding the checkout, the release refuses on its own and says why. `keep_worktree: true`
-runs neither: the container is part of what is being kept.
+still holding the checkout, the release refuses on its own and says why. The budget is five
+minutes at the handoff and at archive, where nobody is waiting on the answer, and **one minute
+at the restart**, which is awaited inside `card start` with a caller on the line
+(`BC_TEARDOWN_TIMEOUT_MS` overrides both). A run that succeeded is never repeated for the same
+worker; one that failed stays retryable at the next release point.
+
+`keep_worktree: true` runs neither at the handoff — the container is part of what is being
+kept. The **restart** does run it: that is the moment the kept checkout is actually destroyed,
+so the container that stands on it goes first.
 
 ## Worker duties
 

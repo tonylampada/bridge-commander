@@ -576,6 +576,36 @@ test('`keep_worktree: true` + teardown: the handoff runs neither, the RESTART ru
   }
 });
 
+test('a teardown that FAILED is retried at the next release point; one that succeeded is not', async () => {
+  const { s, root, teardown } = await bootWithProject();
+  try {
+    const out = path.join(root, 'retry.out');
+    // leaves the checkout dirty on its way out, so the release refuses and the
+    // worktree — and its container — are still there for the next attempt
+    writePlaybook(s, 'wedged', ['---',
+      'teardown: echo ran >> ' + out + '; echo still up > leftover.txt; exit 3',
+      '---', 'x', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Wedged', id: 'td-retry', playbook: 'wedged', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/td-retry/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/td-retry/worker/done', { outcome: 'shipped' });
+    await s.api('POST', '/api/cards/td-retry/move', { column: 'review', actor: 'agent' });
+
+    await until('the release is refused, and says why', async () => {
+      const c = (await s.api('GET', '/api/cards/td-retry')).body;
+      return (c.events || []).find((e) => /^worktree kept \(/.test(e.text));
+    });
+    assert.strictEqual(fs.readFileSync(out, 'utf8'), 'ran\n', 'once so far');
+    assert.ok(fs.existsSync(w.worktree.path), 'the checkout stayed');
+
+    // a failure never spends the card's only attempt — archive is the next
+    // release point, and it tries again
+    const ar = await s.api('POST', '/api/cards/td-retry/archive', { reason: 'killed', note: 'giving up' });
+    assert.strictEqual(ar.status, 200, JSON.stringify(ar.body));
+    await until('the teardown ran again', async () => fs.readFileSync(out, 'utf8') === 'ran\nran\n');
+  } finally { await teardown(); }
+});
+
 test('the handoff teardown does not run a second time when the card is archived', async () => {
   const { s, root, teardown } = await bootWithProject();
   try {

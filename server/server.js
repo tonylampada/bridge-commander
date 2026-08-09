@@ -62,7 +62,7 @@ const crypto = require('crypto');
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
-const { runHooks, runTeardown } = require(path.join(__dirname, 'hooks.js'));
+const { runHooks, runTeardown, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -2070,11 +2070,29 @@ function landCardEvent(card, ev, opts) {
   return ev;
 }
 
-// The playbook's `teardown` command — 5 minutes, then killed and treated as a
-// failure. BC_TEARDOWN_TIMEOUT_MS overrides it (tests), mirroring the hooks.
+// The playbook's `teardown` gets TWO budgets, named apart on purpose: the
+// difference between them is who is waiting.
+//
+// At the handoff and at archive the command is fired UN-AWAITED — `card.move`
+// answers immediately — so it can afford the full five minutes.
 const TEARDOWN_TIMEOUT_MS = parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) > 0
-  ? parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) : 0; // 0 = the module default (5 min)
+  ? parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) : TEARDOWN_DEFAULT_MS;
+// At the rework RESTART it is awaited inside the `card start` request, ahead of
+// a fetch, a worktree add and a spawn, with a CLI holding the line — so it gets
+// one minute. `compose down` is the use case and does not need more; a stack
+// still wedged past that is exactly the case whose answer is "land the event,
+// carry on, and let releaseWorktree make its own decision".
+//
+// BC_TEARDOWN_TIMEOUT_MS overrides BOTH: it is the test knob, and a test that
+// pins one budget wants the other honest too.
+const RESTART_TEARDOWN_TIMEOUT_MS = parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) > 0
+  ? parseInt(process.env.BC_TEARDOWN_TIMEOUT_MS, 10) : 60000;
 const TEARDOWN_OUTPUT_TAIL = 1200; // of the event text, whose own cap is 2000
+
+// In-flight teardowns, by worker record. Deliberately NOT on the worker (and so
+// never persisted): a run interrupted by a server restart is not in flight, and
+// a flag that survived one would block the command forever.
+const teardownInFlight = new WeakSet();
 
 // runCardTeardown(card, w, wtPath) — a container that outlives its worktree is
 // the same bug as a worktree that outlives its work, one layer down, and the
@@ -2093,7 +2111,7 @@ const TEARDOWN_OUTPUT_TAIL = 1200; // of the event text, whose own cap is 2000
 // Reported through the hook kinds because it IS one of those: a user-owned
 // command the board runs on a lifecycle moment, whose failure rings the same
 // bell. The text says `teardown`, so the timeline still tells them apart.
-async function runCardTeardown(card, w, wtPath) {
+async function runCardTeardown(card, w, wtPath, timeoutMs) {
   const command = String((w && w.teardown) || '').trim();
   if (!command) return null;
   // Nothing left to tear down in a directory that is gone.
@@ -2101,18 +2119,19 @@ async function runCardTeardown(card, w, wtPath) {
   // But a directory that is THERE is not a record that this never ran: a
   // treehouse checkout is RETURNED to its pool, not deleted, so the archive
   // backstop would find the same path and stop the same run twice — against a
-  // directory that may already be leased to another card. What ran belongs on
-  // the worker, and it is written BEFORE the await so two call sites racing
-  // (a move immediately followed by an archive) cannot both get through.
-  if (w.teardownRan) return null;
-  w.teardownRan = true;
+  // directory that may already be leased to another card. The record belongs on
+  // the worker, and it records a SUCCESS: a teardown exists to be run at a
+  // release, not once per card, so a failure or a timeout stays retryable at
+  // the next release point — which is the whole reason the restart runs it.
+  if (w.teardownRan || teardownInFlight.has(w)) return null;
+  teardownInFlight.add(w);
   try {
     // The worktree is passed, never re-derived: hookContext() reports a
     // released worktree as '' and runTeardown would fall back to the workspace
     // root — the one directory a teardown must not run in.
     const ctx = Object.assign(hookContext(card, w), { worktree: wtPath });
-    const r = await runTeardown(command, ctx,
-      TEARDOWN_TIMEOUT_MS ? { timeoutMs: TEARDOWN_TIMEOUT_MS } : undefined);
+    const r = await runTeardown(command, ctx, { timeoutMs });
+    if (r.ok) w.teardownRan = true;
     const detail = r.timedOut ? 'timed out'
       : r.error ? String(r.error)
       : 'exit ' + r.code;
@@ -2131,6 +2150,8 @@ async function runCardTeardown(card, w, wtPath) {
   } catch (e) {
     console.error(now() + ' teardown for ' + card.id + ' failed: ' + String((e && e.message) || e));
     return null;
+  } finally {
+    teardownInFlight.delete(w);
   }
 }
 
@@ -2169,7 +2190,7 @@ async function releaseCardWorktree(card, w, opts = {}) {
     // The playbook's teardown gets its turn first: the release is the moment the
     // ground goes, so stopping what stands on it happens immediately before,
     // never after. Never throws, and its outcome never steers what follows.
-    await runCardTeardown(card, w, wtRec.path);
+    await runCardTeardown(card, w, wtRec.path, TEARDOWN_TIMEOUT_MS);
     // The teardown is an unbounded wait (minutes), so the guard above stopped
     // being atomic: a rework restart in the meantime re-provisions the SAME
     // deterministic path, and releasing now would delete a live worker's fresh
@@ -2450,8 +2471,10 @@ async function doStartCard(card, body) {
     // container still up. The command run is the PREVIOUS worker's recorded
     // one, never the playbook being started: what must be stopped is what was
     // brought up. Best effort, exactly as at the handoff — the release below
-    // makes its own decision, and still 409s if it refuses.
-    await runCardTeardown(card, existing, existing.worktree && existing.worktree.path);
+    // makes its own decision, and still 409s if it refuses — on the shorter
+    // budget, because this one is awaited with a caller on the line.
+    await runCardTeardown(card, existing, existing.worktree && existing.worktree.path,
+      RESTART_TEARDOWN_TIMEOUT_MS);
     const rel = await releaseWorktree(existing.worktree, prevProject.path);
     if (!rel.released) {
       return { error: 'previous worker worktree not releasable (' + rel.reason + '): ' + existing.worktree.path, code: 409 };
