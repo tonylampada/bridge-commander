@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { startServerWithLieutenant } = require('./helper');
+const { LIFECYCLE_EVENTS } = require('../server/hooks.js');
 
 const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
 const uriOf = (f) => 'file://' + f;
@@ -87,6 +88,66 @@ test('a hook written where none was is born EXECUTABLE — there is no chmod on 
     // and it is a hook the moment it lands
     assert.ok((await s.api('GET', '/api/hooks')).body.hooks.some((h) => h.name === 'brand-new'));
   } finally { await s.stop(); }
+});
+
+// A workspace that has never had a hook has no hooks/ either, and that must not
+// be the one place a lieutenant cannot write the first one — `bc-axi artifact
+// write` IS the path the card names for "a new hook is a file you or a
+// lieutenant writes". hooks/ is a fixed name the board owns, so the board makes
+// it, exactly as it makes a lieutenant's memory folder.
+test('the FIRST hook in a workspace creates hooks/ — the board owns that name', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    assert.ok(!fs.existsSync(hooksDir(s.dir)), 'no hooks directory to start with');
+    const file = path.join(hooksDir(s.dir), 'gh-watch');
+    const put = await s.api('PUT', '/api/artifact',
+      { uri: uriOf(file), content: '#!/bin/sh\necho hi\n', version: '' });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), '#!/bin/sh\necho hi\n');
+    assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111, 'and born executable');
+    assert.ok((await s.api('GET', '/api/hooks')).body.hooks.some((h) => h.name === 'gh-watch'));
+  } finally { await s.stop(); }
+});
+
+// An event directory is not a fixed name: creating one invents a lifecycle
+// event, and a typo'd event is a hook that silently never fires, forever. So it
+// stays a refusal — but an HONEST one. A legal path whose tree is missing is a
+// different answer from a path that is not a hook at all, and "unknown
+// artifact" would be a lie: the name is fine, the id is fine, the directory is
+// what is missing.
+test('a hook in an event directory that is not there is refused by NAME, not as an unknown artifact', async () => {
+  const s = await boot();
+  try {
+    const missing = path.join(hooksDir(s.dir), 'worker-dnoe', 'sweep.sh'); // the typo is the point
+    for (const r of [await get(s, uriOf(missing)),
+      await s.api('PUT', '/api/artifact', { uri: uriOf(missing), content: '#!/bin/sh\n', version: '' })]) {
+      assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+      assert.match(r.body.error, /no hook event directory "worker-dnoe"/);
+      for (const e of LIFECYCLE_EVENTS) assert.ok(r.body.error.includes(e), 'it names ' + e);
+      assert.ok(!/unknown artifact/.test(r.body.error), 'and never pretends the path is unknown');
+    }
+    assert.ok(!fs.existsSync(path.dirname(missing)), 'nothing was created for a typo');
+  } finally { await s.stop(); }
+});
+
+test('an event directory that IS there takes the write, and the board never invents one', async () => {
+  const s = await boot();
+  try {
+    fs.mkdirSync(path.join(hooksDir(s.dir), 'worker-done'), { recursive: true });
+    const file = path.join(hooksDir(s.dir), 'worker-done', 'sweep.sh');
+    const put = await s.api('PUT', '/api/artifact', { uri: uriOf(file), content: '#!/bin/sh\n', version: '' });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111);
+  } finally { await s.stop(); }
+});
+
+// The list the refusal prints has to be the events the server really fires, or
+// it sends people to build hooks in a directory nothing will ever look at.
+test('LIFECYCLE_EVENTS is exactly what the server fires', () => {
+  const server = fs.readFileSync(path.join(__dirname, '..', 'server', 'server.js'), 'utf8');
+  const fired = [...server.matchAll(/fireHooks\('([^']+)'/g)].map((m) => m[1]);
+  assert.ok(fired.length >= 3, 'the fireHooks call sites are found');
+  assert.deepStrictEqual([...new Set(fired)].sort(), [...LIFECYCLE_EVENTS].sort());
 });
 
 // ---------- what the gate refuses ----------

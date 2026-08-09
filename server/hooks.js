@@ -69,6 +69,11 @@ const CLI_DIR = path.join(__dirname, '..', 'cli');
 // board uses (playbook ids, lieutenant ids). Keeps `../` and an empty name out
 // of every path this module builds.
 const NAME_RE = /^[\w][\w.-]*$/;
+// The lifecycle events the board actually fires, alphabetical. Not a gate — a
+// workspace may hold any directory it likes and runHooks runs whatever it is
+// handed — but the ONE list to print when someone spells an event and nothing
+// will ever fire it. A test pins it to the events server.js really fires.
+const LIFECYCLE_EVENTS = ['card-archived', 'worker-died', 'worker-done'];
 const DEFAULT_TIMEOUT_MS = 120000;
 // A teardown stops what a whole card's run started (a devcontainer, a compose
 // stack): minutes, not the seconds a hook script takes.
@@ -450,6 +455,6 @@ function runTeardown(command, ctx, opts) {
 
 module.exports = {
   runHooks, runTeardown, listHooks, listAllHooks, namedHookFile, runNamedHook, runningHook,
-  readRuns, lastRuns, hookKey, hooksDir, runsFile, HOOK_NAME_RE: NAME_RE,
+  readRuns, lastRuns, hookKey, hooksDir, runsFile, HOOK_NAME_RE: NAME_RE, LIFECYCLE_EVENTS,
   DEFAULT_TIMEOUT_MS, TEARDOWN_TIMEOUT_MS,
 };

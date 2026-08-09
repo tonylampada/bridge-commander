@@ -191,7 +191,7 @@ test('a broken interpreter is a traced failure, not a crash', async () => {
 test('a second run of a name already in flight is refused, naming the one that is running', async () => {
   const ws = scratchWs();
   try {
-    named(ws, 'slow', 'sleep 2');
+    named(ws, 'slow', 'sleep 1');
     const first = runNamedHook(ws, 'slow', { card: 'MNC-1' }, { trigger: 'schedule' });
     await sleep(150);
     await assert.rejects(() => runNamedHook(ws, 'slow', {}, { trigger: 'board' }), (e) => {
@@ -283,7 +283,7 @@ test('hook run over the CLI: a failing hook exits 1 and the trace says why; a bu
   const s = await startServerWithLieutenant();
   try {
     named(s.dir, 'boom', 'echo nope >&2\nexit 4');
-    named(s.dir, 'slow', 'sleep 2');
+    named(s.dir, 'slow', 'sleep 1');
     const ws = ['--workspace', s.dir, '--port', String(s.port)];
 
     const bad = await runCli(['hook', 'run', 'boom', ...ws]);

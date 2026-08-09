@@ -65,7 +65,7 @@ const crypto = require('crypto');
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
-  hooksDir, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE } = require(path.join(__dirname, 'hooks.js'));
+  hooksDir, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE, LIFECYCLE_EVENTS } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -3162,27 +3162,53 @@ function charterFile(uri) {
 // YET is still one (that is the create), which is why the leaf check tolerates
 // ENOENT and nothing else: a symlink, a directory and a socket all fail
 // isFile() and are refused rather than followed.
-function hookFile(uri) {
-  if (typeof uri !== 'string' || !uri.startsWith('file://')) return '';
+// Three answers, because two of them are different things:
+//   null      — not a hook path at all. Falls through to the other allowlists,
+//               and the caller gets the ordinary "unknown artifact" refusal.
+//   {file}    — a hook path the board reads and writes.
+//   {error}   — a hook path that is LEGAL and whose tree is not there. Answering
+//               "unknown artifact" to a legal path is a lie: the name is fine,
+//               the id is fine, the only thing missing is a directory. So it
+//               says which one, and what would have fired it.
+function hookTarget(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return null;
   const file = uri.slice('file://'.length);
   // path.resolve is idempotent on a clean absolute path — a `..` segment or a
   // relative path changes it, so `<dir>/../../board.json` never gets this far.
-  if (path.resolve(file) !== file) return '';
-  if (!HOOK_NAME_RE.test(path.basename(file))) return '';
+  if (path.resolve(file) !== file) return null;
+  if (!HOOK_NAME_RE.test(path.basename(file))) return null;
   const dir = path.dirname(file);
   const root = hooksDir(WORKSPACE);
+  // '' = a named hook, one level deep. Otherwise the EVENT directory it sits in.
+  let event = '';
   if (dir !== root) {
-    // two levels: an EVENT directory sitting directly in hooks/
-    if (path.dirname(dir) !== root || !HOOK_NAME_RE.test(path.basename(dir))) return '';
+    if (path.dirname(dir) !== root || !HOOK_NAME_RE.test(path.basename(dir))) return null;
+    event = path.basename(dir);
   }
-  // The directory has to be a real directory reached without following a link:
-  // a symlinked hooks/ (or event dir) points somewhere else, and somewhere else
-  // is the whole thing this refuses.
-  try { if (fs.realpathSync(dir) !== dir) return ''; }
-  catch (e) { return ''; }
-  try { if (!fs.lstatSync(file).isFile()) return ''; }
-  catch (e) { if (e.code !== 'ENOENT') return ''; }
-  return file;
+  let real;
+  try { real = fs.realpathSync(dir); }
+  catch (e) {
+    if (e.code !== 'ENOENT') return null;
+    // The directory is not there. `hooks/` is a CONSTANT the board owns, so the
+    // write below makes it — the same one level `charterFile` makes for a
+    // lieutenant that never wrote its memory file, and the path the card names
+    // when it says a new hook is a file a lieutenant writes.
+    if (!event) return { file };
+    // An event directory is NOT a constant: creating one invents a lifecycle
+    // event, and a typo'd event is a hook that silently never fires, forever,
+    // with nothing to notice it. So this stays a refusal — one that names the
+    // event and the ones that exist, instead of pretending the path is unknown.
+    return { code: 400, error: 'no hook event directory "' + event + '" — the board fires '
+      + LIFECYCLE_EVENTS.join(', ') + '. Create ' + dir + ' yourself if that is really the event: '
+      + 'one invented here would be a hook that never runs' };
+  }
+  // The directory has to be reached without following a link: a symlinked
+  // hooks/ (or event dir) points somewhere else, and somewhere else is the
+  // whole thing this refuses. Not a hook path, so it refuses as one.
+  if (real !== dir) return null;
+  try { if (!fs.lstatSync(file).isFile()) return null; }
+  catch (e) { if (e.code !== 'ENOENT') return null; }
+  return { file };
 }
 
 // ---------- server ----------
@@ -3269,7 +3295,9 @@ const server = http.createServer(async (req, res) => {
       const uri = url.searchParams.get('uri') || '';
       const raw = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
       const charter = charterFile(uri);
-      const hook = hookFile(uri);
+      const ht = hookTarget(uri);
+      if (ht && ht.error) return sendJson(res, ht.code, { error: ht.error });
+      const hook = (ht && ht.file) || '';
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
         c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri) || !!charter || !!hook;
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
@@ -3377,7 +3405,9 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
       const pbSource = playbookSource(uri);
       const charter = charterFile(uri);
-      const hook = hookFile(uri);
+      const ht = hookTarget(uri);
+      if (ht && ht.error) return sendJson(res, ht.code, { error: ht.error });
+      const hook = (ht && ht.file) || '';
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
         c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace' || !!charter || !!hook;
       if (!listed) {
@@ -3405,10 +3435,16 @@ const server = http.createServer(async (req, res) => {
         }
         const dir = path.dirname(file);
         // A charter's folder is the board's to make: a lieutenant registered
-        // without one has no other way to get `lieutenants/<id>/`. mkdir is a
-        // no-op when it is already there — including when it is a symlink,
-        // which the check right below still refuses.
-        if (charter) { try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) { /* the check below answers */ } }
+        // without one has no other way to get `lieutenants/<id>/`. So is a
+        // workspace's `hooks/` — a fixed name the board owns, and the card's
+        // "a new hook is a file you or a lieutenant writes" goes through this
+        // very route, so a workspace that has no hooks yet must not be the one
+        // place a lieutenant cannot write the first one. An EVENT directory is
+        // never made here: hookTarget refused before we got this far, because a
+        // directory invented from a typo is a hook that never runs.
+        // mkdir is a no-op when it is already there — including when it is a
+        // symlink, which the check right below still refuses.
+        if (charter || hook) { try { fs.mkdirSync(dir, { recursive: true }); } catch (e2) { /* the check below answers */ } }
         try { if (fs.realpathSync(dir) !== dir) throw new Error('symlink'); }
         catch (e2) { return sendJson(res, 403, { error: 'artifact path resolves elsewhere (symlink) — refusing to write' }); }
       }
