@@ -102,7 +102,11 @@ grep -q "is not on PATH" /root/init.log || exit 1
 grep -q "claude.ai/install.sh" /root/init.log || exit 1
 # …and the by-hand run has to happen in the WORKSPACE, because the folder-trust
 # question is about that folder, not about $HOME.
-grep -q "cd /root/myfleet && claude" /root/init.log || exit 1
+# …with the launch flag, because the bypass-permissions consent screen is raised
+# BY that flag: a hand-run of plain `claude` can never clear it.
+grep -q "cd /root/myfleet && claude --dangerously-skip-permissions" /root/init.log || exit 1
+# The installer does not edit PATH, and root's ~/.profile does not pick up ~/.local/bin.
+grep -q 'PATH="$HOME/.local/bin:$PATH"' /root/init.log || exit 1
 grep -q "not installed, or not logged in" /root/init.log && { echo "it guessed at a cause it did not check"; exit 1; }
 grep -q "board: http://localhost:4790/" /root/init.log || exit 1
 curl -sf http://127.0.0.1:4790/api/status | grep -q '"workspace":"/root/myfleet"' || exit 1

@@ -214,3 +214,42 @@ test('IS_SANDBOX rides the launch line only when the caller asked for it', async
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+// The one line that lied. A spawn RETURNING is a claim that there is a session;
+// round 3 of the install test found that claim printed over a consent modal the
+// person had never answered — the brief typed into a menu, the caller told it
+// worked. Every failure path was honest; the success path was the one nobody
+// re-checked.
+test('spawn refuses to report success over a screen that is waiting for a person', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const mock = mockTmux({ readyTail:
+    '  WARNING: Claude Code running in Bypass Permissions mode\n\n  ❯ 1. No, exit\n    2. Yes, I accept' });
+  try {
+    await assert.rejects(
+      () => claude.spawn(dir, 'a brief', { session: 'bc-consent', stateDir }),
+      (e) => {
+        assert.match(e.message, /Yes, I accept/, 'the screen rides back on the failure');
+        return true;
+      });
+  } finally {
+    mock.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+// …and the check is a check, not a new way to fail: a real UI still spawns.
+test('spawn still returns for a pane that is genuinely a running session', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const mock = mockTmux({ readyTail: '⏵⏵ bypass permissions on (shift+tab to cycle)\n❯ ' });
+  try {
+    const ref = await claude.spawn(dir, 'a brief', { session: 'bc-good', stateDir });
+    assert.strictEqual(ref.session, 'bc-good');
+  } finally {
+    mock.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});

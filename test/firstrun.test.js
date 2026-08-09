@@ -128,6 +128,15 @@ test('a spawn failure is diagnosed from the pane, and the pane comes back with i
 
   assert.strictEqual(fr.diagnoseSpawn(withTail('bash: claude: command not found')).cause, 'missing');
 
+  // Round 3: the consent screen only OUR launch line raises. The recipe has to
+  // carry the flag — `cd <ws> && claude` can be run all day and never see it.
+  d = fr.diagnoseSpawn(withTail(
+    '  WARNING: Claude Code running in Bypass Permissions mode\n  ❯ 1. No, exit\n    2. Yes, I accept'),
+  '/root/myfleet');
+  assert.strictEqual(d.cause, 'bypass');
+  assert.match(d.fix, /claude --dangerously-skip-permissions/, 'a recipe that cannot clear it is no recipe');
+  assert.match(d.fix, /2 \(Yes, I accept\)/);
+
   // Round 2: the folder-trust question, which is a THIRD setup screen and comes
   // before login. A user who ran `claude` once at home has not cleared it —
   // Bridget is spawned in the workspace, and the question is about that folder.
@@ -158,9 +167,37 @@ test('the agent-missing block installs as the user who will run it, and points a
   // Round 2: the root block says "become a normal user", and this block used to
   // answer with `npm i -g`, which for that user is EACCES. Two instructions that
   // contradict each other leave the person stuck between them.
-  const t = fr.agentMissingText('claude', '/home/dev/myfleet');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-')); // …one with no claude in it
+  const oldHome = process.env.HOME;
+  let t;
+  try { process.env.HOME = home; t = fr.agentMissingText('claude', '/home/dev/myfleet'); }
+  finally { process.env.HOME = oldHome; fs.rmSync(home, { recursive: true, force: true }); }
   assert.match(t, /claude\.ai\/install\.sh/, 'a route that needs no root comes first');
-  assert.match(t, /cd \/home\/dev\/myfleet && claude/, 'and the by-hand run happens in the workspace');
+  assert.match(t, /cd \/home\/dev\/myfleet && claude --dangerously-skip-permissions/,
+    'the by-hand run happens in the workspace, with the flag that raises every screen');
+  assert.match(t, /PATH="\$HOME\/\.local\/bin/, 'the installer does not edit PATH, so the block does');
+});
+
+test('installed-but-invisible is a different problem from not-installed', () => {
+  // Round 3: as root, the curl installer lands the binary in ~/.local/bin and
+  // root's ~/.profile does not pick it up — so "install it" was printed at
+  // someone who already had, forever.
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
+  const bin = path.join(home, '.local', 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\n', { mode: 0o755 });
+  const oldHome = process.env.HOME;
+  try {
+    process.env.HOME = home;
+    assert.strictEqual(fr.agentAtHome('claude'), path.join(bin, 'claude'));
+    const t = fr.agentMissingText('claude', '/root/myfleet');
+    assert.match(t, /is installed at .*\.local\/bin\/claude but is not on PATH/);
+    assert.match(t, /bashrc/, 'and it survives into the shell her session is launched from');
+    assert.doesNotMatch(t, /install\.sh/, 'it does not tell them to install what they have');
+  } finally {
+    process.env.HOME = oldHome;
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });
 
 test('with neither root nor sudo, the tmux block says the command will be refused', () => {

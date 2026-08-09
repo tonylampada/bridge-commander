@@ -78,6 +78,16 @@ The normal-user route (`useradd -m dev && su - dev`, then install the skill and 
 the right default. `--allow-root` launches her with `IS_SANDBOX=1`, turning off a guard that exists
 for good reasons — offer it only for a container they are about to delete, and only if they say yes.
 
+If you install Claude Code with `curl -fsSL https://claude.ai/install.sh | bash`, note that it does
+**not** edit anyone's PATH — it prints "Installation complete" and leaves it to you. As root, whose
+`~/.profile` does not pick up `~/.local/bin`, the next step then dies with `command not found`. Do
+both, for the user who will run it:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc   # her session is launched from a shell too
+```
+
 **`first run blocked (port-busy)`** — everything from 4780 up is taken. Ask which port they want and
 pass `--port <N>`.
 
@@ -87,19 +97,24 @@ names the cause from what is in it. Two you will meet on a fresh machine:
 - **the `claude` CLI has never been run** — her pane is parked on Claude Code's own setup wizard
   (the theme picker), which appears *before* any login question.
 - **the folder-trust question** — `Quick safety check: Is this a project you created or one you
-  trust?`. Claude Code asks it for any directory it has not seen before, also before login.
+  trust?`. Claude Code asks it for any directory it has not already trusted, also before login.
+  Trust is inherited from a trusted ancestor, so a workspace under a home directory they have
+  already used Claude Code in may never ask.
+- **the bypass-permissions consent screen** — `WARNING: Claude Code running in Bypass Permissions
+  mode`, with `1. No, exit` preselected. This one is raised **by the launch flag the spawn uses**,
+  so a hand-run of plain `claude` never meets it and can never clear it.
 - **not installed / not logged in** — the block names which, from the pane.
 
-For all of these the recipe is the same and the **directory matters**: have them run
+For all of these, have them run it by hand **in the workspace, with the flag** — that is the only
+form that meets every one of those screens:
 
 ```sh
-cd <the workspace folder> && claude
+cd <the workspace folder> && claude --dangerously-skip-permissions
 ```
 
-answer whatever it asks, `/exit`, then run the first-run command again. Running `claude` in their
-home directory does **not** clear the trust question — Bridget is spawned in the workspace, so the
-question is about that folder. Never answer those wizards for them: they pick a theme, a login
-method, and what a machine is trusted with.
+answer whatever it asks (`2. Yes, I accept` on the consent screen), `/exit`, then run the first-run
+command again. **Never answer those screens for them.** They choose a theme, a login method, what a
+machine is trusted with, and whether an agent may skip permission prompts — none of which is yours.
 
 In every one of these the board is already up and her welcome message is already on it. Re-running
 the same command is always the way forward; nothing is lost.

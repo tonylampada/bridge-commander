@@ -217,6 +217,33 @@ async function launchAndSettle(target, launchCmd, sig) {
   throw new Error(`${sig.label} did not start at ${target} within 45s; pane tail:\n${tail}`);
 }
 
+// verifyLive — the last look before a spawn is allowed to say it worked.
+//
+// launchAndSettle answers "did a UI appear?", which is not the same question as
+// "is there a session here now". A signature can match a screen that merely
+// CONTAINS the words (the bypass-permissions consent modal literally says
+// "Bypass Permissions mode", which the ready signature matched for months), and
+// the brief then goes into a menu while the caller is told the session started.
+//
+// A caller reporting success it did not check is worse than any honest failure,
+// because it is the one line nobody re-reads. So: after the brief is delivered,
+// look again — a fatal screen fails immediately, and a pane that does not look
+// like a running agent within `ms` fails with what it did look like.
+async function verifyLive(target, sig, ms = 6000) {
+  const deadline = Date.now() + ms;
+  let tail = '';
+  for (;;) {
+    tail = paneTail(await t.capture(target, 40));
+    if (sig.fatalRe && sig.fatalRe.test(tail)) {
+      throw new Error(`${sig.label} is not running at ${target} — it is on a screen that needs a person; pane tail:\n${tail}`);
+    }
+    if (sig.readyRe.test(tail)) return;
+    if (Date.now() >= deadline) break;
+    await t.sleep(500);
+  }
+  throw new Error(`${sig.label} did not settle into a running session at ${target}; pane tail:\n${tail}`);
+}
+
 // onTurnEnd(ref, hook) -> unsubscribe()
 // hook(event, ref) fires once per turn boundary; event is the JSON line the
 // harness's relay appended ({ ts, session, event, session_id, cwd }). Only
@@ -443,6 +470,7 @@ module.exports = {
   killPane,
   adoptWindow,
   launchAndSettle,
+  verifyLive,
   onTurnEnd,
   openPane,
   paneSnapshot,

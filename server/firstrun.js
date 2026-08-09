@@ -219,21 +219,47 @@ function rootBlockText() {
 // contradict each other are worse than either one alone. The official installer
 // puts the binary under ~/.local/bin and needs no root, so that is what is
 // offered first.
+// Installed-but-invisible is a different problem from not-installed, and it has
+// a different fix. The curl installer puts the binary in ~/.local/bin and leaves
+// the PATH edit to the user; on Debian a normal login shell picks that up from
+// ~/.profile, but root's does not — so as root the very next step dies with
+// "command not found" and re-running loops forever on the same message.
+function agentAtHome(bin) {
+  const home = process.env.HOME || '';
+  if (!home) return '';
+  const p = path.join(home, '.local', 'bin', bin);
+  try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (e) { return ''; }
+}
+
 function agentMissingText(harness, workspace) {
   const codex = harness === 'codex';
   const bin = codex ? 'codex' : 'claude';
+  const here = workspace || '<the workspace folder>';
+  const installed = agentAtHome(bin);
+  const runByHand = 'Then run it once by hand IN THE WORKSPACE — it has setup screens of its own that a spawned\n'
+    + 'session cannot answer (a theme picker, a login, a trust question about this folder, and a\n'
+    + 'one-time bypass-permissions consent screen that only the launch flag raises):\n'
+    + '  cd ' + here + ' && ' + bin + ' --dangerously-skip-permissions';
+  if (installed) {
+    return '`' + bin + '` is installed at ' + installed + ' but is not on PATH, so neither I nor her\n'
+      + 'session can start it. The board is up and her welcome message is on it.\n\n'
+      + 'Put it on PATH for this user — both now and for the shells her session is launched from:\n'
+      + '  export PATH="$HOME/.local/bin:$PATH"\n'
+      + '  echo \'export PATH="$HOME/.local/bin:$PATH"\' >> ~/.bashrc\n\n'
+      + runByHand;
+  }
   const install = codex
     ? '  npm i -g @openai/codex          # a user-local npm prefix, or an administrator, may be needed'
     : '  curl -fsSL https://claude.ai/install.sh | bash    # installs to ~/.local/bin — no root needed\n'
+      + '  # It does NOT edit your PATH. Afterwards:\n'
+      + '  export PATH="$HOME/.local/bin:$PATH" && echo \'export PATH="$HOME/.local/bin:$PATH"\' >> ~/.bashrc\n'
       + '  # (npm i -g @anthropic-ai/claude-code also works, but as a normal user it needs a\n'
       + '  #  user-local prefix: npm config set prefix ~/.npm-global, and that dir on PATH)';
   return 'the `' + bin + '` CLI is not on PATH, so Bridget has nothing to be a session of.\n'
     + 'The board is up and her welcome message is on it — she just cannot answer yet.\n\n'
     + 'ASK the person for permission, then install it as the user who will run it:\n'
     + install + '\n\n'
-    + 'Then run it once by hand IN THE WORKSPACE — it has setup screens of its own (theme, login,\n'
-    + 'and a trust question about this very folder) that a spawned session cannot answer:\n'
-    + '  cd ' + (workspace || '<the workspace folder>') + ' && ' + bin;
+    + runByHand;
 }
 
 // diagnoseSpawn — read the pane, do not guess at it.
@@ -248,12 +274,23 @@ function diagnoseSpawn(text, workspace) {
   const tail = (/pane tail:\n([\s\S]*)$/.exec(t) || [, ''])[1].trim();
   const here = workspace || '<the workspace folder>';
   const hit = (re, cause, headline, fix) => (re.test(t) ? { cause, headline, fix, tail } : null);
-  return hit(/Quick safety check|trust this folder|Accessing workspace/, 'trust',
+  // First, because it is the one screen our own launch line raises and the one
+  // no hand-run of plain `claude` can ever clear.
+  return hit(/Bypass Permissions mode|Yes, I accept/, 'bypass',
+    'her pane is on Claude Code\'s one-time bypass-permissions consent screen. That warning is\n'
+      + 'raised BY the --dangerously-skip-permissions flag the spawn uses, so running plain `claude`\n'
+      + 'never sees it — and it is not mine to accept for anyone: it is consent to an agent that\n'
+      + 'skips permission prompts on this machine.',
+    'Have the person run the launch line itself, once, and answer 2 (Yes, I accept) — then /exit\n'
+      + 'and run the SAME command again:\n'
+      + '  cd ' + here + ' && claude --dangerously-skip-permissions\n'
+      + '(The preselected option on that screen is "No, exit", so it is theirs to answer, not mine.)')
+  || hit(/Quick safety check|trust this folder|Accessing workspace/, 'trust',
     'her pane is on Claude Code\'s folder-trust question for the workspace — it asks about any\n'
-      + 'directory it has not seen before, and it comes BEFORE login.',
-    'Running `claude` in their home directory does NOT clear this one: Bridget is spawned in the\n'
-      + 'workspace, so the trust question is about THAT folder. Run it there once, answer the\n'
-      + 'question, quit with /exit, then run the SAME command again:\n'
+      + 'directory it has not already trusted, and it comes BEFORE login.',
+    'Trust is inherited from a trusted ancestor, so running `claude` in their home directory MAY\n'
+      + 'have cleared it (a workspace under ~ usually is) — but it may not have. Run it in the\n'
+      + 'workspace itself, answer the question, quit with /exit, then run the SAME command again:\n'
       + '  cd ' + here + ' && claude')
   || hit(/cannot be used with root\/sudo privileges/, 'root',
     'claude refuses --dangerously-skip-permissions as root, and exited.',
@@ -308,5 +345,5 @@ module.exports = {
   IGNORABLE, MANIFESTS, SOURCE_DIRS, SOURCE_EXT, ONBOARDING_STEPS,
   isWorkspaceDir, inspectTarget, listPhrase, refusalText,
   hasBin, isRoot, installCommand, tmuxMissingText, gitIdentity, gitIdentityText, portFree,
-  rootBlockText, agentMissingText, diagnoseSpawn,
+  rootBlockText, agentMissingText, agentAtHome, diagnoseSpawn,
 };

@@ -7,7 +7,26 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { startServerWithLieutenant, runCli, freePort } = require('./helper');
+const { startServerWithLieutenant, runCli } = require('./helper');
+
+// Ports for this file come from a fixed low band, NOT from helper's freePort().
+// freePort() asks the OS for an ephemeral port and closes it again, so the port
+// is only a suggestion — every test in the suite that boots a server is racing
+// for the same pool, and the loser sees somebody else's server answering on
+// "its" port. These tests boot several real servers through the CLI, so they
+// stay out of that pool entirely instead of adding pressure to it.
+function lowPort(from = 4900) {
+  return new Promise((resolve, reject) => {
+    let port = from;
+    const tryOne = () => {
+      if (port > 4990) return reject(new Error('no free port in ' + from + '-4990'));
+      const srv = require('node:net').createServer();
+      srv.once('error', () => { port += 2; tryOne(); });
+      srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(port)));
+    };
+    tryOne();
+  });
+}
 
 // HOME is redirected so the run cannot touch the developer's own ~/.claude
 // (the worker-duties skill symlink) or read their real git identity — which
@@ -45,7 +64,7 @@ test('onboarding state is board state: set, read, validated, and shipped with th
 test('init --onboard leaves a board with Bridget on it, and a re-run resumes', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const port = await freePort();
+  const port = await lowPort();
   const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
   try {
     let r = await runCli(args, onboardEnv(home));
@@ -105,7 +124,7 @@ test('init --onboard continues an existing workspace instead of refusing it', as
   // folder is now full of the scaffolding a code-project test would trip on.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const port = await freePort();
+  const port = await lowPort();
   const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
   try {
     fs.writeFileSync(path.join(dir, 'package.json'), '{}'); // a repo would be refused…
@@ -135,7 +154,7 @@ test('--host on an already-running board rebinds it, prints the reachable URL, a
   // loopback, still printing localhost, and nothing written down.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const port = await freePort();
+  const port = await lowPort();
   const base = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
   // A second loopback address: bindable, not 127.0.0.1, and reachable from here
   // — so this stays a real rebind without opening anything to the network.
@@ -168,9 +187,9 @@ test('--host on an already-running board rebinds it, prints the reachable URL, a
 // another test in this run is about to try to bind.
 function squatLowPort() {
   return new Promise((resolve, reject) => {
-    let port = 4900;
+    let port = 4950; // a slice of the band the other tests here do not reach first
     const tryOne = () => {
-      if (port > 4990) return reject(new Error('no free port in 4900-4990'));
+      if (port > 4990) return reject(new Error('no free port in 4950-4990'));
       const srv = require('node:net').createServer();
       srv.once('error', () => { port += 2; tryOne(); });
       srv.listen(port, '127.0.0.1', () => resolve({ srv, port }));

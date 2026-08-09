@@ -90,7 +90,13 @@ const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 //              pick their theme, their login method and their telemetry answer
 //              for them.
 //   missing    the shell answering "command not found" — no binary at all.
-const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude/;
+//   bypass     the one-time "WARNING: Claude Code running in Bypass Permissions
+//              mode" consent modal, raised BY --dangerously-skip-permissions.
+//              Its preselected option is `1. No, exit`, so it is emphatically
+//              not one to answer with a blind Enter, and it is not ours to
+//              accept on anyone's behalf: it is a person saying yes to an agent
+//              that skips permission prompts on their machine.
+const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude|Bypass Permissions mode|Yes, I accept/;
 const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, fatalRe: FATAL_RE, label: 'claude' };
 
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
@@ -174,6 +180,10 @@ async function spawn(cwd, prompt, opts = {}) {
       + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(session, window), launchCmd, SETTLE);
     await deliverPrompt(s.paneTarget(session, window), prompt);
+    // Returning is a claim that there is a session here. Check it, once, against
+    // the pane — a settle that matched a modal's own wording is exactly how a
+    // spawn came to report success over a consent screen nobody had answered.
+    await s.verifyLive(s.paneTarget(session, window), SETTLE);
   } catch (err) {
     await s.killPane(session, window);
     try { fs.unlinkSync(promptFile); } catch { /* best-effort */ }
