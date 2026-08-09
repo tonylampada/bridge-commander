@@ -7,26 +7,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { startServerWithLieutenant, runCli } = require('./helper');
-
-// Ports for this file come from a fixed low band, NOT from helper's freePort().
-// freePort() asks the OS for an ephemeral port and closes it again, so the port
-// is only a suggestion — every test in the suite that boots a server is racing
-// for the same pool, and the loser sees somebody else's server answering on
-// "its" port. These tests boot several real servers through the CLI, so they
-// stay out of that pool entirely instead of adding pressure to it.
-function lowPort(from = 4900) {
-  return new Promise((resolve, reject) => {
-    let port = from;
-    const tryOne = () => {
-      if (port > 4990) return reject(new Error('no free port in ' + from + '-4990'));
-      const srv = require('node:net').createServer();
-      srv.once('error', () => { port += 2; tryOne(); });
-      srv.listen(port, '127.0.0.1', () => srv.close(() => resolve(port)));
-    };
-    tryOne();
-  });
-}
+const { startServerWithLieutenant, runCli, freePort, retryOnPortClash } = require('./helper');
 
 // HOME is redirected so the run cannot touch the developer's own ~/.claude
 // (the worker-duties skill symlink) or read their real git identity — which
@@ -37,6 +18,45 @@ function onboardEnv(home) {
     GIT_CONFIG_GLOBAL: path.join(home, 'gitconfig-none'),
     GIT_CONFIG_SYSTEM: '/dev/null',
   };
+}
+
+function squatPort() {
+  return new Promise((resolve, reject) => {
+    const srv = require('node:net').createServer((c) => c.destroy());
+    srv.once('error', reject);
+    srv.listen(0, '127.0.0.1', () => resolve({
+      port: srv.address().port,
+      release: () => new Promise((r) => srv.close(r)),
+    }));
+  });
+}
+
+function serverLog(dir) {
+  try { return fs.readFileSync(path.join(dir, '.bridge-commander', 'server.log'), 'utf8'); }
+  catch (e) { return ''; }
+}
+
+// `init --onboard` boots a server this test does not control, so it can lose the
+// port between reserving it and the server binding it — the same race
+// ensure-server.test.js wraps, and the same two faces: our boot could not bind,
+// or somebody else's board is answering on the number. Either one earns another
+// go on a fresh port; nothing else does.
+//
+// The port is threaded back out because everything after the first boot in these
+// tests — re-runs, `onboarding set`, `stop` — has to reach the SAME board.
+function bootOnboard(dir, home, extra = []) {
+  return retryOnPortClash(async () => {
+    const port = await freePort();
+    const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
+    const r = await runCli(args.concat(extra), onboardEnv(home));
+    if (r.code !== 0 && /EADDRINUSE/.test(serverLog(dir))) throw new Error('EADDRINUSE: boot lost the port');
+    if (r.code === 0 && !r.stdout.includes('port ' + port)) {
+      // It walked forward off a port somebody else holds — correct behaviour,
+      // and it means the number we reserved is not the one it is on.
+      throw new Error('EADDRINUSE: ' + port + ' was taken, the run moved: ' + r.stdout.trim());
+    }
+    return { port, args, r };
+  });
 }
 
 test('onboarding state is board state: set, read, validated, and shipped with the board', async () => {
@@ -64,10 +84,9 @@ test('onboarding state is board state: set, read, validated, and shipped with th
 test('init --onboard leaves a board with Bridget on it, and a re-run resumes', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const port = await lowPort();
-  const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
+  let port; let args; let r;
   try {
-    let r = await runCli(args, onboardEnv(home));
+    ({ port, args, r } = await bootOnboard(dir, home));
     assert.strictEqual(r.code, 0, r.stderr + r.stdout);
     assert.match(r.stdout, new RegExp('board: http://localhost:' + port + '/'));
     // git identity is a WARNING, never a wall: the board came up without one.
@@ -113,7 +132,7 @@ test('init --onboard leaves a board with Bridget on it, and a re-run resumes', a
     r = await runCli(['onboarding', '--workspace', dir, '--port', String(port), '--json']);
     assert.strictEqual(JSON.parse(r.stdout).step, 'tools');
   } finally {
-    await runCli(['stop', '--workspace', dir, '--port', String(port)]);
+    if (port) await runCli(['stop', '--workspace', dir, '--port', String(port)]);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -124,16 +143,17 @@ test('init --onboard continues an existing workspace instead of refusing it', as
   // folder is now full of the scaffolding a code-project test would trip on.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const port = await lowPort();
-  const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
+  let port; let args; let r;
   try {
     fs.writeFileSync(path.join(dir, 'package.json'), '{}'); // a repo would be refused…
-    let r = await runCli(args, onboardEnv(home));
-    assert.strictEqual(r.code, 1);
-    assert.match(r.stderr, /first run refused \(project\)/);
+    // The refusal binds nothing, so it needs no port of its own.
+    const refused = await runCli(
+      ['init', '--onboard', '--workspace', dir, '--port', '0', '--harness', 'fake'], onboardEnv(home));
+    assert.strictEqual(refused.code, 1);
+    assert.match(refused.stderr, /first run refused \(project\)/);
 
     // …until the person says this folder is the workspace.
-    r = await runCli(args.concat('--here'), onboardEnv(home));
+    ({ port, args, r } = await bootOnboard(dir, home, ['--here']));
     assert.strictEqual(r.code, 0, r.stderr + r.stdout);
 
     // From here on the workspace answer wins on its own — no --here needed.
@@ -141,7 +161,7 @@ test('init --onboard continues an existing workspace instead of refusing it', as
     assert.strictEqual(r.code, 0, r.stderr + r.stdout);
     assert.match(r.stdout, /welcome message already on the board/);
   } finally {
-    await runCli(['stop', '--workspace', dir, '--port', String(port)]);
+    if (port) await runCli(['stop', '--workspace', dir, '--port', String(port)]);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -154,13 +174,12 @@ test('--host on an already-running board rebinds it, prints the reachable URL, a
   // loopback, still printing localhost, and nothing written down.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const port = await lowPort();
-  const base = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
   // A second loopback address: bindable, not 127.0.0.1, and reachable from here
   // — so this stays a real rebind without opening anything to the network.
   const HOST = '127.0.0.2';
+  let port; let base; let r;
   try {
-    let r = await runCli(base, onboardEnv(home));
+    ({ port, args: base, r } = await bootOnboard(dir, home));
     assert.strictEqual(r.code, 0, r.stderr + r.stdout);
     assert.match(r.stdout, /board: http:\/\/localhost:/, 'a loopback board says localhost');
 
@@ -176,46 +195,41 @@ test('--host on an already-running board rebinds it, prints the reachable URL, a
     const st = await (await fetch('http://' + HOST + ':' + port + '/api/status')).json();
     assert.strictEqual(st.host, HOST, 'and the server says what it actually bound');
   } finally {
-    await runCli(['stop', '--workspace', dir, '--port', String(port)]);
+    if (port) await runCli(['stop', '--workspace', dir, '--port', String(port)]);
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
-// The walk-forward test needs a base OUTSIDE the ephemeral range: it binds
-// base+1 itself, and a port the OS is still handing out to freePort() is a port
-// another test in this run is about to try to bind.
-function squatLowPort() {
-  return new Promise((resolve, reject) => {
-    let port = 4950; // a slice of the band the other tests here do not reach first
-    const tryOne = () => {
-      if (port > 4990) return reject(new Error('no free port in 4950-4990'));
-      const srv = require('node:net').createServer();
-      srv.once('error', () => { port += 2; tryOne(); });
-      srv.listen(port, '127.0.0.1', () => resolve({ srv, port }));
-    };
-    tryOne();
-  });
-}
-
+// The squatter: an OS-assigned port (the repo's rule — nothing pinned) held for
+// as long as the test wants it. It hangs up on anything that connects, because
+// the CLI PROBES the port it was asked for before walking on, and a probe
+// connection left open would keep close() waiting forever — reservePort()'s
+// release() is written for a port nobody talks to.
 test('init --onboard walks forward off a port somebody else is holding', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
-  const { srv: squatter, port: taken } = await squatLowPort();
+  const held = await squatPort();
   try {
-    const r = await runCli(
-      ['init', '--onboard', '--workspace', dir, '--port', String(taken), '--harness', 'fake'],
-      onboardEnv(home));
+    // The port it walks ONTO is another number nobody promised us, so this is
+    // the same lost-port race as any other boot here.
+    const r = await retryOnPortClash(async () => {
+      const out = await runCli(
+        ['init', '--onboard', '--workspace', dir, '--port', String(held.port), '--harness', 'fake'],
+        onboardEnv(home));
+      if (out.code !== 0 && /EADDRINUSE/.test(serverLog(dir))) throw new Error('EADDRINUSE: boot lost the port');
+      return out;
+    });
     assert.strictEqual(r.code, 0, r.stderr + r.stdout);
-    assert.match(r.stderr, new RegExp('port ' + taken + ' was taken'));
+    assert.match(r.stderr, new RegExp('port ' + held.port + ' was taken'));
     const used = JSON.parse(fs.readFileSync(path.join(dir, '.bridge-commander', 'config.json'), 'utf8')).port;
-    assert.ok(used > taken, 'it moved forward and wrote the port it landed on');
+    assert.ok(used > held.port, 'it moved forward and wrote the port it landed on');
     // …and wrote it down, so every later bc-axi call in this workspace finds it.
     const st = await runCli(['status', '--workspace', dir]);
     assert.match(st.stdout, /server: up/);
     await runCli(['stop', '--workspace', dir]);
   } finally {
-    squatter.close();
+    await held.release();
     fs.rmSync(dir, { recursive: true, force: true });
     fs.rmSync(home, { recursive: true, force: true });
   }
