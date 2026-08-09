@@ -653,23 +653,25 @@ body.resizing { user-select: none; cursor: col-resize; }
 .pj-v { min-width: 0; color: var(--text); font-family: var(--mono); overflow-wrap: anywhere; }
 .pj-warn .pj-v { color: var(--danger); }
 
-/* lieutenants: one block each, reading like a project's — face/name/id on the
-   head line, then what it mints next, what it owns, and whether it is alive */
-#lt-list { display: flex; flex-direction: column; gap: 12px; }
-.lt-row { display: flex; flex-direction: column; gap: 2px; }
-.lt-head { display: flex; gap: 8px; align-items: center; margin-bottom: 2px; }
-#lt-list .lt-face { width: 22px; height: 22px; }
-.lt-name { flex: 1; min-width: 0; color: var(--text); font-size: 13px; font-weight: 650;
+/* lieutenants: one line each, as dense as a playbook row — face, name, id, the
+   three facts as one dim run, and the two actions as icons at the right end.
+   The facts run stays whole at any width — the name is what ellipses — so all
+   eight lieutenants are one screen on a phone. */
+#lt-list { display: flex; flex-direction: column; gap: 4px; }
+.lt-row { display: flex; gap: 8px; align-items: center; }
+#lt-list .lt-face { width: 18px; height: 18px; }
+.lt-name { flex: 0 1 auto; min-width: 0; color: var(--text); font-size: 12.5px; font-weight: 650;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lt-id { flex: none; color: var(--faint); font-size: 10.5px; font-family: var(--mono); }
-.lt-fact { display: flex; gap: 6px; align-items: baseline; font-size: 11px; line-height: 1.35; }
-.lt-k { flex: none; width: 52px; color: var(--faint); }
-.lt-v { min-width: 0; color: var(--text); font-family: var(--mono); overflow-wrap: anywhere; }
-.lt-live .lt-v { color: var(--ok); }
-.lt-dead .lt-v { color: var(--danger); }
-.lt-none .lt-v { color: var(--faint); }
-.lt-acts { display: flex; gap: 6px; margin-top: 5px; }
-.lt-act { color: var(--dim); font-size: 11.5px; padding: 2px 8px;
+/* grows into the gap and never shrinks — the name is what gives way, so a long
+   one ellipses rather than a fact getting clipped in half */
+.lt-facts { flex: 1 0 auto; color: var(--faint); font-size: 11px; font-family: var(--mono);
+  white-space: nowrap; }
+.lt-live { color: var(--ok); }
+.lt-dead { color: var(--danger); }
+.lt-none { color: var(--faint); }
+.lt-acts { flex: none; display: flex; gap: 4px; margin-left: auto; }
+.lt-act { color: var(--dim); font-size: 12px; line-height: 1; padding: 3px 7px;
   border: 1px solid var(--line); border-radius: 5px; }
 .lt-act:hover { color: var(--accent); border-color: var(--accent2); }
 

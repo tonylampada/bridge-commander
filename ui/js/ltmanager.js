@@ -52,66 +52,74 @@ const SESSION = {
   none: { text: 'no session', cls: 'lt-none', title: 'never spawned: this lieutenant is registered but nothing is running for it' },
 };
 
+// One line per lieutenant, the way the playbooks tab is one line per playbook:
+// face, name, id, the three facts as a single dim run, and the two actions as
+// icons at the right end. Eight of them fit a phone screen.
 function paint() {
   listEl.textContent = '';
   for (const l of items) {
     const row = document.createElement('div');
     row.className = 'lt-row';
-    row.appendChild(head(l));
-    row.appendChild(fact('mints', l.next, 'the id of the next card ' + (l.name || l.id) + ' creates'));
-    row.appendChild(fact('cards', l.cards === 1 ? '1 live card' : l.cards + ' live cards'));
-    const st = SESSION[l.session] || SESSION.none;
-    row.appendChild(fact('session', st.text, st.title, st.cls));
-    row.appendChild(actions(l));
+    row.append(face(l), name(l), id(l), facts(l), actions(l));
     listEl.appendChild(row);
   }
   if (!items.length) listEl.textContent = 'no lieutenants';
 }
 
-// avatar in its own colour, the display name, and the id — the id is what every
-// verb takes, so it reads as a value rather than a caption.
-function head(l) {
-  const el = document.createElement('div');
-  el.className = 'lt-head';
-  const face = document.createElement('span');
+// the avatar in its own colour, or a plain dot when it has none
+function face(l) {
+  const el = document.createElement('span');
   if (Number.isInteger(l.avatar) && l.avatar >= 0 && l.avatar <= 63) {
-    face.className = 'lt-face';
-    face.style.borderColor = lieutenantColor(l.id);
-    face.innerHTML = avatarHtml(l.avatar);
+    el.className = 'lt-face';
+    el.style.borderColor = lieutenantColor(l.id);
+    el.innerHTML = avatarHtml(l.avatar);
   } else {
-    face.className = 'lt-dot';
-    face.style.background = lieutenantColor(l.id);
+    el.className = 'lt-dot';
+    el.style.background = lieutenantColor(l.id);
   }
-  const name = document.createElement('span');
-  name.className = 'lt-name';
-  name.textContent = l.name || l.id;
-  const id = document.createElement('span');
-  id.className = 'lt-id';
-  id.textContent = l.id;
-  el.append(face, name, id);
   return el;
 }
 
-function fact(key, value, title, cls) {
-  const row = document.createElement('div');
-  row.className = 'lt-fact' + (cls ? ' ' + cls : '');
-  if (title) row.title = title;
-  const k = document.createElement('span');
-  k.className = 'lt-k';
-  k.textContent = key;
-  const v = document.createElement('span');
-  v.className = 'lt-v';
-  v.textContent = value;
-  row.append(k, v);
-  return row;
+function name(l) {
+  const el = document.createElement('span');
+  el.className = 'lt-name';
+  el.textContent = l.name || l.id;
+  return el;
+}
+
+// the id is what every verb takes, so it reads as a value rather than a caption
+function id(l) {
+  const el = document.createElement('span');
+  el.className = 'lt-id';
+  el.textContent = l.id;
+  return el;
+}
+
+const countText = (n) => (n === 1 ? '1 card' : n + ' cards');
+
+// The three facts as one line — `WAL-4 · 14 cards · live`. Separators, not
+// labels: the section heading says what these are once, so eight rows do not
+// each spell it out. The session is the one part that keeps a colour of its
+// own, because a dead one has to be what the eye lands on.
+function facts(l) {
+  const st = SESSION[l.session] || SESSION.none;
+  const el = document.createElement('span');
+  el.className = 'lt-facts';
+  el.title = 'next card id · live cards it owns · session';
+  const sess = document.createElement('span');
+  sess.className = st.cls;
+  sess.textContent = st.text;
+  sess.title = st.title;
+  el.append(l.next + ' · ' + countText(l.cards) + ' · ', sess);
+  return el;
 }
 
 function actions(l) {
-  const el = document.createElement('div');
+  const el = document.createElement('span');
   el.className = 'lt-acts';
   el.append(
-    action('⚙ settings', 'name, colour, avatar, voice, card prefix', () => openLtSettings(l.id)),
-    action('✎ charter', l.memory, () => openCharter(l)),
+    action('⚙', 'settings — name, colour, avatar, voice, card prefix', () => openLtSettings(l.id)),
+    action('✎', 'charter — ' + l.memory, () => openCharter(l)),
   );
   return el;
 }

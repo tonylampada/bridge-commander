@@ -334,10 +334,53 @@ test('the lieutenant row reuses the settings modal and the file screen, and offe
 // next card id, the live-card count, and whether the session is up.
 test('a lieutenant row reports the prefix, the next number, the cards and the session', () => {
   const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
-  assert.match(lt, /'mints', l\.next/, 'the id the next card would carry');
-  assert.match(lt, /l\.cards === 1 \? '1 live card'/, 'the live-card count');
+  assert.match(lt, /l\.next \+ ' · ' \+ countText\(l\.cards\) \+ ' · '/, 'the id the next card would carry');
+  assert.match(lt, /countText = \(n\)/, 'the live-card count');
   assert.match(lt, /SESSION\[l\.session\]/, 'and the session state');
   for (const state of ['live', 'dead', 'none']) {
     assert.match(lt, new RegExp('\\n  ' + state + ': \\{'), state + ' is a state the row says out loud');
   }
+});
+
+// The tab is a list, not a form: the three facts are one run of text in one
+// element — `WAL-4 · 14 cards · live` — not a label/value pair apiece. Eight
+// rows fit a phone only because nothing here spells `mints` or `cards` out as
+// a caption eight times over.
+test('the three facts are one line, not a label/value pair per fact', () => {
+  const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
+  assert.match(lt, /el\.className = 'lt-facts'/, 'one element carries the run');
+  assert.ok(!/'lt-k'|'lt-v'|'lt-fact'|function fact\(/.test(lt), 'and no key/value pair survives');
+  const css = fs.readFileSync(ui('app.css'), 'utf8');
+  assert.ok(!/\.lt-k \{|\.lt-v \{|\.lt-fact \{|\.lt-head \{/.test(css), 'nor the rules that laid them out');
+  // the density rule the playbooks list already has: rows a few px apart
+  assert.match(css, /#lt-list \{[^}]*gap: 4px/, 'rows sit as close as playbook rows');
+  assert.match(css, /\.lt-row \{[^}]*display: flex;[^}]*align-items: center/, 'and each row is one line');
+  assert.ok(!/\.lt-row \{[^}]*flex-direction: column/.test(css), 'not a stack');
+  // colour is the only thing the session keeps
+  for (const [state, v] of [['live', 'ok'], ['dead', 'danger'], ['none', 'faint']]) {
+    assert.match(css, new RegExp('\\.lt-' + state + ' \\{ color: var\\(--' + v + '\\)'), state + ' keeps its colour');
+  }
+});
+
+// `1 card`, not `1 cards`, and not `14 live cards` either — the word `live`
+// belongs to the section, said once, not to every row.
+test('the card count reads 1 card and 14 cards', () => {
+  const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
+  const src = /const countText = [^\n]+/.exec(lt);
+  assert.ok(src, 'countText is a one-liner the test can lift');
+  const countText = new Function(src[0] + '; return countText;')();
+  assert.strictEqual(countText(1), '1 card');
+  assert.strictEqual(countText(0), '0 cards');
+  assert.strictEqual(countText(14), '14 cards');
+});
+
+// Icons, not full-width buttons — but the words they lose are still reachable,
+// and they call exactly the handlers they called as words.
+test('the two actions are icons carrying their words in a title', () => {
+  const lt = fs.readFileSync(ui('js', 'ltmanager.js'), 'utf8');
+  assert.match(lt, /action\('⚙', 'settings — [^']+', \(\) => openLtSettings\(l\.id\)\)/);
+  assert.match(lt, /action\('✎', 'charter — ' \+ l\.memory, \(\) => openCharter\(l\)\)/);
+  assert.match(lt, /b\.title = title/, 'the title is what carries the words');
+  const css = fs.readFileSync(ui('app.css'), 'utf8');
+  assert.match(css, /\.lt-acts \{[^}]*margin-left: auto/, 'and they sit at the right end of the row');
 });
