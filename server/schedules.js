@@ -164,17 +164,24 @@ function nextAfter(when, afterMs, anchorMs) {
   return null;
 }
 
-// dueWindows(when, fromMs, nowMs, anchorMs) -> every window in (fromMs, nowMs],
-// oldest first. This is the whole timing model: a window is a function of the
-// cursor and the clock, so the answer does not depend on when the process was
-// awake — which is exactly why a restart neither loses one nor fires one twice.
+// dueWindows(when, fromMs, nowMs, anchorMs) -> {windows:[ms], truncated:n}
+// every window in (fromMs, nowMs], oldest first. This is the whole timing
+// model: a window is a function of the cursor and the clock, so the answer does
+// not depend on when the process was awake — which is exactly why a restart
+// neither loses one nor fires one twice.
 //
 // The backward horizon is a guard, not a policy: a board that was off for a
 // year enumerates the last 400 days at most, and the catch-up policy collapses
 // what comes out of here anyway.
+//
+// `truncated` is the windows this enumeration itself threw away before any
+// policy saw them. It is reported rather than dropped because the number a
+// catch-up log prints has to mean what it says: a board that slept for a week
+// missed two thousand windows, not the fifty that survived the cap, and
+// counting the array that comes back would say the reassuring thing.
 function dueWindows(when, fromMs, nowMs, anchorMs) {
   const out = [];
-  if (!(nowMs > fromMs)) return out;
+  if (!(nowMs > fromMs)) return { windows: out, truncated: 0 };
   let from = fromMs;
   if (nowMs - from > CATCHUP_HORIZON_MS) from = nowMs - CATCHUP_HORIZON_MS;
   if (when.kind === 'interval') {
@@ -185,37 +192,48 @@ function dueWindows(when, fromMs, nowMs, anchorMs) {
     for (let k = Math.max(first, last - CATCHUP_CAP); k <= last; k++) {
       if (gridAt(when, anchor, k) > from) out.push(gridAt(when, anchor, k));
     }
-    return out;
+    // Counted off the UNCLAMPED cursor: a grid is arithmetic, so the horizon
+    // costs nothing to see past here.
+    const total = Math.max(0, last - (Math.floor((fromMs - anchor) / when.ms) + 1) + 1);
+    return { windows: out, truncated: Math.max(0, total - out.length) };
   }
+  let total = 0;
   for (let t = Math.floor(from / MINUTE) * MINUTE + MINUTE; t <= nowMs; t += MINUTE) {
     if (cronMatches(when, t)) {
+      total++;
       out.push(t);
       if (out.length > CATCHUP_CAP + 1) out.shift(); // the newest are what any policy keeps
     }
   }
-  return out;
+  // Cron has no arithmetic to shortcut with, so this counts what the horizon
+  // let it walk. The cap — the truncation a real board actually hits — is exact.
+  return { windows: out, truncated: total - out.length };
 }
 
 // pickWindows(due, catchup, bootMs) -> {fire:[ms], dropped:n}
-// The catch-up policy, applied to the windows dueWindows() found:
+// `due` is what dueWindows() returned. The catch-up policy, applied to it:
 //   latest  fire ONCE, for the newest window — the default, and the answer to
 //           "the laptop slept over the weekend"
 //   all     fire every one (capped; the cap is reported, never silent)
 //   none    fire only what came due while the scheduler was WATCHING — a window
 //           that passed while the server was down never happened
 // Every policy still advances the cursor past what it dropped: a window nobody
-// fired is finished with, or it would be due forever.
+// fired is finished with, or it would be due forever. `dropped` counts the
+// windows the enumeration already truncated too, so one number answers "how
+// many windows went unfired" end to end.
 function pickWindows(due, catchup, bootMs) {
-  if (!due.length) return { fire: [], dropped: 0 };
+  const windows = due.windows;
+  const truncated = due.truncated;
+  if (!windows.length) return { fire: [], dropped: truncated };
   if (catchup === 'none') {
-    const live = due.filter((w) => w > bootMs);
-    return { fire: live, dropped: due.length - live.length };
+    const live = windows.filter((w) => w > bootMs);
+    return { fire: live, dropped: truncated + windows.length - live.length };
   }
   if (catchup === 'all') {
-    const fire = due.slice(-CATCHUP_CAP);
-    return { fire, dropped: due.length - fire.length };
+    const fire = windows.slice(-CATCHUP_CAP);
+    return { fire, dropped: truncated + windows.length - fire.length };
   }
-  return { fire: [due[due.length - 1]], dropped: due.length - 1 };
+  return { fire: [windows[windows.length - 1]], dropped: truncated + windows.length - 1 };
 }
 
 // describeWhen(when) — how `schedule list` says it out loud.

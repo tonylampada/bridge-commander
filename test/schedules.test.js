@@ -86,7 +86,7 @@ test('an interval fires on a FIXED GRID off its creation — deferring a window 
   assert.strictEqual(nextAfter(w, anchor + 1, anchor), anchor + 5 * MIN);
   // the cursor pulled back a millisecond (a queued overlap) re-offers the SAME
   // window, at the same instant — not one interval after the pullback
-  assert.deepStrictEqual(dueWindows(w, anchor + 5 * MIN - 1, anchor + 6 * MIN, anchor),
+  assert.deepStrictEqual(dueWindows(w, anchor + 5 * MIN - 1, anchor + 6 * MIN, anchor).windows,
     [anchor + 5 * MIN]);
   assert.strictEqual(describeWhen(w), 'every 5m');
   assert.strictEqual(describeWhen(parseWhen('0 8 * * *')), 'cron 0 8 * * *');
@@ -104,14 +104,15 @@ test('each catch-up policy does what it says with the windows a downtime missed'
   const boot = anchor + 20 * 3600000;               // the server came back at hour 20
   const now = boot + 60000;
   const due = dueWindows(w, anchor + 4 * 3600000, now, anchor); // 16 windows missed
-  assert.strictEqual(due.length, 16);
+  assert.strictEqual(due.windows.length, 16);
+  assert.strictEqual(due.truncated, 0, 'sixteen is well under the cap — nothing was thrown away');
 
   const latest = pickWindows(due, 'latest', boot);
-  assert.deepStrictEqual(latest.fire, [due[15]], 'latest fires ONCE — that is the whole point');
+  assert.deepStrictEqual(latest.fire, [due.windows[15]], 'latest fires ONCE — that is the whole point');
   assert.strictEqual(latest.dropped, 15);
 
   const all = pickWindows(due, 'all', boot);
-  assert.deepStrictEqual(all.fire, due, 'all fires every one');
+  assert.deepStrictEqual(all.fire, due.windows, 'all fires every one');
   assert.strictEqual(all.dropped, 0);
 
   const none = pickWindows(due, 'none', boot);
@@ -120,18 +121,26 @@ test('each catch-up policy does what it says with the windows a downtime missed'
 
   // …but `none` is about DOWNTIME, not about firing: a window that comes due
   // while the scheduler is watching still fires.
-  const live = pickWindows([boot + 30000], 'none', boot);
+  const live = pickWindows({ windows: [boot + 30000], truncated: 0 }, 'none', boot);
   assert.deepStrictEqual(live.fire, [boot + 30000]);
 });
 
-test('a board that was off for a year does not enumerate a year of windows', () => {
+test('a board that was off for a year does not enumerate a year of windows — and says how many it lost', () => {
   const w = parseWhen('1m');
   const now = at('2026-05-01T00:00:00Z');
   const t0 = Date.now();
   const due = dueWindows(w, now - 400 * 24 * 3600000, now, 0);
-  assert.ok(due.length <= 52, 'the enumeration is bounded: ' + due.length);
+  assert.ok(due.windows.length <= 52, 'the enumeration is bounded: ' + due.windows.length);
   assert.ok(Date.now() - t0 < 2000, 'and it is fast');
-  assert.strictEqual(pickWindows(due, 'latest', 0).fire.length, 1);
+
+  // The count a catch-up log prints is the windows really missed, not the fifty
+  // that survived the cap — "1 due window not fired" for a year of downtime is
+  // the reassuring lie this number exists to refuse.
+  const missed = 400 * 24 * 60;
+  const latest = pickWindows(due, 'latest', 0);
+  assert.strictEqual(latest.fire.length, 1);
+  assert.strictEqual(latest.dropped, missed - 1);
+  assert.strictEqual(pickWindows(due, 'all', 0).dropped, missed - 50);
 });
 
 test('a hand-edited schedule with an unparseable `when` is KEPT, never silently dropped', () => {
@@ -323,6 +332,41 @@ test('overlap skip does not run — and RECORDS the skip rather than swallowing 
 
     const show = await runCli(['schedule', 'show', 'slow', '--workspace', dir, '--port', String(s.port)]);
     assert.match(show.stdout, /skipped/, 'and a skip reads as a firing, because it is one');
+  } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// The test above stops as soon as two trace lines exist — while the run is
+// still going, which is precisely where the interesting failure ISN'T. The
+// cursor regression only appears when a long run ENDS: if it wrote back the
+// cursor it started with, every window the skips already accounted for would
+// come due a second time, `skip` would degenerate into back-to-back firing, and
+// hookruns.jsonl would hold skips for windows that then ran.
+test('a firing that outlives its own windows never pulls the cursor back over the skips', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-skipcursor-'));
+  // A slow tick on purpose: it is read far more often than it fires, so a
+  // cursor that went backwards is still there to be seen rather than papered
+  // over by the next pass a few milliseconds later.
+  const s = await startServer({ dir, env: { BC_SCHEDULE_INTERVAL_MS: '300' }, seed: (d) => seedWorkspace(d, {
+    script: 'echo ran >> ' + JSON.stringify(path.join(dir, 'fired')) + '\nsleep 3',
+    schedules: [slowTicker('marathon')],
+  }) });
+  try {
+    // watched all the way through the three-second run and well past its end
+    let high = 0;
+    let after = 0;
+    for (let i = 0; i < 400 && after < 20; i++) {
+      await sleep(20);
+      const sched = (await s.api('GET', '/api/schedules')).body.schedules[0];
+      const cursor = Date.parse(sched.lastWindow);
+      assert.ok(cursor >= high, 'the cursor of a `skip` schedule only ever moves forward: '
+        + iso(high) + ' -> ' + sched.lastWindow);
+      high = cursor;
+      if (runsOf(dir, 'marathon').some((r) => r.ok)) after++;
+    }
+    assert.ok(after >= 20, 'the long run finished and was watched past its end');
+    const runs = runsOf(dir, 'marathon');
+    assert.ok(runs.filter((r) => r.skipped).length >= 1,
+      'and the windows it ran through were skipped, and recorded: ' + JSON.stringify(runs));
   } finally { await s.stop(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
 

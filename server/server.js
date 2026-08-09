@@ -3217,28 +3217,41 @@ async function fireSchedule(s) {
   }
 }
 
-// runSchedule(s, windows, cursor) — one schedule's due windows, oldest first,
-// ONE AT A TIME. A catch-up backlog is not an overlap: `all` over a weekend
-// means fire each of those windows, in order, and the next one starts when the
-// last one is done. Runs outside the tick, which decides and never waits.
+// runSchedule(s, windows) — one schedule's due windows, oldest first, ONE AT A
+// TIME. A catch-up backlog is not an overlap: `all` over a weekend means fire
+// each of those windows, in order, and the next one starts when the last one is
+// done. Runs outside the tick, which decides and never waits.
+//
+// The cursor is already past these windows — the tick moved it at hand-off.
+// This function only ever pulls it BACK, and only for `queue`: a run that takes
+// six minutes must not undo the six windows the overlap policy accounted for
+// while it was going, or `skip` would quietly turn into back-to-back firing and
+// the trace would hold skips for windows that then ran.
 const firing = new Set();
-async function runSchedule(s, windows, cursorMs) {
-  let cursor = cursorMs;
+async function runSchedule(s, windows) {
+  let requeue = null;
   try {
     for (const w of windows) {
       const outcome = await fireSchedule(s);
-      if (outcome === 'queued') { cursor = w - 1; break; } // re-offered next tick
+      if (outcome === 'queued') { requeue = w - 1; break; } // re-offered next tick
     }
   } catch (e) {
     console.error(now() + ' schedule ' + s.name + ' failed to fire: ' + String((e && e.message) || e));
   } finally {
-    // The cursor advances even for a firing that threw: at-least-once belongs to
-    // delivery, and a schedule that retries a broken hook every tick forever is
-    // a wake storm, not a recovery. The trace and the owner's drain hold what
-    // happened.
-    const live = findSchedule(s.name);
-    if (live) live.lastWindow = new Date(cursor).toISOString();
-    saveBoard(); broadcast();
+    // Nothing above this line is awaited by anybody, so a board write that fails
+    // here is an unhandled rejection — which is to say the whole server, killed
+    // by a full disk while a hook was running. It is contained like every other
+    // background loop's failure.
+    try {
+      if (requeue !== null) {
+        const live = findSchedule(s.name);
+        if (live) live.lastWindow = new Date(requeue).toISOString();
+      }
+      saveBoard(); broadcast();
+    } catch (e) {
+      console.error(now() + ' schedule ' + s.name + ': the board would not save after a firing: '
+        + String((e && e.message) || e));
+    }
   }
 }
 
@@ -3290,9 +3303,9 @@ async function scheduleTick() {
       // would make every `add` a surprise.
       if (!s.lastWindow) { s.lastWindow = new Date(nowMs).toISOString(); changed = true; continue; }
       const due = dueWindows(when, Date.parse(s.lastWindow), nowMs, anchor);
-      if (!due.length) continue;
+      if (!due.windows.length) continue;
       // Its own previous firing is still running: that is what `overlap` is for.
-      if (firing.has(s.name)) { if (overlapPolicy(s, due)) changed = true; continue; }
+      if (firing.has(s.name)) { if (overlapPolicy(s, due.windows)) changed = true; continue; }
       const { fire, dropped } = pickWindows(due, s.catchup, SCHEDULER_BOOT);
       if (dropped) {
         // No silent caps: a policy that drops windows says how many, so `all`
@@ -3301,10 +3314,21 @@ async function scheduleTick() {
           + s.catchup + ')');
       }
       firing.add(s.name);
-      const cursor = due[due.length - 1];
+      // The cursor moves HERE, at hand-off, not when the run finishes: the
+      // windows this pass took stop being due the moment it takes them, so the
+      // ticks that go by while the hook runs see the overlap, not the same
+      // backlog again. It advances even for a firing that will throw —
+      // at-least-once belongs to delivery, and a schedule that retries a broken
+      // hook every tick forever is a wake storm, not a recovery. The trace and
+      // the owner's drain hold what happened.
+      s.lastWindow = new Date(due.windows[due.windows.length - 1]).toISOString();
+      changed = true;
       // Deliberately not awaited: the tick's job is to decide, not to wait out
       // a hook. Every window still fires in order, one at a time, per schedule.
-      runSchedule(s, fire, cursor).finally(() => firing.delete(s.name));
+      runSchedule(s, fire)
+        .finally(() => firing.delete(s.name))
+        .catch((e) => console.error(now() + ' schedule ' + s.name + ': '
+          + String((e && e.message) || e)));
     }
     if (changed) { saveBoard(); broadcast(); }
   } catch (e) {
@@ -3338,17 +3362,17 @@ function describeWhenSafe(text) {
   try { return describeWhen(parseWhen(text)); } catch (e) { return String(text || ''); }
 }
 
-// validateSchedule(body, existing?) -> {error} | {schedule}
+// validateSchedule(body) -> {error} | {schedule}
 // The refusals are the point of `add`: a bad expression names the offending
 // text, a hook that is not there is refused before it can become a dead window
 // every five minutes, and an unregistered owner is refused because a firing's
 // failure would land nowhere.
-function validateSchedule(body, existing) {
+function validateSchedule(body) {
   const name = String(body.name || '').trim();
   if (!SCHEDULE_NAME_RE.test(name)) {
     return { error: 'bad schedule name "' + name + '" (letters, digits, _ . - ; starts with a letter, digit or _)' };
   }
-  if (!existing && findSchedule(name)) return { error: 'schedule "' + name + '" already exists', status: 409 };
+  if (findSchedule(name)) return { error: 'schedule "' + name + '" already exists', status: 409 };
   const hook = String(body.hook || '').trim();
   if (!HOOK_NAME_RE.test(hook)) return { error: 'a schedule fires a NAMED hook — give one with --hook' };
   if (!namedHookFile(WORKSPACE, hook)) {
