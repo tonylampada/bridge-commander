@@ -139,14 +139,24 @@ function installCommand(pkg, opts = {}) {
   return '';
 }
 
-function tmuxMissingText() {
-  const cmd = installCommand('tmux');
+function tmuxMissingText(opts = {}) {
+  const root = opts.root === undefined ? isRoot() : opts.root;
+  const has = opts.hasBin || hasBin;
+  const cmd = installCommand('tmux', { root, hasBin: has });
+  // Neither root nor sudo: the command below is correct and will still be
+  // refused by the package manager. Say that up front rather than letting a
+  // permission-denied read as a broken instruction.
+  const needsAdmin = !root && !has('sudo') && cmd;
   return 'tmux is not installed on this machine, and Bridge Commander needs it: a lieutenant is a\n'
     + 'real agent session, and it lives in a tmux session so the board can reach it and the\n'
     + 'person can attach to it later. You will never have to type a tmux command yourself.\n\n'
     + (cmd
       ? 'ASK the person for permission, then install it:\n  ' + cmd + '\n'
       : 'I could not identify a package manager here. ASK the person how they want tmux installed.\n')
+    + (needsAdmin
+      ? '\nNote: this user is not root and there is no `sudo` here, so that command will be refused.\n'
+        + 'It needs an administrator — `su -` if they have the root password, or whoever owns the box.\n'
+      : '')
     + '\nThen run this again — nothing has been written yet.';
 }
 
@@ -188,7 +198,10 @@ function rootBlockText() {
     + 'Bridget is a real claude session, so as root she cannot start and you would be left with a\n'
     + 'board nobody is on. Two honest ways forward:\n\n'
     + '  1. RECOMMENDED — do the first run as a normal user:\n'
-    + '       useradd -m dev && su - dev        # then install the skill and run this again as dev\n\n'
+    + '       useradd -m dev && su - dev\n'
+    + '     Then, as that user: install the skill (npx skills add …), install the agent CLI in a\n'
+    + '     way that needs no root (curl -fsSL https://claude.ai/install.sh | bash puts it in\n'
+    + '     ~/.local/bin — `npm i -g` would fail with EACCES for them), and run this again.\n\n'
     + '  2. This is a throwaway box (a container you will delete) and you accept the risk:\n'
     + '       bc-axi init --onboard --allow-root\n'
     + '     That launches her with IS_SANDBOX=1, which is the escape hatch claude itself checks.\n'
@@ -199,15 +212,28 @@ function rootBlockText() {
 
 // The agent CLI itself. Cheap and certain (is it on PATH?), so it is answered
 // before the spawn instead of being guessed at from a timeout afterwards.
-function agentMissingText(harness) {
-  const cmd = harness === 'codex'
-    ? 'npm i -g @openai/codex'
-    : 'npm i -g @anthropic-ai/claude-code';
-  return 'the `' + (harness || 'claude') + '` CLI is not on PATH, so Bridget has nothing to be a session of.\n'
+//
+// The install line has to work for the user who will RUN it. `npm i -g` on a
+// stock image writes into a root-owned prefix and fails with EACCES for exactly
+// the normal user the root block just told them to become — two blocks that
+// contradict each other are worse than either one alone. The official installer
+// puts the binary under ~/.local/bin and needs no root, so that is what is
+// offered first.
+function agentMissingText(harness, workspace) {
+  const codex = harness === 'codex';
+  const bin = codex ? 'codex' : 'claude';
+  const install = codex
+    ? '  npm i -g @openai/codex          # a user-local npm prefix, or an administrator, may be needed'
+    : '  curl -fsSL https://claude.ai/install.sh | bash    # installs to ~/.local/bin — no root needed\n'
+      + '  # (npm i -g @anthropic-ai/claude-code also works, but as a normal user it needs a\n'
+      + '  #  user-local prefix: npm config set prefix ~/.npm-global, and that dir on PATH)';
+  return 'the `' + bin + '` CLI is not on PATH, so Bridget has nothing to be a session of.\n'
     + 'The board is up and her welcome message is on it — she just cannot answer yet.\n\n'
-    + 'ASK the person for permission, then install it and run the SAME command again:\n'
-    + '  ' + cmd + '\n'
-    + '  ' + (harness === 'codex' ? 'codex' : 'claude') + '        # run it once by hand: it has a setup screen of its own to get past';
+    + 'ASK the person for permission, then install it as the user who will run it:\n'
+    + install + '\n\n'
+    + 'Then run it once by hand IN THE WORKSPACE — it has setup screens of its own (theme, login,\n'
+    + 'and a trust question about this very folder) that a spawned session cannot answer:\n'
+    + '  cd ' + (workspace || '<the workspace folder>') + ' && ' + bin;
 }
 
 // diagnoseSpawn — read the pane, do not guess at it.
@@ -217,27 +243,49 @@ function agentMissingText(harness) {
 // in a real container; the fallback is the only place a guess is allowed, and it
 // is labelled as one. Guessing "not installed, or not logged in" at a pane that
 // plainly says something else is how a tester loses an afternoon.
-function diagnoseSpawn(text) {
+function diagnoseSpawn(text, workspace) {
   const t = String(text || '');
   const tail = (/pane tail:\n([\s\S]*)$/.exec(t) || [, ''])[1].trim();
+  const here = workspace || '<the workspace folder>';
   const hit = (re, cause, headline, fix) => (re.test(t) ? { cause, headline, fix, tail } : null);
-  return hit(/cannot be used with root\/sudo privileges/, 'root',
+  return hit(/Quick safety check|trust this folder|Accessing workspace/, 'trust',
+    'her pane is on Claude Code\'s folder-trust question for the workspace — it asks about any\n'
+      + 'directory it has not seen before, and it comes BEFORE login.',
+    'Running `claude` in their home directory does NOT clear this one: Bridget is spawned in the\n'
+      + 'workspace, so the trust question is about THAT folder. Run it there once, answer the\n'
+      + 'question, quit with /exit, then run the SAME command again:\n'
+      + '  cd ' + here + ' && claude')
+  || hit(/cannot be used with root\/sudo privileges/, 'root',
     'claude refuses --dangerously-skip-permissions as root, and exited.',
     'Do the first run as a normal user (`useradd -m dev && su - dev`), or, on a throwaway box,\n'
       + 're-run with --allow-root — see the block that command prints before it starts.')
   || hit(/Choose the text style|run \/theme|Let's get started/, 'setup',
     'the `claude` CLI has never been run on this machine — her pane is parked on its setup wizard\n'
       + '(theme picker), which comes BEFORE any login question.',
-    'Run it once by hand, answer its questions, quit with /exit, then run the SAME command again:\n'
-      + '  claude')
+    'Run it once by hand IN THE WORKSPACE, answer its questions (there is a folder-trust one about\n'
+      + 'this directory after the theme), quit with /exit, then run the SAME command again:\n'
+      + '  cd ' + here + ' && claude')
   || hit(/command not found|ENOENT|not found: claude/, 'missing',
     'the agent CLI is not installed — the shell answered "command not found".',
     'Install it and run the SAME command again:\n  npm i -g @anthropic-ai/claude-code')
   || hit(/\/login|Invalid API key|not authenticated|Please run .*login|Sign in|log in to/i, 'auth',
     'the `claude` CLI is installed but not logged in — her pane is on its login screen.',
-    'Log in once by hand, then run the SAME command again:\n  claude   (and follow its login)')
-  || { cause: 'unknown', headline: 'I could not tell from her pane why it failed. Read it above and act on what it says.',
-    fix: 'If the pane is empty, the usual causes are the `claude` CLI missing, never run, or not\nlogged in — but that is a guess, not what this pane showed.', tail };
+    'Log in once by hand in the workspace, then run the SAME command again:\n'
+      + '  cd ' + here + ' && claude   (and follow its login)')
+  // The only branch that guesses — and the guess is different depending on
+  // whether there was a pane to read. "Read it above" pointing at nothing is
+  // worse than saying plainly that there was nothing to read.
+  || (tail
+    ? { cause: 'unknown', tail,
+      headline: 'I could not match her pane to anything I know. What it shows is printed above — act on that.',
+      fix: 'If it is a menu or a prompt, it is waiting for a human: run `claude` by hand in the\n'
+        + 'workspace (cd ' + here + ' && claude), get it to a working session, then run the SAME\n'
+        + 'command again.' }
+    : { cause: 'unknown', tail: '',
+      headline: 'her pane was empty — the session left nothing on screen to read.',
+      fix: 'With nothing to go on, the usual causes are the `claude` CLI missing, never run, or not\n'
+        + 'logged in. That is a guess, not something this pane showed. Check it by hand:\n'
+        + '  cd ' + here + ' && claude' });
 }
 
 // portFree — can we bind it? An occupied port is not automatically a problem

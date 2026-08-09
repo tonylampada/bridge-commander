@@ -117,11 +117,15 @@ async function deliverPrompt(target, prompt) {
     retries: Number(process.env.BC_SEND_RETRIES || 3),
     enterSleep: Number(process.env.BC_SEND_SLEEP_MS || 400),
   });
-  if (verdict === 'pending') {
-    throw new Error('brief not submitted at spawn (Enter swallowed; text left in composer)');
-  }
-  if (verdict === 'send-failed') {
-    throw new Error('brief not sent at spawn (tmux send failed)');
+  if (verdict === 'pending' || verdict === 'send-failed') {
+    // The pane rides on the failure (same reason as claude-tmux): a launch that
+    // settles and then will not take the brief is diagnosed from the screen
+    // underneath, and only the harness can see it.
+    let tail = '';
+    try { tail = (await t.capture(target, 20)) || ''; } catch (e) { tail = ''; }
+    throw new Error((verdict === 'pending'
+      ? 'brief not submitted at spawn (Enter swallowed; text left in composer)'
+      : 'brief not sent at spawn (tmux send failed)') + '; pane tail:\n' + tail);
   }
 }
 

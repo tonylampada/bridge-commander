@@ -41,11 +41,14 @@ missing). You never have to use tmux yourself.
 
 Two things worth knowing before you start, because they are the only ways a first run stops early:
 
-- **Run `claude` once by hand first** if this machine has never run it — it has a setup screen
-  (theme, then login) that a spawned session cannot answer for you.
+- **Run `claude` once by hand, inside the workspace folder**, if this machine has never run it.
+  It has setup screens a spawned session cannot answer for you — a theme picker, a login, and a
+  trust question about that specific folder (which is why running it in your home directory is not
+  enough).
 - **Not as root.** Claude Code refuses `--dangerously-skip-permissions` as root, so a lieutenant
   cannot start there. Use a normal user (a throwaway container can pass `--allow-root`, and the
-  tool will tell you what that costs).
+  tool will tell you what that costs). If you need to install Claude Code as that user,
+  `curl -fsSL https://claude.ai/install.sh | bash` puts it in `~/.local/bin` without root.
 
 ## Board views
 

@@ -128,10 +128,48 @@ test('a spawn failure is diagnosed from the pane, and the pane comes back with i
 
   assert.strictEqual(fr.diagnoseSpawn(withTail('bash: claude: command not found')).cause, 'missing');
 
-  // The ONLY place a guess is allowed — and it says it is one.
+  // Round 2: the folder-trust question, which is a THIRD setup screen and comes
+  // before login. A user who ran `claude` once at home has not cleared it —
+  // Bridget is spawned in the workspace, and the question is about that folder.
+  d = fr.diagnoseSpawn(withTail(
+    ' Accessing workspace:\n /root/myfleet\n'
+    + ' Quick safety check: Is this a project you created or one you trust?\n'
+    + ' ❯ 1. Yes, I trust this folder\n   2. No, exit'), '/root/myfleet');
+  assert.strictEqual(d.cause, 'trust');
+  assert.match(d.fix, /cd \/root\/myfleet && claude/, 'the fix names the workspace, not $HOME');
+
+  // The guessing branches, both of them — and the guess says it is one. Which
+  // branch you get depends on whether there was a pane to read at all: "read it
+  // above" over an empty space is what round 2 caught.
+  d = fr.diagnoseSpawn(withTail('a screen from the future'));
+  assert.strictEqual(d.cause, 'unknown');
+  assert.strictEqual(d.tail, 'a screen from the future');
+  assert.match(d.headline, /printed above/);
+
   d = fr.diagnoseSpawn('spawn failed: something nobody has seen before');
   assert.strictEqual(d.cause, 'unknown');
-  assert.match(d.fix, /that is a guess/);
+  assert.strictEqual(d.tail, '');
+  assert.match(d.headline, /pane was empty/);
+  assert.doesNotMatch(d.headline, /above/, 'nothing is above it, so it may not say so');
+  assert.match(d.fix, /That is a guess/);
+});
+
+test('the agent-missing block installs as the user who will run it, and points at the workspace', () => {
+  // Round 2: the root block says "become a normal user", and this block used to
+  // answer with `npm i -g`, which for that user is EACCES. Two instructions that
+  // contradict each other leave the person stuck between them.
+  const t = fr.agentMissingText('claude', '/home/dev/myfleet');
+  assert.match(t, /claude\.ai\/install\.sh/, 'a route that needs no root comes first');
+  assert.match(t, /cd \/home\/dev\/myfleet && claude/, 'and the by-hand run happens in the workspace');
+});
+
+test('with neither root nor sudo, the tmux block says the command will be refused', () => {
+  const t = fr.tmuxMissingText({ root: false, hasBin: (n) => n === 'apt-get' });
+  assert.match(t, /apt-get install -y tmux/);
+  assert.match(t, /not root and there is no `sudo`/, 'the one cell where the command cannot work');
+  assert.match(t, /administrator/);
+  // …and the cells where it does work do not carry the caveat.
+  assert.doesNotMatch(fr.tmuxMissingText({ root: true, hasBin: (n) => n === 'apt-get' }), /administrator/);
 });
 
 test('the teleport init, run outside tmux, points at the onboarding path instead of a tmux command', async () => {

@@ -85,10 +85,21 @@ pass `--port <N>`.
 names the cause from what is in it. Two you will meet on a fresh machine:
 
 - **the `claude` CLI has never been run** — her pane is parked on Claude Code's own setup wizard
-  (the theme picker), which appears *before* any login question. Tell them to run `claude` once in
-  their own terminal, answer it, `/exit`, then say the word and you run the command again. Do not
-  answer that wizard for them; it picks their theme and their login method.
+  (the theme picker), which appears *before* any login question.
+- **the folder-trust question** — `Quick safety check: Is this a project you created or one you
+  trust?`. Claude Code asks it for any directory it has not seen before, also before login.
 - **not installed / not logged in** — the block names which, from the pane.
+
+For all of these the recipe is the same and the **directory matters**: have them run
+
+```sh
+cd <the workspace folder> && claude
+```
+
+answer whatever it asks, `/exit`, then run the first-run command again. Running `claude` in their
+home directory does **not** clear the trust question — Bridget is spawned in the workspace, so the
+question is about that folder. Never answer those wizards for them: they pick a theme, a login
+method, and what a machine is trusted with.
 
 In every one of these the board is already up and her welcome message is already on it. Re-running
 the same command is always the way forward; nothing is lost.
@@ -116,9 +127,17 @@ drive the fleet. Do not widen the bind to fix a browser problem. In order of pre
    Then the same `http://localhost:4780/` works in their browser.
 3. **In a container** — `docker run -p` will *not* reach a loopback bind, and publishing the port
    is not a workaround for it. Either ssh into the host and tunnel as above, or, if the container
-   is on a private bridge network they control, have them re-run with an address the host can
-   reach: `bc-axi init --onboard --host <container-ip>`. Say the trade plainly first: **anything
-   that can reach that address can drive the board, with no login.** Their call, not yours.
+   is on a private bridge network they control, re-run with an address the host can reach:
+   ```sh
+   bc-axi init --onboard --host <container-ip>
+   ```
+   Say the trade plainly **before** you run it: anything that can reach that address can drive the
+   board, with no login. Their call, not yours.
+
+   Asking for this after the board is already up is fine — that is the normal order, since nobody
+   discovers the browser cannot reach it until they try. The command restarts the server on the new
+   address, says so, writes the bind into `config.json` so it survives, and prints the URL that
+   actually works. Hand over **that** URL, not `localhost`.
 
 **If Bridget's session did not start** (the command says so, loudly), the board is still up and her
 message is still on it — she just cannot answer. It is almost always the `claude` CLI: missing, or

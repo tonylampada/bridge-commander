@@ -293,10 +293,39 @@ async function ensureServer() {
   return { st, started: true };
 }
 
+// The URL to HAND OVER. A board bound to a private address is reachable at that
+// address and NOT at localhost, and the whole point of asking for the bind was
+// that someone else's browser has to reach it — so printing `localhost` there
+// hands over a URL that cannot work. Loopback binds keep saying localhost,
+// which is what a person types.
+const LOOPBACK = ['127.0.0.1', 'localhost', '::1', ''];
+function boardUrl(host) {
+  const h = host && !LOOPBACK.includes(host) ? host : 'localhost';
+  return 'http://' + h + ':' + PORT + '/';
+}
+
+// --host on a board that is ALREADY up used to be silently ignored: the server
+// keeps the bind it booted with, so the flag did nothing and the URL still said
+// localhost. Rebinding means restarting the server — cheap, and nothing else
+// dies with it (lieutenant and worker sessions are tmux, not children) — so it
+// is done, and said out loud.
+async function rebindIfAsked() {
+  if (!opts.host) return;
+  const st = await serverUp();
+  if (!st || st.host === opts.host) return;
+  console.error('server is bound to ' + (st.host || '?') + ' and you asked for ' + opts.host
+    + ' — restarting it on the new address (sessions are unaffected)');
+  try { process.kill(st.pid, 'SIGTERM'); } catch (e) { die('could not stop the running server (pid ' + st.pid + '): ' + e.message); }
+  for (let i = 0; i < 40 && await serverUp(); i++) await sleep(100);
+  if (await serverUp()) die('the running server did not stop — stop it and try again: bc-axi stop');
+}
+
 async function cmdOpen() {
+  await rebindIfAsked();
+  if (opts.host) writeConfigKeys({ host: opts.host }); // a bind that does not survive a restart is not a bind
   const { st, started } = await ensureServer();
   installStatusLine(WORKSPACE); // self-heal the statusLine wiring on every open
-  console.log('http://localhost:' + PORT + '/');
+  console.log(boardUrl(st.host));
   console.log((started ? 'started' : 'already running') + ' workspace=' + st.workspace + ' cards=' + st.cards);
 }
 
@@ -420,7 +449,7 @@ async function cmdInit() {
   await installTurnEndHook();
   scaffoldWorkspace();
 
-  console.log('\nboard: http://localhost:' + PORT + '/');
+  console.log('\nboard: ' + boardUrl(opts.host));
 }
 
 // The workspace-level turn-end Stop hook -> POST /api/turn-end. Session-agnostic
@@ -570,15 +599,20 @@ async function cmdInitOnboard() {
 
   console.error('┌─ bridge-commander first run');
   console.error('│  workspace : ' + WORKSPACE + (resuming ? '   (existing)' : '   (NEW)'));
-  console.error('│  board     : http://localhost:' + PORT + '/');
+  console.error('│  board     : ' + boardUrl(opts.host));
   console.error('└─ lieutenant: ' + BRIDGET.name);
 
   // 3. The workspace itself.
   fs.mkdirSync(STATE_DIR, { recursive: true });
   excludeFromGit(WORKSPACE, '.bridge-commander/');
   if (PORT !== DEFAULT_PORT) writeConfigKeys({ port: PORT }); // so every later bc-axi call finds it
-  const { started } = await ensureServer();
-  console.log('server ' + (started ? 'started' : 'already running') + ' on port ' + PORT);
+  if (opts.host) writeConfigKeys({ host: opts.host }); // …and so the next start keeps the bind
+  await rebindIfAsked(); // a --host that arrives after the board is up still means it
+  const { started, st } = await ensureServer();
+  // What it actually BOUND, asked of the server — not what we hoped it would.
+  const bound = (st && st.host) || opts.host || '';
+  console.log('server ' + (started ? 'started' : 'already running') + ' on port ' + PORT
+    + (LOOPBACK.includes(bound) ? '' : ' bound to ' + bound));
   await installTurnEndHook();
   scaffoldWorkspace();
 
@@ -635,8 +669,8 @@ async function cmdInitOnboard() {
     // Certain, and cheap to know: there is no point spawning into a binary that
     // is not there, and no point making anyone read a pane to find that out.
     live = false;
-    console.log('\n⚠ ' + fr.agentMissingText(harness).split('\n').join('\n  ')
-      + '\n  Then run the SAME command again — it picks up where it stopped.');
+    console.log('\n⚠ ' + fr.agentMissingText(harness, WORKSPACE).split('\n').join('\n  ')
+      + '\n\n  Then run the SAME command again — it picks up where it stopped.');
   } else {
     try {
       const body = { name, id, spawn: true, revive: true };
@@ -652,10 +686,14 @@ async function cmdInitOnboard() {
       // own session; that tail is printed verbatim and the cause is named FROM
       // it, with a guess only where the pane said nothing — and labelled as one.
       const why = (e.body && e.body.error) || e.message;
-      const d = fr.diagnoseSpawn(why);
+      const d = fr.diagnoseSpawn(why, WORKSPACE);
       console.log('\n⚠ ' + name + '\'s session did not start (' + d.cause + ').');
-      if (d.tail) console.log('\n  What her session actually shows:\n'
-        + d.tail.split('\n').map((l) => '  | ' + l).join('\n'));
+      // ALWAYS, even when there is nothing in it: a message that says "read the
+      // pane above" over an empty space is worse than one that says the pane
+      // was empty. "Empty" is itself a fact about what happened.
+      console.log('\n  What her session actually shows:\n' + (d.tail
+        ? d.tail.split('\n').map((l) => '  | ' + l).join('\n')
+        : '  | (nothing — the pane was empty)'));
       console.log('\n  ' + d.headline.split('\n').join('\n  '));
       console.log('\n  ' + d.fix.split('\n').join('\n  '));
       console.log('\n  The board is up and her welcome message is on it — she just cannot answer yet.\n'
@@ -663,7 +701,7 @@ async function cmdInitOnboard() {
     }
   }
 
-  console.log('\nboard: http://localhost:' + PORT + '/');
+  console.log('\nboard: ' + boardUrl(bound));
   if (live) {
     console.log('\nGive that URL to the person and stop here. ' + name + ' is on the board with a message\n'
       + 'already waiting, and the rest of the setup — tools, projects, the checklist — is hers.');

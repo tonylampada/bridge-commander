@@ -3281,7 +3281,11 @@ const server = http.createServer(async (req, res) => {
       let pending = 0;
       for (const lt of queueIds()) pending += pendingItems(lt).length;
       return sendJson(res, 200, {
-        workspace: WORKSPACE, port: PORT, cards: board.cards.length,
+        // `host` is what this process actually BOUND, not what config said —
+        // a caller that wants a different bind (init/open --host) can only tell
+        // by asking, and a server that ignored the flag silently is the bug
+        // that sent a stranger a URL their browser could not reach.
+        workspace: WORKSPACE, port: PORT, host: BIND_HOST, cards: board.cards.length,
         lieutenants: board.lieutenants.length, seq: board.seq,
         queue_seq: qseq, queue_pending: pending,
         projects: board.projects.length, workers: board.workers.length,

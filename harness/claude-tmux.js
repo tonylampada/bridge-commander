@@ -195,12 +195,18 @@ async function deliverPrompt(target, prompt) {
     retries: Number(process.env.BC_SEND_RETRIES || 3),
     enterSleep: Number(process.env.BC_SEND_SLEEP_MS || 400),
   });
-  if (verdict === 'pending') {
-    throw new Error('brief not submitted at spawn (Enter swallowed; text left in composer)');
+  if (verdict === 'pending' || verdict === 'send-failed') {
+    // The pane rides on THIS failure too. A launch that settles and then will
+    // not take the brief is the interesting case — the screen underneath is
+    // usually a login prompt or a trust dialog wearing a composer's clothes —
+    // and without the tail the caller is left with nothing to diagnose from.
+    throw new Error((verdict === 'pending'
+      ? 'brief not submitted at spawn (Enter swallowed; text left in composer)'
+      : 'brief not sent at spawn (tmux send failed)') + '; pane tail:\n' + (await paneTailSafe(target)));
   }
-  if (verdict === 'send-failed') {
-    throw new Error('brief not sent at spawn (tmux send failed)');
-  }
+}
+async function paneTailSafe(target) {
+  try { return (await t.capture(target, 20)) || ''; } catch (e) { return ''; }
 }
 
 // send(ref, text) — type into the session with verified submission.

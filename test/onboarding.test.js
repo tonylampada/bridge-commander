@@ -128,6 +128,41 @@ test('init --onboard continues an existing workspace instead of refusing it', as
   }
 });
 
+test('--host on an already-running board rebinds it, prints the reachable URL, and persists', async () => {
+  // Round 2 of the install test: the person gets a board first and discovers
+  // only afterwards that their browser cannot reach it. Asking for a bind at
+  // that point used to do nothing at all — "server already running", still
+  // loopback, still printing localhost, and nothing written down.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
+  const port = await freePort();
+  const base = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
+  // A second loopback address: bindable, not 127.0.0.1, and reachable from here
+  // — so this stays a real rebind without opening anything to the network.
+  const HOST = '127.0.0.2';
+  try {
+    let r = await runCli(base, onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /board: http:\/\/localhost:/, 'a loopback board says localhost');
+
+    r = await runCli(base.concat('--host', HOST), onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+    assert.match(r.stderr, /restarting it on the new address/, 'the flag is not silently ignored');
+    assert.match(r.stdout, new RegExp('board: http://' + HOST + ':' + port + '/'),
+      'the URL handed over is the one that works');
+    assert.doesNotMatch(r.stdout, /board: http:\/\/localhost/);
+
+    const cfg = JSON.parse(fs.readFileSync(path.join(dir, '.bridge-commander', 'config.json'), 'utf8'));
+    assert.strictEqual(cfg.host, HOST, 'a bind that does not survive a restart is not a bind');
+    const st = await (await fetch('http://' + HOST + ':' + port + '/api/status')).json();
+    assert.strictEqual(st.host, HOST, 'and the server says what it actually bound');
+  } finally {
+    await runCli(['stop', '--workspace', dir, '--port', String(port)]);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 // The walk-forward test needs a base OUTSIDE the ephemeral range: it binds
 // base+1 itself, and a port the OS is still handing out to freePort() is a port
 // another test in this run is about to try to bind.

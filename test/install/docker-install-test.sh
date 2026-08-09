@@ -97,7 +97,12 @@ cat /root/init.log
 
 echo "=== a missing agent CLI is named as missing, and never guessed at ==="
 grep -q "is not on PATH" /root/init.log || exit 1
-grep -q "npm i -g @anthropic-ai/claude-code" /root/init.log || exit 1
+# The install route has to work for the user who will RUN it: `npm i -g` is EACCES
+# for exactly the normal user the root block tells them to become.
+grep -q "claude.ai/install.sh" /root/init.log || exit 1
+# …and the by-hand run has to happen in the WORKSPACE, because the folder-trust
+# question is about that folder, not about $HOME.
+grep -q "cd /root/myfleet && claude" /root/init.log || exit 1
 grep -q "not installed, or not logged in" /root/init.log && { echo "it guessed at a cause it did not check"; exit 1; }
 grep -q "board: http://localhost:4790/" /root/init.log || exit 1
 curl -sf http://127.0.0.1:4790/api/status | grep -q '"workspace":"/root/myfleet"' || exit 1
@@ -119,6 +124,19 @@ grep -q "charter left alone" /root/init2.log || exit 1
 grep -q "welcome message already on the board" /root/init2.log || exit 1
 grep -q "resuming, not restarting" /root/init2.log || exit 1
 test "$(grep -c 'Welcome aboard' /root/board.json)" = "1" || exit 1
+
+echo "=== --host after the board is already up: rebinds, persists, prints a URL that works ==="
+IP=$(hostname -i | awk '{print $1}')
+$BC init --onboard --port 4790 --allow-root --host "$IP" > /root/host.log 2>&1
+cat /root/host.log
+grep -q "restarting it on the new address" /root/host.log || exit 1
+grep -q "board: http://$IP:4790/" /root/host.log || exit 1
+grep -q "board: http://localhost" /root/host.log && { echo "it handed over a URL the browser cannot reach"; exit 1; }
+grep -q "\"host\": \"$IP\"" /root/myfleet/.bridge-commander/config.json || exit 1
+curl -sf "http://$IP:4790/api/status" | grep -q "\"host\":\"$IP\"" || exit 1
+# …and back to loopback, so the rest of the run is where it was.
+$BC init --onboard --port 4790 --allow-root --host 127.0.0.1 > /root/host2.log 2>&1
+grep -q "board: http://localhost:4790/" /root/host2.log || exit 1
 
 echo "=== the tools the README no longer asks for, installed the way Bridget would ==="
 export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
