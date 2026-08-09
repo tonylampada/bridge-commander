@@ -675,6 +675,26 @@ body.resizing { user-select: none; cursor: col-resize; }
   border: 1px solid var(--line); border-radius: 5px; }
 .lt-act:hover { color: var(--accent); border-color: var(--accent2); }
 
+/* hooks: one line each, the same density as a lieutenant row — name, what fires
+   it and how its last run ended as one dim run, then ▶ and ✎. The facts run
+   stays whole at any width; the name is what ellipses, so every hook is one
+   line on a phone. */
+#hk-list { display: flex; flex-direction: column; gap: 4px; }
+.hk-row { display: flex; gap: 8px; align-items: center; }
+.hk-name { flex: 0 1 auto; min-width: 0; color: var(--text); font-size: 12.5px; font-weight: 650;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.hk-facts { flex: 1 0 auto; color: var(--faint); font-size: 11px; font-family: var(--mono);
+  white-space: nowrap; }
+.hk-ok { color: var(--ok); }
+.hk-bad { color: var(--danger); }
+.hk-never, .hk-running { color: var(--faint); }
+.hk-acts { flex: none; display: flex; gap: 4px; margin-left: auto; }
+.hk-act { color: var(--dim); font-size: 12px; line-height: 1; padding: 3px 7px;
+  border: 1px solid var(--line); border-radius: 5px; }
+.hk-act:hover:not(:disabled) { color: var(--accent); border-color: var(--accent2); }
+.hk-act:disabled { opacity: 0.35; }
+.hk-note { color: var(--faint); font-size: 11px; font-family: var(--mono); overflow-wrap: anywhere; }
+
 #lm-list { display: flex; flex-direction: column; gap: 6px; max-height: 40vh; overflow-y: auto; }
 .lm-row { display: flex; gap: 6px; align-items: center; }
 .lm-row input[type=color], #lm-color { width: 26px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 5px; background: none; cursor: pointer; flex: none; }

@@ -59,6 +59,7 @@ const opts = {
   worker: null, ttl: null, spawn: false, harness: null,
   playbook: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
   uri: null, file: null, version: null,
+  card: null, trigger: null, key: null, source: null, limit: 0,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -103,6 +104,11 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--uri') opts.uri = argv[++i];
   else if (a === '--file') opts.file = argv[++i];
   else if (a === '--version') opts.version = argv[++i];
+  else if (a === '--card') opts.card = argv[++i];
+  else if (a === '--trigger') opts.trigger = argv[++i];
+  else if (a === '--key') opts.key = argv[++i];
+  else if (a === '--source') opts.source = argv[++i];
+  else if (a === '--limit') opts.limit = parseInt(argv[++i], 10);
   // An unknown --flag is an error, never a positional: a flag that was removed
   // (or mistyped) has to say so, instead of silently sliding into <source> or
   // <card-id> and half-working. Positionals here are ids, paths and URLs —
@@ -115,7 +121,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 let cmd = positional.shift();
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
-if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line' || cmd === 'playbook') && positional.length) cmd = cmd + ' ' + positional.shift();
+if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line' || cmd === 'playbook' || cmd === 'hook') && positional.length) cmd = cmd + ' ' + positional.shift();
 // Three-word verb: `card artifact add|rm`.
 if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
@@ -709,13 +715,29 @@ async function cmdPatch() {
 
 async function cmdEvent() {
   const id = positional[0];
-  if (!id) die('usage: bc-axi event <card-id> [--level 1|2] [--kind K] [--wake-owner] [--text-file f|-]\n  (text from --text-file or stdin; kind is an open token — a kind in the board\'s\n  kinds map sets the default level and emoji; explicit --level wins, else level 2)\n  --wake-owner also queues the event to the card owner\'s drain (wakes the\n  LIEUTENANT, leaves the chat thread alone; --level 1 is what rings the captain)');
+  if (!id) {
+    die('usage: bc-axi event <card-id> [--level 1|2] [--kind K] [--wake-owner] [--key S] [--source N] [--text-file f|-]\n' +
+      '  (text from --text-file or stdin; kind is an open token — a kind in the board\'s\n' +
+      '  kinds map sets the default level and emoji; explicit --level wins, else level 2)\n' +
+      '  --wake-owner also queues the event to the card owner\'s drain (wakes the\n' +
+      '  LIEUTENANT, leaves the chat thread alone; --level 1 is what rings the captain)\n' +
+      '  --key makes this at-most-once for this card: the second and later events\n' +
+      '  carrying that key are a no-op that exits 0 and says duplicate (kept 7 days),\n' +
+      '  so a five-minute poll seeing the same red check wakes its lieutenant ONCE\n' +
+      '  --source names who is calling; it rides onto the timeline entry AND the\n' +
+      '  queue item, so a drain at 2am says who woke you');
+  }
   const text = readInput(opts.textFile).trim();
   const body = { text, actor: opts.actor || 'agent' };
   if (opts.level) body.level = opts.level;
   if (opts.kind) body.kind = opts.kind;
   if (opts.wakeOwner) body.wakeOwner = true;
+  if (opts.key) body.key = opts.key;
+  if (opts.source) body.source = opts.source;
   const r = await request('POST', '/api/cards/' + encodeURIComponent(id) + '/events', body);
+  // A duplicate is a SUCCESS: the poller already said this, and nothing happened
+  // a second time. Exit 0, and say so, so a hook's log shows the deduping work.
+  if (r.duplicate) return console.log('duplicate key "' + r.key + '" on ' + id + ' — nothing written, nobody woken');
   console.log('event #' + r.event.seq + ' L' + r.event.level + ' -> ' + id + (opts.wakeOwner ? ' (owner woken)' : ''));
 }
 
@@ -985,6 +1007,80 @@ async function cmdPlaybookList() {
   console.log('\nedit them in ' + r.dir + ' — the next card started uses what is on disk');
 }
 
+// ---------- hooks ----------
+// A hook is an executable file the workspace owns, and the namespace says which
+// kind: hooks/<event>/<name> fires on that lifecycle event, hooks/<name> fires
+// only when something calls `hook run`. There is no hook API — a hook is bash
+// with bc-axi on its PATH.
+function ago(iso) {
+  const t = Date.parse(iso || '');
+  if (!t) return '';
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 60) return s + 's ago';
+  if (s < 3600) return Math.round(s / 60) + 'm ago';
+  if (s < 86400) return Math.round(s / 3600) + 'h ago';
+  return Math.round(s / 86400) + 'd ago';
+}
+// How a run ended, in the words the board's row uses.
+function runOutcome(r) {
+  if (!r) return 'never ran';
+  return 'ran ' + ago(r.started) + ' · ' + (r.timedOut ? 'timed out' : r.error ? 'failed to start' : 'exit ' + r.code);
+}
+
+async function cmdHookList() {
+  const r = await request('GET', '/api/hooks');
+  if (opts.json) return console.log(JSON.stringify(r.hooks, null, 2));
+  if (!r.hooks.length) return console.log('no hooks (drop an executable file in ' + r.dir + ')');
+  for (const h of r.hooks) {
+    console.log(h.name + '\t' + (h.event || 'named') + '\t' + runOutcome(h.last)
+      + (h.running ? '\t(running now)' : ''));
+  }
+  console.log('\n' + r.dir + ' — a file is a NAMED hook (bc-axi hook run <name>); a directory is a lifecycle event');
+}
+
+async function cmdHookRun() {
+  const name = positional[0];
+  if (!name) {
+    die('usage: bc-axi hook run <name> [--card <card-id>] [--trigger <name>]\n' +
+      '  Run a NAMED hook — an executable file directly in <workspace>/.bridge-commander/hooks/.\n' +
+      '  This is the one door: an outside trigger on this machine, the board\'s ▶ and a schedule\n' +
+      '  all come through it, and every run appends a line to hookruns.jsonl (bc-axi hook runs).\n' +
+      '  --card hands the hook BC_CARD/BC_WORKTREE/BC_BRANCH; without it they are empty.\n' +
+      '  --trigger names who called (default "cli") and is what the trace line records.\n' +
+      '  A second run while the first is in flight is REFUSED, naming the one already going.');
+  }
+  const body = { name, trigger: opts.trigger || 'cli' };
+  if (opts.card) body.card = opts.card;
+  let r;
+  try {
+    // The hook's own timeout (~120s by default) is the server's budget, so wait
+    // past it rather than reporting a timeout the hook never had.
+    r = await request('POST', '/api/hooks/run', body, 600000);
+  } catch (e) {
+    if (e.status === 409 || e.status === 404) die((e.body && e.body.error) || e.message);
+    throw e;
+  }
+  const run = r.run;
+  if (run.output) process.stdout.write(run.output.endsWith('\n') ? run.output : run.output + '\n');
+  const how = run.timedOut ? 'TIMED OUT' : run.error ? 'FAILED TO START (' + run.error + ')' : 'exit ' + run.code;
+  console.log('hook ' + name + ' ' + how + ' in ' + run.ms + 'ms (trigger ' + run.trigger + ')');
+  if (!run.ok) process.exit(1); // the caller's own exit code follows the hook's
+}
+
+async function cmdHookRuns() {
+  const name = positional[0] || '';
+  const limit = opts.limit > 0 ? opts.limit : 20;
+  const r = await request('GET', '/api/hookruns?limit=' + limit + (name ? '&hook=' + encodeURIComponent(name) : ''));
+  if (opts.json) return console.log(JSON.stringify(r.runs, null, 2));
+  if (!r.runs.length) return console.log(name ? 'no runs recorded for ' + name : 'no hook runs recorded yet');
+  for (const run of r.runs) {
+    const how = run.timedOut ? 'timed out' : run.error ? 'failed to start' : 'exit ' + run.code;
+    console.log(hhmm(run.started) + '  ' + run.hook + '  ' + run.trigger
+      + (run.card ? ' ' + run.card : '') + '  ' + how + '  ' + run.ms + 'ms');
+    if (run.output) console.log('    ' + run.output.replace(/\n/g, '\n    '));
+  }
+}
+
 // ---------- conversation & delivery ----------
 async function cmdSay() {
   const target = positional[0];
@@ -1115,6 +1211,9 @@ async function cmdDrain() {
     } else if (it.kind === 'card-moved') {
       head = 'captain moved ' + cardBit(it.card) + ': ' + it.from + ' -> ' + it.to;
     }
+    // Who woke you, when the caller said. Rides on the envelope, so the text
+    // above stays exactly what they wrote.
+    if (it.source) head += '  (from ' + it.source + ')';
     console.log('#' + it.seq + '  ' + head);
     if (it.text) console.log(indent(it.text));
     for (const line of attachmentLines(it.attachments)) console.log(indent(line));
@@ -1201,6 +1300,7 @@ const commands = {
   'lieutenant patch': cmdLtPatch,
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
   'playbook list': cmdPlaybookList,
+  'hook list': cmdHookList, 'hook run': cmdHookRun, 'hook runs': cmdHookRuns,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
   'card start': cmdStart, 'card park': cmdCardPark,
@@ -1258,6 +1358,25 @@ if (!commands[cmd]) {
     '  playbook list [--json]                 playbook ids in <workspace>/.bridge-commander/playbooks/\n' +
     '                                         (plus the packaged ones not overridden there). Edit a\n' +
     '                                         playbook and the next card started on it uses the edit\n' +
+    '\nhook (the workspace\'s own executable scripts, in .bridge-commander/hooks/):\n' +
+    '  hook list [--json]                     every hook, its kind and how its last run ended.\n' +
+    '                                         A DIRECTORY in hooks/ is a lifecycle event and its\n' +
+    '                                         files fire on it; a FILE directly in hooks/ is a\n' +
+    '                                         NAMED hook that nothing fires but you\n' +
+    '  hook run <name> [--card <id>] [--trigger <n>]\n' +
+    '                                         run a named hook. The ONE door — an outside trigger\n' +
+    '                                         on this machine, the board\'s ▶ and a schedule all\n' +
+    '                                         come through it. --card fills BC_CARD/BC_WORKTREE/\n' +
+    '                                         BC_BRANCH (empty without it); --trigger is recorded\n' +
+    '                                         on the trace line. A run of a name already in flight\n' +
+    '                                         is refused, naming the one going. Exits with the\n' +
+    '                                         hook\'s own success (1 on a non-zero exit or a timeout)\n' +
+    '  hook runs [<name>] [--limit N] [--json]\n' +
+    '                                         the trace: every run of every hook, lifecycle ones\n' +
+    '                                         included, newest first, read off the TAIL of\n' +
+    '                                         .bridge-commander/hookruns.jsonl\n' +
+    '  A hook is bash with bc-axi on its PATH — there is no hook API. It wakes a lieutenant the\n' +
+    '  way anyone else does: bc-axi event <card> --wake-owner (add --key to poll without spamming)\n' +
     '\nread:\n' +
     '  board [--json]                         lane + columns + card one-liners (or full JSON)\n' +
     '  card show <card-id> [--json]           one card: type, owner, attrs, body, events, thread\n' +
@@ -1331,11 +1450,17 @@ if (!commands[cmd]) {
     '                                         move (the lieutenant verifies, then hands off). PR URLs in\n' +
     '                                         the outcome auto-populate the card\'s prs attribute\n' +
     '\nevents & chat:\n' +
-    '  event <card-id> [--level 1|2] [--kind K] [--wake-owner] [--text-file f|-]   append timeline event\n' +
-    '                                         level 1 rings the captain; level 2 = timeline only.\n' +
+    '  event <card-id> [--level 1|2] [--kind K] [--wake-owner] [--key S] [--source N] [--text-file f|-]\n' +
+    '                                         append timeline event. Level 1 rings the captain;\n' +
+    '                                         level 2 = timeline only.\n' +
     '                                         --wake-owner also queues a card-event item to the card\n' +
     '                                         owner\'s drain — the door a workflow, cron or CI hook uses\n' +
     '                                         to wake a lieutenant without interjecting in the thread\n' +
+    '                                         --key <s> makes it at-most-once for this card: a repeat\n' +
+    '                                         of that key writes nothing and wakes nobody (kept 7 days),\n' +
+    '                                         so a polling hook reports the same red check ONCE\n' +
+    '                                         --source <n> names the caller on both the timeline entry\n' +
+    '                                         and the queue item, so a drain says who woke you\n' +
     '  notify [--kind K] [--text-file f|-]    board-level notification (no card)\n' +
     '  say <lieutenant:ID|card:ID> [--actor a] [--text-file f|-]\n' +
     '                                         post a chat message; a card thread\'s interlocutor is\n' +

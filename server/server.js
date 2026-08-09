@@ -4,6 +4,8 @@
 // One workspace = one board. All state lives in <workspace>/.bridge-commander/:
 //   board.json     the board (canonical state of the world)
 //   archive.jsonl  append-only frozen card snapshots (reason: merged|killed)
+//   hookruns.jsonl append-only trace of every hook run (lifecycle and named), read from the tail
+//   eventkeys.json at-most-once keys for `event --key`, per card, pruned at 7 days
 //   chat/<lieutenant>.jsonl  append-only lieutenant main chat (the truth; board.json holds none)
 //   config.json    { port, host?, voices?, tts? } — port default 4780, written on first boot
 //   queue/<lieutenant>.jsonl  durable per-lieutenant delivery queue (global seq)
@@ -62,7 +64,8 @@ const crypto = require('crypto');
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
-const { runHooks, runTeardown, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS } = require(path.join(__dirname, 'hooks.js'));
+const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
+  hooksDir, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE } = require(path.join(__dirname, 'hooks.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -1990,6 +1993,47 @@ async function statusWithLiveness(card, status) {
   });
 }
 
+// ---------- event dedupe keys (POST /api/cards/<id>/events `key`) ----------
+//
+// A hook that polls `gh` every five minutes sees the same red check sixty
+// times. Without a key it wakes its lieutenant sixty times; with one, the
+// second and later events carrying that key FOR THAT CARD are a no-op that
+// answers 200 and says it was a duplicate — no timeline entry, no queue item.
+// So every polling hook gets deduping free instead of keeping its own state
+// file beside itself.
+//
+// Keys are scoped per card (the same key on a different card is a different
+// thing that happened) and kept 7 days, pruned on every write. One small JSON
+// file, not board state: it is a cache of what has already been said, and
+// losing it costs one duplicate wake.
+const EVENTKEYS_FILE = path.join(STATE_DIR, 'eventkeys.json');
+const EVENTKEY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+function readEventKeys() {
+  try {
+    const doc = JSON.parse(fs.readFileSync(EVENTKEYS_FILE, 'utf8'));
+    if (doc && typeof doc === 'object' && !Array.isArray(doc)) return doc;
+  } catch (e) {}
+  return {};
+}
+
+// claimEventKey(cardId, key) -> true when this key is NEW for that card (and it
+// is now claimed), false when it is a duplicate still inside the window.
+function claimEventKey(cardId, key) {
+  const doc = readEventKeys();
+  const cutoff = Date.now() - EVENTKEY_TTL_MS;
+  for (const [c, keys] of Object.entries(doc)) {
+    if (!keys || typeof keys !== 'object' || Array.isArray(keys)) { delete doc[c]; continue; }
+    for (const [k, ts] of Object.entries(keys)) if (!(typeof ts === 'number' && ts > cutoff)) delete keys[k];
+    if (!Object.keys(keys).length) delete doc[c];
+  }
+  if (doc[cardId] && doc[cardId][key]) return false; // survived the prune ⇒ still fresh
+  (doc[cardId] = doc[cardId] || {})[key] = Date.now();
+  try { fs.writeFileSync(EVENTKEYS_FILE, JSON.stringify(doc)); }
+  catch (e) { console.error(now() + ' event key store unwritable: ' + String((e && e.message) || e)); }
+  return true;
+}
+
 // ---------- lifecycle hooks (workspace-owned scripts; server/hooks.js) ----------
 // Events v1: worker-done, worker-died, card-archived. Fire-and-forget — a hook
 // never blocks or fails the lifecycle outcome it observes. The ONE ordering
@@ -3091,6 +3135,46 @@ function charterFile(uri) {
   return file;
 }
 
+// The third — and last — uri the artifact routes accept that is no card's: a
+// HOOK file. The hooks tab's ✎ opens one in the same editor a playbook opens
+// in, which is where "he asks a lieutenant to help build one" happens: a file
+// on a screen he can point at.
+//
+// The widening is exactly one shape, and it is the namespace hooks.js already
+// defines: an executable file under <workspace>/.bridge-commander/hooks/, ONE
+// level deep (a named hook) or TWO (a lifecycle hook, in its event's
+// directory). The containing directory is BUILT here from STATE_DIR and
+// compared for equality — never taken from the client — the way charterFile()
+// does it, and the two names in it have to look like ids, so a traversal never
+// survives the comparison.
+//
+// Returns the path when the uri is one, '' otherwise. A file that is not there
+// YET is still one (that is the create), which is why the leaf check tolerates
+// ENOENT and nothing else: a symlink, a directory and a socket all fail
+// isFile() and are refused rather than followed.
+function hookFile(uri) {
+  if (typeof uri !== 'string' || !uri.startsWith('file://')) return '';
+  const file = uri.slice('file://'.length);
+  // path.resolve is idempotent on a clean absolute path — a `..` segment or a
+  // relative path changes it, so `<dir>/../../board.json` never gets this far.
+  if (path.resolve(file) !== file) return '';
+  if (!HOOK_NAME_RE.test(path.basename(file))) return '';
+  const dir = path.dirname(file);
+  const root = hooksDir(WORKSPACE);
+  if (dir !== root) {
+    // two levels: an EVENT directory sitting directly in hooks/
+    if (path.dirname(dir) !== root || !HOOK_NAME_RE.test(path.basename(dir))) return '';
+  }
+  // The directory has to be a real directory reached without following a link:
+  // a symlinked hooks/ (or event dir) points somewhere else, and somewhere else
+  // is the whole thing this refuses.
+  try { if (fs.realpathSync(dir) !== dir) return ''; }
+  catch (e) { return ''; }
+  try { if (!fs.lstatSync(file).isFile()) return ''; }
+  catch (e) { if (e.code !== 'ENOENT') return ''; }
+  return file;
+}
+
 // ---------- server ----------
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
@@ -3175,8 +3259,9 @@ const server = http.createServer(async (req, res) => {
       const uri = url.searchParams.get('uri') || '';
       const raw = url.searchParams.get('raw') === '1' || url.searchParams.get('raw') === 'true';
       const charter = charterFile(uri);
+      const hook = hookFile(uri);
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri) || !!charter;
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || !!playbookSource(uri) || !!charter || !!hook;
       if (!listed) return sendJson(res, 404, { error: 'unknown artifact' });
       // A promoted chat attachment (attachment://id) resolves to its stored file
       // via the sidecar; file:// / bare paths read directly.
@@ -3282,8 +3367,9 @@ const server = http.createServer(async (req, res) => {
       if (typeof body.content !== 'string') return sendJson(res, 400, { error: 'content required' });
       const pbSource = playbookSource(uri);
       const charter = charterFile(uri);
+      const hook = hookFile(uri);
       const listed = board.cards.some((c) => Array.isArray(c.attributes && c.attributes.artifacts) &&
-        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace' || !!charter;
+        c.attributes.artifacts.some((a) => a && a.uri === uri)) || pbSource === 'workspace' || !!charter || !!hook;
       if (!listed) {
         // A packaged playbook is readable and never writable: it is a git
         // checkout of this repo, so the edit is a copy into the workspace.
@@ -3338,7 +3424,10 @@ const server = http.createServer(async (req, res) => {
       // if the process died mid-write; a rename either happened or it didn't.
       const tmp = path.join(path.dirname(file), '.' + path.basename(file) + '.bc-' + process.pid + '-' + Date.now() + '.tmp');
       try {
-        fs.writeFileSync(tmp, next, st ? { mode: st.mode & 0o777 } : {});
+        // An existing file keeps its mode. A hook created here is born
+        // EXECUTABLE — a hook the runner would skip silently is not a hook, and
+        // there is no chmod on a phone.
+        fs.writeFileSync(tmp, next, st ? { mode: st.mode & 0o777 } : (hook ? { mode: 0o755 } : {}));
         fs.renameSync(tmp, file);
       } catch (e) {
         try { fs.unlinkSync(tmp); } catch (e2) {}
@@ -3663,7 +3752,18 @@ const server = http.createServer(async (req, res) => {
       if (sub === 'events' && req.method === 'POST') {
         const body = JSON.parse(await readBody(req) || '{}');
         if (!String(body.text || '').trim()) return sendJson(res, 400, { error: 'text required' });
+        // `key`: at-most-once for this card within the window. Answered 200 —
+        // a poller that already reported this is not in error, and a hook that
+        // exits non-zero on it would ring the bell sixty times instead.
+        const key = String(body.key || '').trim().slice(0, 200);
+        if (key && !claimEventKey(card.id, key)) {
+          return sendJson(res, 200, { ok: true, duplicate: true, key });
+        }
         const ev = mkEvent(body, { level: 2 });
+        // `source`: who put this here. Rides onto the timeline entry AND the
+        // queue item below, so a drain at 2am says who woke you.
+        const source = String(body.source || '').trim().slice(0, 60);
+        if (source) ev.source = source;
         card.events.push(ev);
         card.updated = now();
         // wakeOwner: the door an outside process (a workflow, a cron, a CI hook)
@@ -3673,7 +3773,9 @@ const server = http.createServer(async (req, res) => {
         // Orthogonal to level: level 1 rings THE CAPTAIN and always has. Both
         // flags together does both, deliberately — the caller asked for both.
         if (body.wakeOwner) {
-          queuePush(card.owner, { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text });
+          queuePush(card.owner, Object.assign(
+            { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text },
+            source ? { source } : {}));
         }
         saveBoard(); broadcast();
         return sendJson(res, 200, { ok: true, event: ev });
@@ -3753,6 +3855,57 @@ const server = http.createServer(async (req, res) => {
       // off playbooks.js — the screen renders it, never restates it.
       return sendJson(res, 200, { playbooks: ids, items, dir,
         reference: { placeholders: PLACEHOLDERS, frontmatter: FRONTMATTER } });
+    }
+
+    // ----- hooks (the workspace's own executable scripts; server/hooks.js) -----
+    // Read off the filesystem on every call, never cached: a hook dropped in a
+    // second ago is in the next answer, the way playbooks work.
+    //
+    // `last` is the newest trace line for that hook, read from the TAIL of
+    // hookruns.jsonl in one backward walk for the whole list.
+    if (route === 'GET /api/hooks') {
+      const hooks = listAllHooks(WORKSPACE);
+      const last = lastRuns(WORKSPACE, hooks);
+      return sendJson(res, 200, {
+        dir: hooksDir(WORKSPACE),
+        hooks: hooks.map((h) => Object.assign({}, h, {
+          last: last.get(hookKey(h)) || null,
+          running: h.event ? null : runningHook(WORKSPACE, h.name),
+        })),
+      });
+    }
+    // The ONE code path a named hook runs through: `bc-axi hook run` posts here,
+    // and so does the board's ▶. Not a door for outside callers — an external
+    // trigger runs on this machine and speaks CLI; this is what the CLI speaks
+    // to, the same way every other verb does.
+    if (route === 'POST /api/hooks/run') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const name = String(body.name || '');
+      const cardId = String(body.card || '');
+      let ctx = {};
+      if (cardId) {
+        const card = findCard(cardId);
+        if (!card) return sendJson(res, 404, { error: 'unknown card: ' + cardId });
+        ctx = hookContext(card, findWorker(card.id));
+      }
+      try {
+        const run = await runNamedHook(WORKSPACE, name, ctx, {
+          trigger: String(body.trigger || 'cli'),
+          timeoutMs: HOOK_TIMEOUT_MS || 0,
+        });
+        return sendJson(res, 200, { ok: true, run });
+      } catch (e) {
+        if (e && e.code === 'ENOHOOK') return sendJson(res, 404, { error: e.message });
+        if (e && e.code === 'EBUSY') return sendJson(res, 409, { error: e.message, running: e.running });
+        throw e;
+      }
+    }
+    // The trace, newest first. Reads the tail — never the whole file.
+    if (route === 'GET /api/hookruns') {
+      const limit = Math.min(parseInt(url.searchParams.get('limit') || '20', 10) || 20, 500);
+      return sendJson(res, 200, {
+        runs: readRuns(WORKSPACE, { hook: url.searchParams.get('hook') || '', limit }),
+      });
     }
 
     // ----- board-level events (free-form notify) -----

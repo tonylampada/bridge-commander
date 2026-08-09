@@ -173,6 +173,7 @@
           <button type="button" data-tab="playbooks">playbooks</button>
           <button type="button" data-tab="projects">projects</button>
           <button type="button" data-tab="lieutenants">lieutenants</button>
+          <button type="button" data-tab="hooks">hooks</button>
         </span>
       </div>
       <section class="ss-sec on" id="ss-labels" data-sec="labels">
@@ -211,6 +212,18 @@
       <section class="ss-sec" id="ss-lieutenants" data-sec="lieutenants">
         <div class="ss-title">lieutenants</div>
         <div id="lt-list"></div>
+      </section>
+      <!-- hooks: the workspace's own executable scripts. One dense row each —
+           name, when it last ran and how it ended, ▶ to run it, ✎ to open the
+           file in the same editor a playbook opens in. A directory in hooks/ is
+           a lifecycle event (the row says which); a file directly in hooks/ is a
+           named hook that nothing fires but the ▶. No create button: naming a
+           file, making it executable and writing bash into a text box on a phone
+           is the worst way to do all three. -->
+      <section class="ss-sec" id="ss-hooks" data-sec="hooks">
+        <div class="ss-title">hooks</div>
+        <div id="hk-list"></div>
+        <div id="hk-dir" class="ss-note"></div>
       </section>
     </div>
   </section>

@@ -128,16 +128,41 @@ Env knobs (set on the server process):
 | `BC_TEARDOWN_TIMEOUT_MS` | `300000` / `60000` | timeout for a playbook's `teardown` command — 5 min at the handoff and archive (un-awaited), 60s at a rework restart (awaited inside `card start`); set, it overrides both |
 | `BC_SYSLOAD_MS` | `2000` | monitoring panel (⚙️ → machine load) sample interval; the sampler runs only while the panel is open |
 
-### Lifecycle hooks
+### Hooks
 
-The workspace can react to card/worker lifecycle events with its own scripts: every
-executable file in `.bridge-commander/hooks/<event>/` runs on that event (alphabetical,
-sequential, cwd = workspace root) with context in env — `BC_EVENT`, `BC_CARD`, `BC_REPO`,
-`BC_WORKTREE`, `BC_BRANCH`. Events: `worker-done`, `worker-died`, `card-archived` (fires
-before the worktree is released — and `BC_WORKTREE` is empty when the handoff released it
-already, which is the usual case). Hooks are fire-and-forget — a failure or timeout never
-blocks the lifecycle; results land on the card timeline (`hook-ran` / `hook-failed`).
-Typical use: reacting to a card finishing across the whole workspace, whatever it was run by.
+A hook is an executable file the workspace owns, and where it sits says what fires it:
+
+```
+.bridge-commander/hooks/worker-done/sweep.sh   a LIFECYCLE hook — that event fires it
+.bridge-commander/hooks/gh-watch               a NAMED hook — nothing fires it but you
+```
+
+**Directory means event, file means name.** Both are spawned directly (cwd = workspace root)
+with context in env — `BC_EVENT`, `BC_CARD`, `BC_REPO`, `BC_WORKTREE`, `BC_BRANCH`. Lifecycle
+events: `worker-done`, `worker-died`, `card-archived` (fires before the worktree is released —
+and `BC_WORKTREE` is empty when the handoff released it already, which is the usual case).
+Lifecycle hooks are fire-and-forget — a failure or timeout never blocks the lifecycle; results
+land on the card timeline (`hook-ran` / `hook-failed`).
+
+There is no hook API: a hook is bash with `bc-axi` on its `PATH`, so it wakes a lieutenant the
+way anything else does — `bc-axi event <card> --wake-owner`. Add `--key <s>` and a five-minute
+poll seeing the same red check wakes that lieutenant once instead of sixty times (keys are
+per-card, kept 7 days); `--source <n>` says who woke them, on the timeline and in the drain.
+
+```sh
+bc-axi hook list                       # every hook, and how its last run ended
+bc-axi hook run gh-watch               # run a named one — the same door the board's ▶ posts to
+bc-axi hook runs gh-watch              # its trace
+```
+
+`hook run` is the ONE door: an outside trigger already running on this machine, the board's ▶
+and (later) a schedule all come through it. One run per hook name at a time — a second call
+while the first is in flight is refused, naming the one going.
+
+Every run of either kind appends a line to `.bridge-commander/hookruns.jsonl` — hook, trigger,
+card, when, how long, exit code, timed-out flag, output tail. `hook runs` reads it off the
+tail. The config screen's **hooks** tab shows the same thing as one row per hook, with ▶ to run
+one and ✎ to edit it in the board's file editor.
 
 To tear down infrastructure one **playbook** starts (a dev container, a compose stack), reach
 for that playbook's `teardown` key instead: the command runs in the worktree immediately

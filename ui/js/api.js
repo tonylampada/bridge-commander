@@ -100,6 +100,12 @@ export const api = {
   // projects tab wants them, nothing else does, and nothing else pays for them.
   projects: (git) => j('GET', '/api/projects' + (git ? '?git=1' : '')),
   lieutenants: (live) => j('GET', '/api/lieutenants' + (live ? '?live=1' : '')),
+  // the workspace's hook scripts, each with its newest trace line — read off
+  // disk server-side, so a hook dropped in a second ago is in the next answer
+  hooks: () => j('GET', '/api/hooks'),
+  // ▶ — the same door `bc-axi hook run` posts to; `trigger` is what the trace
+  // line records, so a board run reads as a board run forever after
+  runHook: (name) => j('POST', '/api/hooks/run', { name, trigger: 'board' }),
   // slash commands the current chat target's harness answers (composer autocomplete)
   commands: (target) => j('GET', '/api/commands?target=' + encodeURIComponent(target)),
 };

@@ -1,0 +1,185 @@
+'use strict';
+// Editing a hook through the artifact routes — what the config screen's hooks
+// section rides on.
+//
+// A hook is a file, so editing one is the file screen and the same
+// PUT /api/artifact a card artifact is saved with: one editor, one version
+// check, one 409. That means exactly one more widening of the gate, and this
+// file is where its edges live. The accepted shape is the namespace hooks.js
+// already defines — an executable file under <workspace>/.bridge-commander/hooks/,
+// ONE level deep (a named hook) or TWO (a lifecycle hook in its event's dir).
+// Nothing else: not a path outside hooks/, not a symlink, not a traversal, not
+// a directory, and no third level.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const { startServerWithLieutenant } = require('./helper');
+
+const sha256 = (s) => crypto.createHash('sha256').update(s).digest('hex');
+const uriOf = (f) => 'file://' + f;
+const get = (s, uri) => s.api('GET', '/api/artifact?uri=' + encodeURIComponent(uri));
+
+function hooksDir(ws) { return path.join(ws, '.bridge-commander', 'hooks'); }
+function write(file, body, mode = 0o755) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, body);
+  fs.chmodSync(file, mode);
+  return file;
+}
+async function boot() {
+  const s = await startServerWithLieutenant();
+  fs.mkdirSync(hooksDir(s.dir), { recursive: true });
+  return s;
+}
+
+test('a named hook reads and writes through the artifact routes, version check and all', async () => {
+  const s = await boot();
+  try {
+    const file = write(path.join(hooksDir(s.dir), 'gh-watch'), '#!/bin/sh\necho v1\n');
+    const uri = uriOf(file);
+    const got = await get(s, uri);
+    assert.strictEqual(got.status, 200, JSON.stringify(got.body));
+    assert.strictEqual(got.body.name, 'gh-watch');
+    assert.strictEqual(got.body.content, '#!/bin/sh\necho v1\n');
+    assert.strictEqual(got.body.version, sha256('#!/bin/sh\necho v1\n'));
+
+    const put = await s.api('PUT', '/api/artifact',
+      { uri, content: '#!/bin/sh\necho v2\n', version: got.body.version });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), '#!/bin/sh\necho v2\n');
+    // an edit never costs a hook its executable bit — a hook the runner skips
+    // silently is not a hook
+    assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111, 'still executable');
+
+    const stale = await s.api('PUT', '/api/artifact', { uri, content: 'mine\n', version: got.body.version });
+    assert.strictEqual(stale.status, 409);
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), '#!/bin/sh\necho v2\n', 'nothing was written');
+  } finally { await s.stop(); }
+});
+
+test('a lifecycle hook — two levels deep, in its event directory — opens the same way', async () => {
+  const s = await boot();
+  try {
+    const file = write(path.join(hooksDir(s.dir), 'worker-done', 'sweep.sh'), '#!/bin/sh\nexit 0\n');
+    const uri = uriOf(file);
+    const got = await get(s, uri);
+    assert.strictEqual(got.status, 200, JSON.stringify(got.body));
+    const put = await s.api('PUT', '/api/artifact',
+      { uri, content: '#!/bin/sh\nexit 1\n', version: got.body.version });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(fs.readFileSync(file, 'utf8'), '#!/bin/sh\nexit 1\n');
+  } finally { await s.stop(); }
+});
+
+test('a hook written where none was is born EXECUTABLE — there is no chmod on a phone', async () => {
+  const s = await boot();
+  try {
+    const file = path.join(hooksDir(s.dir), 'brand-new');
+    const uri = uriOf(file);
+    const got = await get(s, uri);
+    assert.strictEqual(got.status, 404, 'nothing there yet');
+
+    const put = await s.api('PUT', '/api/artifact', { uri, content: '#!/bin/sh\necho hi\n', version: '' });
+    assert.strictEqual(put.status, 200, JSON.stringify(put.body));
+    assert.strictEqual(fs.statSync(file).mode & 0o111, 0o111);
+    // and it is a hook the moment it lands
+    assert.ok((await s.api('GET', '/api/hooks')).body.hooks.some((h) => h.name === 'brand-new'));
+  } finally { await s.stop(); }
+});
+
+// ---------- what the gate refuses ----------
+// Each of these is its own test on purpose: they are the reasons this is a hook
+// route and not a workspace file API, and a single collapsed test would let one
+// of them rot green.
+
+async function refused(s, uri, content) {
+  const g = await get(s, uri);
+  assert.strictEqual(g.status, 404, 'GET ' + uri + ' → ' + JSON.stringify(g.body));
+  const p = await s.api('PUT', '/api/artifact', { uri, content: content || 'pwned\n', version: '' });
+  assert.strictEqual(p.status, 403, 'PUT ' + uri + ' → ' + JSON.stringify(p.body));
+}
+
+test('a path OUTSIDE hooks/ is refused, however ordinary it looks', async () => {
+  const s = await boot();
+  try {
+    const outside = path.join(s.dir, '.bridge-commander', 'gh-watch');
+    fs.writeFileSync(outside, 'not a hook\n');
+    await refused(s, uriOf(outside));
+    // the state dir's own files are the point of the refusal
+    const brd = path.join(s.dir, '.bridge-commander', 'board.json');
+    const before = fs.readFileSync(brd, 'utf8');
+    await refused(s, uriOf(brd));
+    assert.strictEqual(fs.readFileSync(brd, 'utf8'), before);
+    assert.strictEqual(fs.readFileSync(outside, 'utf8'), 'not a hook\n');
+  } finally { await s.stop(); }
+});
+
+test('a hook that is a SYMLINK is refused, not followed', async () => {
+  const s = await boot();
+  try {
+    const secret = path.join(s.dir, 'secret.sh');
+    fs.writeFileSync(secret, 'the good stuff\n');
+    const link = path.join(hooksDir(s.dir), 'innocent');
+    fs.symlinkSync(secret, link);
+    await refused(s, uriOf(link));
+    assert.strictEqual(fs.readFileSync(secret, 'utf8'), 'the good stuff\n');
+
+    // …and so is a hook inside a symlinked EVENT directory
+    const elsewhere = path.join(s.dir, 'elsewhere');
+    fs.mkdirSync(elsewhere, { recursive: true });
+    fs.writeFileSync(path.join(elsewhere, 'sweep.sh'), 'theirs\n');
+    fs.symlinkSync(elsewhere, path.join(hooksDir(s.dir), 'worker-done'));
+    await refused(s, uriOf(path.join(hooksDir(s.dir), 'worker-done', 'sweep.sh')));
+    assert.strictEqual(fs.readFileSync(path.join(elsewhere, 'sweep.sh'), 'utf8'), 'theirs\n');
+  } finally { await s.stop(); }
+});
+
+test('a TRAVERSAL out of hooks/ is refused — the client never supplies a prefix', async () => {
+  const s = await boot();
+  try {
+    const brd = path.join(s.dir, '.bridge-commander', 'board.json');
+    const before = fs.readFileSync(brd, 'utf8');
+    const dir = hooksDir(s.dir);
+    await refused(s, uriOf(path.join(dir, '..', 'board.json')));
+    // the un-normalized spelling too — the string is what arrives, not a path object
+    await refused(s, 'file://' + dir + '/../board.json');
+    await refused(s, 'file://' + dir + '/worker-done/../../board.json');
+    // …and one that spells its way BACK into hooks/ is still not a hook path
+    write(path.join(dir, 'real'), '#!/bin/sh\nexit 0\n');
+    await refused(s, 'file://' + dir + '/../hooks/real');
+    assert.strictEqual(fs.readFileSync(brd, 'utf8'), before, 'the board is untouched');
+    assert.strictEqual(fs.readFileSync(path.join(dir, 'real'), 'utf8'), '#!/bin/sh\nexit 0\n');
+  } finally { await s.stop(); }
+});
+
+test('a DIRECTORY is refused — an event dir is not a file to edit', async () => {
+  const s = await boot();
+  try {
+    const eventDir = path.join(hooksDir(s.dir), 'worker-done');
+    fs.mkdirSync(eventDir, { recursive: true });
+    await refused(s, uriOf(eventDir));
+    await refused(s, uriOf(hooksDir(s.dir)));
+    assert.ok(fs.statSync(eventDir).isDirectory(), 'still a directory');
+  } finally { await s.stop(); }
+});
+
+test('a THIRD level is refused — hooks/ is one level of events, not a tree', async () => {
+  const s = await boot();
+  try {
+    const deep = write(path.join(hooksDir(s.dir), 'worker-done', 'lib', 'helper.sh'), '#!/bin/sh\n');
+    await refused(s, uriOf(deep));
+    assert.strictEqual(fs.readFileSync(deep, 'utf8'), '#!/bin/sh\n');
+  } finally { await s.stop(); }
+});
+
+test('a card artifact, a playbook and a charter still read and write exactly as they did', async () => {
+  const s = await boot();
+  try {
+    const packaged = (await s.api('GET', '/api/playbooks')).body.items.find((p) => p.source === 'packaged');
+    assert.strictEqual((await get(s, uriOf(packaged.file))).status, 200, 'a packaged playbook still opens');
+    const charter = path.join(s.dir, 'lieutenants', 'ada', 'README.md');
+    assert.strictEqual((await get(s, uriOf(charter))).status, 200, 'a charter still opens');
+  } finally { await s.stop(); }
+});
