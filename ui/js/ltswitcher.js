@@ -146,8 +146,14 @@ function openLtMenu(ltId, x, y) {
   retire.textContent = '⚓ retire' + (owned ? ' (' + owned + ' card' + (owned > 1 ? 's' : '') + ' in the way)' : '');
   retire.onclick = async () => {
     closeMoveMenu();
-    if (!confirm('Retire ' + (l.name || ltId) + '? Its live session is killed and its queue removed.')) return;
-    try { await api.retireLieutenant(ltId); } catch (e) { alert(e.message); }
+    if (!confirm('Retire ' + (l.name || ltId) + '? Its live session is killed and its queue removed;'
+      + ' its memory file in the workspace is kept.')) return;
+    // A later lieutenant on this same id is launched on that charter — a choice
+    // the captain should make with the path in front of them, not a surprise.
+    try {
+      const r = await api.retireLieutenant(ltId);
+      if (r && r.memory) alert('Memory file kept: ' + r.memory + '\nA new lieutenant with id ' + ltId + ' would be launched on it.');
+    } catch (e) { alert(e.message); }
   };
   menuEl.appendChild(retire);
   menuEl.hidden = false;

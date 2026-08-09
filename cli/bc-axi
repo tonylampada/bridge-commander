@@ -1236,7 +1236,8 @@ if (!commands[cmd]) {
     '                                         launch prompt, ref persisted)\n' +
     '  lieutenant list [--json]               id, name, color, next card id, charter first line\n' +
     '                                         (the charter is lieutenants/<id>/README.md, the memory file\n' +
-    '                                         the agent is launched on — --charter-file writes it)\n' +
+    '                                         the agent is launched on — --charter-file creates it when\n' +
+    '                                         absent and never replaces one)\n' +
     '  lieutenant patch <id> [--avatar N|none] [--color #rrggbb] [--prefix ABC]\n' +
     '                                         lieutenant.update: cosmetics + the card-id prefix (refused\n' +
     '                                         when another lieutenant holds it) — name/id stay immutable\n' +
@@ -1359,7 +1360,8 @@ if (!commands[cmd]) {
     '\nconfig:\n' +
     '  config show | config voices "a,b"      TTS voice filter for the UI\n' +
     '\nText/body/charter always via --text-file/--body-file/--charter-file or stdin ("-"), never shell-interpolated.\n' +
-    'The charter is not board state: --charter-file writes lieutenants/<id>/README.md in the workspace.');
+    'The charter is not board state: --charter-file creates lieutenants/<id>/README.md in the workspace\n' +
+    'when it is absent, and never replaces one — edit the file to change a charter.');
   // The last line of the help screen is the one still on screen when an agent
   // stops reading: if the running server is behind its checkout, it says so
   // here. A down server, an unknown commit, or a match all print nothing extra.

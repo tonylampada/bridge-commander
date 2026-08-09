@@ -51,8 +51,9 @@ This is mechanical and safe to re-run: it creates `.bridge-commander/`, boots th
 detached, registers YOUR tmux session as the founding lieutenant, installs the turn-end hook
 (note: your own turn-end tracking activates on your next claude restart — hooks are captured
 at startup), scaffolds `AGENTS.md`, `captain.md`, `learnings/`, and prints the board URL.
-`--charter-file` writes `lieutenants/<your-id>/README.md` — your standing memory, and what a
-future session of yours is launched on.
+`--charter-file` CREATES `lieutenants/<your-id>/README.md` when it is absent — your standing
+memory, and what a future session of yours is launched on. It never replaces an existing one
+(a re-run says so and leaves it alone); edit the file to change your charter.
 Give the user that URL — the board is the captain's cockpit.
 
 ## 4. Load your operating knowledge, in this order
