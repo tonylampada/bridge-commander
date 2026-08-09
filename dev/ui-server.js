@@ -526,7 +526,7 @@ function createDevServer(opts) {
         const lt = {
           id, name, color: body.color || '#66788a',
           avatar: Number.isInteger(body.avatar) ? body.avatar : null,
-          charter: String(body.charter || ''), created: now(), chat: [], turns: 0,
+          created: now(), chat: [], turns: 0,
           ref: { harness: String(body.harness || 'claude'), session: 'bc-lt-' + id, cwd: '/fake/ws' },
         };
         board.lieutenants.push(lt);
@@ -539,7 +539,7 @@ function createDevServer(opts) {
         const lt = findLt(decodeURIComponent(m[1]));
         if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant' });
         const body = JSON.parse(await readBody(req) || '{}');
-        for (const k of ['name', 'color', 'charter']) if (typeof body[k] === 'string') lt[k] = body[k];
+        for (const k of ['name', 'color']) if (typeof body[k] === 'string') lt[k] = body[k];
         if (body.avatar === null || Number.isInteger(body.avatar)) lt.avatar = body.avatar;
         broadcast();
         return sendJson(res, 200, { ok: true, lieutenant: lt });

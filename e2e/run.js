@@ -106,7 +106,7 @@ async function step(name, fn) {
     });
 
     await step('lieutenant create (API + CLI)', async () => {
-      const r = await api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada', color: '#58b6ff', charter: 'own the port' });
+      const r = await api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada', color: '#58b6ff' });
       assert.strictEqual(r.status, 200);
       const cli = await runCli(['lieutenant', 'create', '--name', 'Grace'], wsArgs);
       assert.strictEqual(cli.code, 0, cli.stderr);

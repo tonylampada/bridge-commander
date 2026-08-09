@@ -246,7 +246,7 @@ test('worker-died hooks fire from the supervision loop', async () => {
       fs.mkdirSync(sd, { recursive: true });
       fs.writeFileSync(path.join(sd, 'board.json'), JSON.stringify({
         title: 'seeded', seq: 0, labels: [], reads: {}, kinds: {}, events: [],
-        lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso }],
+        lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso }],
         projects: [{ name: 'proj', path: path.join(root, 'proj'), added: nowIso }],
         cards: [{
           id: 'doomed', title: 'Doomed', type: 'implementation', owner: 'ada', column: 'working',

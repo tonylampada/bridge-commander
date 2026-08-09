@@ -6,8 +6,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { startServer, runCli } = require('./helper');
+const { charterPath, writeCharter } = require('../server/charter.js');
 
-test('lieutenant create: slug id, palette color, charter; duplicates conflict', async () => {
+test('lieutenant create: slug id, palette color; a charter sent by a client is ignored; duplicates conflict', async () => {
   const s = await startServer();
   try {
     let r = await s.api('POST', '/api/lieutenants', { name: 'Grace Hopper', charter: 'own the compiler domain' });
@@ -16,7 +17,9 @@ test('lieutenant create: slug id, palette color, charter; duplicates conflict', 
     assert.strictEqual(lt.id, 'grace-hopper'); // slugged from name
     assert.strictEqual(lt.name, 'Grace Hopper');
     assert.match(lt.color, /^#[0-9a-fA-F]{6}$/); // auto-assigned from the palette
-    assert.strictEqual(lt.charter, 'own the compiler domain');
+    // the charter is the lieutenant's memory file, never board state
+    assert.ok(!('charter' in lt), 'POST does not store a charter');
+    assert.ok(!fs.existsSync(charterPath(s.dir, 'grace-hopper')), 'and does not write one either');
     assert.deepStrictEqual(lt.chat, []);
 
     // explicit id and color
@@ -72,7 +75,7 @@ test('lieutenants persist with the board and survive a restart', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-test-'));
   const s1 = await startServer({ dir });
   try {
-    await s1.api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada', charter: 'ship the harness' });
+    await s1.api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada' });
   } finally {
     await s1.stop();
   }
@@ -81,7 +84,6 @@ test('lieutenants persist with the board and survive a restart', async () => {
     const list = (await s2.api('GET', '/api/lieutenants')).body.lieutenants;
     assert.strictEqual(list.length, 1);
     assert.strictEqual(list[0].id, 'ada');
-    assert.strictEqual(list[0].charter, 'ship the harness');
   } finally {
     await s2.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -117,7 +119,7 @@ test('harness ref: persisted with the lieutenant, survives restart, PATCH update
     assert.strictEqual(r.status, 200);
     lt = (await s2.api('GET', '/api/lieutenants')).body.lieutenants[0];
     assert.strictEqual(lt.ref, null);
-    assert.strictEqual(lt.charter, 'updated charter');
+    assert.ok(!('charter' in lt), 'PATCH ignores a charter sent by a client');
     assert.strictEqual((await s2.api('PATCH', '/api/lieutenants/nobody', {})).status, 404);
   } finally {
     await s2.stop();
@@ -253,7 +255,7 @@ test('cli: lieutenant create --avatar and lieutenant patch', async () => {
   }
 });
 
-test('cli: lieutenant create (charter via stdin file) and list', async () => {
+test('cli: lieutenant create writes the charter to the memory file, and list reads it back', async () => {
   const s = await startServer();
   const args = ['--workspace', s.dir, '--port', String(s.port)];
   try {
@@ -267,30 +269,51 @@ test('cli: lieutenant create (charter via stdin file) and list', async () => {
     assert.strictEqual(r.code, 0, r.stderr);
     assert.match(r.stdout, /ada\tAda\t#58b6ff\tADA-1\tOwn the API surface\./);
 
+    // --charter-file wrote the memory file, and the board record stayed clean
+    assert.strictEqual(fs.readFileSync(charterPath(s.dir, 'ada'), 'utf8'),
+      'Own the API surface.\nEscalate breaking changes.\n');
     r = await runCli(['lieutenant', 'list', '--json', ...args]);
     const parsed = JSON.parse(r.stdout);
-    assert.strictEqual(parsed[0].charter, 'Own the API surface.\nEscalate breaking changes.');
+    assert.ok(!('charter' in parsed[0]), 'the charter is not board state');
   } finally {
     await s.stop();
   }
 });
 
-// Everything about a lieutenant is configurable after birth — the settings modal
-// edits the charter through this same route, and the charter has to still be
-// there after a reload (board is truth, so: after a server restart).
-test('lieutenant patch: charter is editable after creation and survives a restart', async () => {
+// The charter used to be a board field. Boot moves what is left of it into the
+// lieutenant's memory file — but only where no file exists yet, because a second
+// boot must not overwrite what the lieutenant has since written for itself.
+test('boot migration: a leftover charter becomes the memory file, and the key is dropped', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-charter-'));
-  let s = await startServer({ dir });
+  const boardFile = path.join(dir, '.bridge-commander', 'board.json');
+  const seed = (d) => {
+    fs.mkdirSync(path.join(d, '.bridge-commander'), { recursive: true });
+    fs.writeFileSync(path.join(d, '.bridge-commander', 'board.json'), JSON.stringify({
+      lieutenants: [
+        { id: 'ada', name: 'Ada', color: '#58b6ff', charter: 'own the API surface', chat: [] },
+        { id: 'bo', name: 'Bo', color: '#2aa876', charter: 'stale — a file already says otherwise', chat: [] },
+      ],
+    }));
+    // Bo has already written its own memory: the migration must not touch it.
+    writeCharter(d, 'bo', 'what Bo actually wrote');
+  };
+  let s = await startServer({ dir, seed });
   try {
-    await s.api('POST', '/api/lieutenants', { name: 'Ada', id: 'ada', charter: 'first mission' });
-    let r = await s.api('PATCH', '/api/lieutenants/ada', { charter: 'own the API surface\nescalate breaking changes' });
-    assert.strictEqual(r.status, 200);
-    assert.strictEqual(r.body.lieutenant.charter, 'own the API surface\nescalate breaking changes');
+    assert.strictEqual(fs.readFileSync(charterPath(dir, 'ada'), 'utf8'), 'own the API surface\n');
+    assert.strictEqual(fs.readFileSync(charterPath(dir, 'bo'), 'utf8'), 'what Bo actually wrote\n');
+    const stored = JSON.parse(fs.readFileSync(boardFile, 'utf8'));
+    assert.ok(stored.lieutenants.every((l) => !('charter' in l)), 'the key is gone from board.json either way');
+    for (const lt of (await s.api('GET', '/api/lieutenants')).body.lieutenants) {
+      assert.ok(!('charter' in lt), 'and gone from the served record');
+    }
 
+    // A second boot changes nothing — not the files, not the board.
+    const before = fs.readFileSync(boardFile, 'utf8');
     await s.stop();
     s = await startServer({ dir });
-    const lt = (await s.api('GET', '/api/lieutenants')).body.lieutenants.find((l) => l.id === 'ada');
-    assert.strictEqual(lt.charter, 'own the API surface\nescalate breaking changes', 'the charter is board state, not a form value');
+    assert.strictEqual(fs.readFileSync(charterPath(dir, 'ada'), 'utf8'), 'own the API surface\n');
+    assert.strictEqual(fs.readFileSync(charterPath(dir, 'bo'), 'utf8'), 'what Bo actually wrote\n');
+    assert.strictEqual(fs.readFileSync(boardFile, 'utf8'), before, 'no rewrite on the second boot');
   } finally {
     await s.stop();
     fs.rmSync(dir, { recursive: true, force: true });
@@ -436,8 +459,8 @@ test('prefix + counter are backfilled for lieutenants that predate them, without
       fs.mkdirSync(path.join(d, '.bridge-commander'), { recursive: true });
       fs.writeFileSync(path.join(d, '.bridge-commander', 'board.json'), JSON.stringify({
         lieutenants: [
-          { id: 'monica', name: 'Monica', color: '#7c5cff', charter: '', chat: [] },
-          { id: 'monique', name: 'Monique', color: '#2aa876', charter: '', chat: [] },
+          { id: 'monica', name: 'Monica', color: '#7c5cff', chat: [] },
+          { id: 'monique', name: 'Monique', color: '#2aa876', chat: [] },
         ],
         cards: [{ id: 'pane-interactive', title: 'Old slug card', type: 'implementation',
           owner: 'monica', column: 'backlog', labels: [], attributes: {}, body: '',

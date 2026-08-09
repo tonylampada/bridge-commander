@@ -78,6 +78,7 @@ function git(dir, ...args) {
 }
 
 const { lieutenantSession, workspaceDisc } = require(path.join(__dirname, '..', 'server', 'names.js'));
+const { writeCharter } = require(path.join(__dirname, '..', 'server', 'charter.js'));
 
 const LT = 'hopper';
 const LT_SESSION = lieutenantSession(ws, LT); // workspace-discriminated
@@ -139,12 +140,10 @@ function dumpDiagnostics() {
 
     // ---------- a REAL lieutenant with a small mission charter ----------
     const t0 = Date.now();
-    const r = await api('POST', '/api/lieutenants', {
-      name: 'Hopper', id: LT, spawn: true, actor: 'user',
-      charter: 'Mission: deliver small changes to the registered project `proj` (local-only). '
-        + 'Be proactive inside this mission per your doctrine: create cards, start them, verify '
-        + 'worker results, and hand finished work to the captain\'s review.',
-    });
+    writeCharter(ws, LT, 'Mission: deliver small changes to the registered project `proj` (local-only). '
+      + 'Be proactive inside this mission per your doctrine: create cards, start them, verify '
+      + 'worker results, and hand finished work to the captain\'s review.');
+    const r = await api('POST', '/api/lieutenants', { name: 'Hopper', id: LT, spawn: true, actor: 'user' });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     assert.strictEqual(r.body.lieutenant.ref.session, LT_SESSION);
     console.log('  ✔ real lieutenant spawned (' + elapsed(t0) + ')');

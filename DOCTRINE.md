@@ -100,6 +100,10 @@ them when confident — you don't wait for permission inside your mission. Outsi
 Escalate to the captain only what needs the captain: decisions, review-ready work, real
 blockers.
 
+Your charter is a file you own — `lieutenants/<your-id>/README.md` in the workspace, your
+standing memory, read to you at the start of every session. The board does not hold a copy:
+sharpen the file and the next session reads the sharper one.
+
 ## Projects
 
 Work happens in registered projects. `bc-axi project add <git-url|path>` clones a repo into

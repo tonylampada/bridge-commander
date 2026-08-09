@@ -13,6 +13,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { startServer, sleep } = require('./helper');
 const { lieutenantSession } = require('../server/names.js');
+const { writeCharter } = require('../server/charter.js');
 
 function sendsFile(dir, session) { return path.join(dir, session + '.sends.jsonl'); }
 function readSends(dir, session) {
@@ -161,8 +162,10 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
   const s = await startServer({ env: { BC_FAKE_STATE: fdir } });
   try {
+    // The charter is the memory file, so it is on disk BEFORE the spawn reads it.
+    writeCharter(s.dir, 'spawn-bot', 'guard the gate');
     const r = await s.api('POST', '/api/lieutenants', {
-      name: 'Spawn Bot', charter: 'guard the gate', spawn: true, harness: 'fake', actor: 'user',
+      name: 'Spawn Bot', id: 'spawn-bot', spawn: true, harness: 'fake', actor: 'user',
     });
     assert.strictEqual(r.status, 200, JSON.stringify(r.body));
     const lt = r.body.lieutenant;
@@ -199,6 +202,19 @@ test('lieutenant.create with spawn: real harness.spawn in the workspace root, re
     const dup = await s.api('POST', '/api/lieutenants', { name: 'No Such', spawn: true, harness: 'nope' });
     assert.strictEqual(dup.status, 400);
     assert.strictEqual((await s.api('GET', '/api/lieutenants')).body.lieutenants.length, 1);
+
+    // No memory file: the prompt says so by its real path, so the lieutenant can
+    // write the thing it was launched without.
+    const bare = await s.api('POST', '/api/lieutenants', {
+      name: 'Bare Bot', id: 'bare-bot', spawn: true, harness: 'fake', actor: 'user',
+    });
+    assert.strictEqual(bare.status, 200, JSON.stringify(bare.body));
+    const bareRef = bare.body.lieutenant.ref;
+    const bareRec = JSON.parse(fs.readFileSync(
+      path.join(fdir, bareRef.session + ':' + bareRef.window + '.json'), 'utf8'));
+    const want = path.join(path.resolve(s.dir), 'lieutenants', 'bare-bot', 'README.md');
+    assert.ok(bareRec.prompt.includes('Your memory file at ' + want + ' does not exist yet; write it.'),
+      'the missing-charter line names the real path: ' + bareRec.prompt.slice(0, 400));
   } finally {
     await s.stop();
     fs.rmSync(fdir, { recursive: true, force: true });

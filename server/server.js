@@ -13,7 +13,8 @@
 // Data model (docs/api/overview.md is the DNA):
 //   board = { title, subtitle, updated, seq,
 //             columns: fixed frame (backlog | working | review | peer),
-//             lieutenants: [{id, name, color, prefix, cardSeq, avatar?: 0-63, voice?, charter, created,
+//             lieutenants: [{id, name, color, prefix, cardSeq, avatar?: 0-63, voice?, created,
+//                            — the charter is NOT here: it is lieutenants/<id>/README.md in the workspace,
 //                            chat: [{author,text,ts}]  — NOT stored: the newest CHAT_TAIL of chat/<id>.jsonl, served only,
 //                            ref: null|HarnessRef {harness, session, cwd, resumeId?},
 //                            lastTurnEnd?, turns?}],
@@ -67,6 +68,7 @@ const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAY
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
+const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
 const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
@@ -281,7 +283,6 @@ function normalizeBoard(doc) {
   b.kinds = sanitizeKinds(b.kinds);
   for (const lt of b.lieutenants) {
     if (!Array.isArray(lt.chat)) lt.chat = [];
-    if (typeof lt.charter !== 'string') lt.charter = '';
     // ref: a persisted HarnessRef or null (odd shapes collapse to null).
     if (lt.ref !== undefined && !isHarnessRef(lt.ref)) lt.ref = null;
   }
@@ -348,6 +349,23 @@ function saveBoard() {
   fs.writeFileSync(tmp, JSON.stringify(storedBoard(), null, 2));
   fs.renameSync(tmp, BOARD_FILE);
 }
+
+// One-time migration, at boot: the charter used to be a board field. Move what
+// is still there into the lieutenant's memory file and drop the key. The write
+// happens ONLY when no file exists yet — booting twice must not overwrite what
+// the lieutenant has since written into its own memory — but the key goes
+// either way, so this converges on the first boot and is a no-op on the second.
+(function migrateCharters() {
+  let moved = false;
+  for (const lt of board.lieutenants) {
+    if (!('charter' in lt)) continue;
+    const text = String(lt.charter || '').trim();
+    delete lt.charter;
+    moved = true;
+    if (text && !fs.existsSync(charterPath(WORKSPACE, lt.id))) writeCharter(WORKSPACE, lt.id, text);
+  }
+  if (moved) saveBoard();
+})();
 
 // ---------- events / kinds ----------
 // A kind is an open token. The server ships structural defaults only for the
@@ -535,7 +553,6 @@ function createLieutenant(body) {
   const color = validColor(body.color) || LT_PALETTE[board.lieutenants.length % LT_PALETTE.length];
   const lt = {
     id, name: name.slice(0, 60), color, prefix, cardSeq: 0,
-    charter: String(body.charter || '').slice(0, 8000),
     chat: [], created: now(),
   };
   if (validAvatar(body.avatar)) lt.avatar = body.avatar;
@@ -556,11 +573,13 @@ function doctrineText() {
   try { return fs.readFileSync(path.join(__dirname, '..', 'DOCTRINE.md'), 'utf8').trim(); }
   catch (e) { return ''; }
 }
-function lieutenantPrompt(name, id, charter) {
+function lieutenantPrompt(name, id) {
   const cli = path.join(__dirname, '..', 'cli', 'bc-axi');
+  const charter = readCharter(WORKSPACE, id);
   return [
     doctrineText(),
-    '## Your charter\n\n' + (String(charter || '').trim() || "(none yet — await the captain's orders)"),
+    '## Your charter\n\n' + (charter
+      || 'Your memory file at ' + charterPath(WORKSPACE, id) + ' does not exist yet; write it.'),
     'You are lieutenant "' + name + '" (id: ' + id + ') in workspace ' + WORKSPACE + '.\n'
       + 'The board server runs at http://127.0.0.1:' + PORT + '/. The board CLI is `bc-axi`'
       + ' (at ' + cli + ' if not on your PATH).\n'
@@ -574,7 +593,7 @@ function lieutenantPrompt(name, id, charter) {
 function respawnPrompt(lt) {
   const owned = board.cards.filter((c) => c.owner === lt.id);
   const digest = owned.map((c) => '- ' + c.id + ' [' + c.column + '] ' + c.title).join('\n');
-  return lieutenantPrompt(lt.name, lt.id, lt.charter) + '\n\n'
+  return lieutenantPrompt(lt.name, lt.id) + '\n\n'
     + '## Respawned without memory\n\n'
     + 'Your previous session is gone; the board is truth — reorient from it.\n'
     + 'Your cards (' + owned.length + '):\n' + (digest || '(none)') + '\n'
@@ -593,7 +612,7 @@ async function spawnLieutenant(body) {
   const session = names.lieutenantSession(WORKSPACE, id);
   let ref;
   try {
-    ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id, body.charter), {
+    ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id), {
       session,
       window: names.LIEUTENANT_WINDOW, // its own window in its own session — see names.js
       stateDir: HARNESS_STATE_DIR,
@@ -3217,7 +3236,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, event: r.event });
     }
-    if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/voice/charter/ref (init idempotency)
+    if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/voice/prefix/ref (init idempotency)
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
       if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
       const body = JSON.parse(await readBody(req) || '{}');
@@ -3252,7 +3271,6 @@ const server = http.createServer(async (req, res) => {
         else if (validAvatar(body.avatar)) lt.avatar = body.avatar;
         else return sendJson(res, 400, { error: 'avatar must be an integer 0-63 or null' });
       }
-      if (body.charter !== undefined) lt.charter = String(body.charter).slice(0, 8000);
       // "" / null clears the pick — the lieutenant is back to the board's voice.
       if (body.voice !== undefined) {
         const v = validVoice(body.voice);

@@ -324,7 +324,6 @@ const ltAvatarGrid = document.getElementById('lt-avatar-grid');
 let ltAvatarPick = null; // null = no avatar (the "none" cell), "none" allowed
 export function openNewLieutenant() {
   document.getElementById('lt-name').value = '';
-  document.getElementById('lt-charter').value = '';
   document.getElementById('lt-harness').value = 'claude';
   ltAvatarPick = null;
   ltAvatarGrid.innerHTML = avatarGridHtml(ltAvatarPick);
@@ -341,7 +340,7 @@ document.getElementById('lt-modal').onsubmit = async (e) => {
   const name = document.getElementById('lt-name').value.trim();
   if (!name) return;
   // This modal births a REAL lieutenant: the server spawns its agent
-  // session (doctrine + charter as launch prompt) and persists the ref. Slow
+  // session (doctrine + its memory file as launch prompt) and persists the ref. Slow
   // (up to a minute) — keep the modal up, button disabled, until it lands.
   const btn = document.getElementById('lt-create');
   const label = btn.textContent;
@@ -351,7 +350,6 @@ document.getElementById('lt-modal').onsubmit = async (e) => {
       name,
       avatar: ltAvatarPick,
       color: document.getElementById('lt-color').value,
-      charter: document.getElementById('lt-charter').value,
       harness: document.getElementById('lt-harness').value || 'claude',
       spawn: true,
     });

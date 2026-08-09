@@ -29,7 +29,7 @@ function seedBoardWithChat(dir, messages) {
   fs.mkdirSync(stateDir(dir), { recursive: true });
   fs.writeFileSync(path.join(stateDir(dir), 'board.json'), JSON.stringify({
     title: 'seeded', seq: 0,
-    lieutenants: [{ id: LT, name: 'Ada', color: '#58b6ff', prefix: 'ADA', cardSeq: 0, charter: '', chat: messages, created: '2026-01-01T00:00:00.000Z' }],
+    lieutenants: [{ id: LT, name: 'Ada', color: '#58b6ff', prefix: 'ADA', cardSeq: 0, chat: messages, created: '2026-01-01T00:00:00.000Z' }],
     cards: [], events: [], labels: [], reads: {}, kinds: {}, projects: [], workers: [], line: null,
   }, null, 2));
 }

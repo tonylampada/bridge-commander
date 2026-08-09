@@ -42,7 +42,7 @@ function stallSeed(cardId, ageMs) {
   const nowIso = new Date().toISOString();
   const oldIso = new Date(Date.now() - ageMs).toISOString();
   return {
-    lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso }],
+    lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso }],
     cards: [{
       id: cardId, title: 'Slow', type: 'implementation', owner: 'ada', column: 'working',
       labels: [], attributes: { repo: 'proj', session: 'bc-lt-ada:w-' + cardId }, body: '',

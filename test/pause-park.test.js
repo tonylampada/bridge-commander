@@ -298,7 +298,7 @@ test('card park with an ABSENT worker (no registry entry) parks too', async () =
   const s = await startServer({
     env: { BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
-      lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso }],
+      lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso }],
       cards: [{
         id: 'ghosted', title: 'Ghosted', type: 'implementation', owner: 'ada', column: 'working',
         labels: [], attributes: { repo: 'proj' }, body: '',

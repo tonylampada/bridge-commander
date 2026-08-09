@@ -260,8 +260,8 @@
 <div id="playbook-menu" hidden></div>
 
 <!-- lieutenant settings modal (switcher ⋯ → settings): everything about a
-     lieutenant. Color, avatar and voice commit on pick; the charter is prose, so
-     it is saved deliberately with the button. -->
+     lieutenant the BOARD owns. Every field commits on pick. The charter is not
+     here — it is the lieutenant's memory file in the workspace. -->
 <div id="ls-overlay" hidden>
   <form id="ls-modal">
     <div class="nc-title">Settings — <span id="ls-who"></span></div>
@@ -272,10 +272,8 @@
       <select id="ls-voice" title="the voice this lieutenant speaks with"></select>
     </div>
     <div id="ls-grid"></div>
-    <textarea id="ls-charter" placeholder="charter — the standing mission (markdown)" rows="6"></textarea>
     <div class="nc-actions">
       <button type="button" id="ls-cancel">close</button>
-      <button type="submit" id="ls-save">save charter</button>
     </div>
   </form>
 </div>
@@ -315,7 +313,6 @@
       </select>
     </div>
     <div id="lt-avatar-grid"></div>
-    <textarea id="lt-charter" placeholder="charter — the standing mission (markdown, optional)" rows="5"></textarea>
     <div class="nc-actions">
       <button type="button" id="lt-cancel">cancel</button>
       <button type="submit" id="lt-create">create</button>

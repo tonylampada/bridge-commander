@@ -11,7 +11,7 @@
 //   2. captain message via API -> the wake line actually lands in the founder's
 //      pane (assert via capture-pane); wakes coalesce while pending-and-nudged.
 //   3. simulated drain/ack via bc-axi.
-//   4. a second lieutenant is spawned via the API with a trivial charter — a
+//   4. a second lieutenant is spawned via the API with a trivial charter file — a
 //      REAL claude session (needs `claude` on PATH, authenticated): it comes up,
 //      its turn-ends flow through the workspace hook, and it drains/acks the
 //      captain's ping. Everything is cleaned up, including the claude session.
@@ -25,6 +25,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const CLI = path.join(__dirname, '..', 'cli', 'bc-axi');
+const { writeCharter } = require(path.join(__dirname, '..', 'server', 'charter.js'));
 
 function freePort() {
   return new Promise((resolve, reject) => {
@@ -198,10 +199,9 @@ const SCOUT = require(path.join(__dirname, '..', 'server', 'names.js')).lieutena
     });
 
     await stepCase('lieutenant.create spawns a REAL claude session that comes up and drains', async () => {
-      const r = await api('POST', '/api/lieutenants', {
-        name: 'Scout', id: 'scout', spawn: true, actor: 'user',
-        charter: 'Test lieutenant. Follow the drain/ack discipline exactly; do nothing beyond what captain messages ask.',
-      });
+      writeCharter(ws, 'scout',
+        'Test lieutenant. Follow the drain/ack discipline exactly; do nothing beyond what captain messages ask.');
+      const r = await api('POST', '/api/lieutenants', { name: 'Scout', id: 'scout', spawn: true, actor: 'user' });
       assert.strictEqual(r.status, 200, JSON.stringify(r.body));
       assert.strictEqual(r.body.lieutenant.ref.harness, 'claude');
       assert.strictEqual(r.body.lieutenant.ref.session, SCOUT);

@@ -244,7 +244,7 @@ test('hand-edited board json (kindless events, foreign columns) loads and serves
       fs.mkdirSync(stateDir, { recursive: true });
       fs.writeFileSync(path.join(stateDir, 'board.json'), JSON.stringify({
         title: 'legacy', seq: 3,
-        lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [] }],
+        lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', chat: [] }],
         cards: [{
           id: 'old-card', title: 'Old card', column: 'todo', owner: 'ada',
           events: [

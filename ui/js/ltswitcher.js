@@ -73,7 +73,7 @@ function rowHtml(l) {
     : '<span class="lt-dot" style="background:' + esc(lieutenantColor(l.id)) + '"></span>';
   return '<div class="lts-row' + (cur ? ' on' : '') + '" data-id="' + esc(l.id) + '" role="option"' +
     (cur ? ' aria-selected="true"' : '') +
-    (l.charter ? ' title="' + esc(l.charter.split('\n')[0].slice(0, 160)) + '"' : '') + '>' +
+    '>' +
     face +
     '<span class="lts-main">' +
     '<span class="lts-name">' + esc(l.name || l.id) + ind +
@@ -157,19 +157,16 @@ function openLtMenu(ltId, x, y) {
 }
 
 // ---------- lieutenant settings modal (⋯ → settings) ----------
-// Everything about a lieutenant lives here. Color, avatar and voice are picks —
-// each PATCHes immediately, exactly as the old appearance popover did (mirrors
-// the label manager's recolor-on-change). The charter is prose, so it is saved
-// deliberately with the button; nothing about it goes over the wire per
-// keystroke. A modal, not a popover: a charter needs the room.
+// Everything the BOARD owns about a lieutenant lives here. Color, avatar, voice
+// and prefix are picks — each PATCHes immediately, exactly as the old appearance
+// popover did (mirrors the label manager's recolor-on-change). The charter is
+// not board state: it is the lieutenant's memory file in the workspace.
 const lsEl = document.getElementById('ls-overlay');
 const lsWho = document.getElementById('ls-who');
 const lsColor = document.getElementById('ls-color');
 const lsPrefix = document.getElementById('ls-prefix');
 const lsVoice = document.getElementById('ls-voice');
 const lsGrid = document.getElementById('ls-grid');
-const lsCharter = document.getElementById('ls-charter');
-const lsSave = document.getElementById('ls-save');
 let lsLtId = null;
 function openLtSettings(ltId) {
   const l = lieutenant(ltId);
@@ -178,12 +175,11 @@ function openLtSettings(ltId) {
   lsWho.textContent = l.name || ltId;
   lsColor.value = lieutenantColor(ltId);
   lsPrefix.value = l.prefix || '';
-  lsCharter.value = l.charter || '';
   lsGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
   wireAvatarGrid(lsGrid, (idx) => patch({ avatar: idx }));
   fillVoices(l.voice || '');
   lsEl.hidden = false;
-  lsCharter.focus();
+  lsPrefix.focus();
 }
 export function closeLtSettings() { lsLtId = null; lsEl.hidden = true; }
 export function ltSettingsOpen() { return !lsEl.hidden; }
@@ -221,17 +217,11 @@ lsPrefix.onchange = async () => {
   if (!(await patch({ prefix: want }))) lsPrefix.value = l.prefix || '';
   else lsPrefix.value = want;
 };
-// Enter in a one-line field would submit the form (= save the charter and
-// close). Here it means "commit this prefix" and nothing else.
+// Enter in a one-line field would submit the form (= close). Here it means
+// "commit this prefix" and nothing else.
 lsPrefix.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); lsPrefix.blur(); } };
 lsVoice.onchange = () => patch({ voice: lsVoice.value });
 document.getElementById('ls-cancel').onclick = closeLtSettings;
 lsEl.onclick = (e) => { if (e.target === lsEl) closeLtSettings(); };
-document.getElementById('ls-modal').onsubmit = async (e) => {
-  e.preventDefault();
-  const label = lsSave.textContent;
-  lsSave.disabled = true; lsSave.textContent = 'saving…';
-  const ok = await patch({ charter: lsCharter.value });
-  lsSave.disabled = false; lsSave.textContent = label;
-  if (ok) closeLtSettings();
-};
+// Nothing is buffered — every field has already committed — so submit just closes.
+document.getElementById('ls-modal').onsubmit = (e) => { e.preventDefault(); closeLtSettings(); };

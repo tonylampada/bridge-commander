@@ -12,6 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { startServer, sleep } = require('./helper');
+const { writeCharter } = require('../server/charter.js');
 
 const TICK = '150';
 function fakeSession(dir, session) {
@@ -47,7 +48,7 @@ test('dead lieutenant is respawned: ref updated, level-1 respawned event, drain 
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
       lieutenants: [{
-        id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: new Date().toISOString(),
+        id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: new Date().toISOString(),
         ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-old' },
       }],
     }),
@@ -88,8 +89,7 @@ test('non-resumable respawn relaunches with charter + owned cards + pending queu
     seed: (dir) => {
       seedBoard(dir, {
         lieutenants: [{
-          id: 'ada', name: 'Ada', color: '#58b6ff', charter: 'guard the port domain',
-          chat: [], created: nowIso,
+          id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso,
           ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-lost' },
         }],
         cards: [{
@@ -102,6 +102,8 @@ test('non-resumable respawn relaunches with charter + owned cards + pending queu
           threadStart: null, pendingOrder: null, events: [], thread: [],
         }],
       });
+      // the charter the respawn prompt has to carry is the memory file
+      writeCharter(dir, 'ada', 'guard the port domain');
       const qdir = path.join(dir, '.bridge-commander', 'queue');
       fs.mkdirSync(qdir, { recursive: true });
       fs.writeFileSync(path.join(qdir, 'ada.jsonl'),
@@ -114,7 +116,7 @@ test('non-resumable respawn relaunches with charter + owned cards + pending queu
       return b.events.some((e) => e.kind === 'respawned');
     });
     const rec = JSON.parse(fs.readFileSync(path.join(fdir, 'bc-lt-ada:lt.json'), 'utf8'));
-    assert.match(rec.prompt, /guard the port domain/, 'charter carried');
+    assert.match(rec.prompt, /guard the port domain/, 'charter carried — read from lieutenants/ada/README.md');
     assert.match(rec.prompt, /Your cards \(2\)/);
     assert.match(rec.prompt, /- fix-1 \[backlog\] Fix one/);
     assert.match(rec.prompt, /- probe-2 \[review\] Probe two/);
@@ -135,7 +137,7 @@ test('3 failed respawn attempts flag needs-captain (level 1), then stop retrying
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
       lieutenants: [{
-        id: 'ghost', name: 'Ghost', color: '#58b6ff', charter: '', chat: [], created: new Date().toISOString(),
+        id: 'ghost', name: 'Ghost', color: '#58b6ff', chat: [], created: new Date().toISOString(),
         // an unregistered harness: alive and resume both throw -> every attempt fails
         ref: { harness: 'no-such-harness', session: 'bc-lt-ghost', cwd: '/tmp', resumeId: 'x' },
       }],
@@ -168,7 +170,7 @@ test('wake heartbeat: a live lieutenant with pending items is woken by the sweep
     seed: (dir) => {
       seedBoard(dir, {
         lieutenants: [{
-          id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+          id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso,
           ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-ada' },
         }],
       });
@@ -215,7 +217,7 @@ test('wake heartbeat: a stale nudge lapses after BC_WAKE_TTL_MS and the sweep re
     seed: (dir) => {
       seedBoard(dir, {
         lieutenants: [{
-          id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+          id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso,
           ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-ada' },
         }],
       });
@@ -248,7 +250,7 @@ test('dead worker without done: worker-died QueueItem + card event, card stays W
   const s = await startServer({
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
-      lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso }],
+      lieutenants: [{ id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso }],
       cards: [{
         id: 'doomed', title: 'Doomed', type: 'implementation', owner: 'ada', column: 'working',
         labels: [], attributes: { repo: 'proj', session: 'bc-lt-ada:w-doomed' }, body: '',
@@ -312,7 +314,7 @@ test('reviving a lieutenant kills only its own window: sibling worker windows su
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
       lieutenants: [{
-        id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+        id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso,
         // registered BEFORE lieutenant refs carried a window (a founder, an
         // older board): the sweep migrates it in place
         ref: { harness: 'fake', session: 'bc-lt-ada', cwd: '/tmp', resumeId: 'uuid-gone' },
@@ -357,7 +359,7 @@ test('a dead lieutenant reads dead even while a sibling worker window is alive',
     env: { BC_FAKE_STATE: fdir, BC_SUPERVISE_INTERVAL_MS: TICK, BC_PRWATCH_INTERVAL_MS: '0' },
     seed: (dir) => seedBoard(dir, {
       lieutenants: [{
-        id: 'ada', name: 'Ada', color: '#58b6ff', charter: '', chat: [], created: nowIso,
+        id: 'ada', name: 'Ada', color: '#58b6ff', chat: [], created: nowIso,
         // already window-granular, and its window is NOT up
         ref: { harness: 'fake', session: 'bc-lt-ada', window: 'lt', cwd: '/tmp', resumeId: 'uuid-gone' },
       }],
