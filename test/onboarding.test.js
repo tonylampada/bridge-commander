@@ -1,0 +1,154 @@
+'use strict';
+// `bc-axi init --onboard` end to end: an empty folder becomes a board with
+// Bridget on it, already talking — and running it a second time resumes that
+// first run instead of starting it over.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { startServerWithLieutenant, runCli, freePort } = require('./helper');
+
+// HOME is redirected so the run cannot touch the developer's own ~/.claude
+// (the worker-duties skill symlink) or read their real git identity — which
+// also puts the git-identity warning path under test for free.
+function onboardEnv(home) {
+  return {
+    HOME: home,
+    GIT_CONFIG_GLOBAL: path.join(home, 'gitconfig-none'),
+    GIT_CONFIG_SYSTEM: '/dev/null',
+  };
+}
+
+test('onboarding state is board state: set, read, validated, and shipped with the board', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    assert.deepStrictEqual((await s.api('GET', '/api/onboarding')).body, { onboarding: null });
+
+    let r = await s.api('POST', '/api/onboarding', { step: 'board-up', gitIdentity: false });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.onboarding.step, 'board-up');
+
+    r = await s.api('POST', '/api/onboarding', { step: 'project' });
+    assert.strictEqual(r.body.onboarding.step, 'project');
+    assert.strictEqual(r.body.onboarding.gitIdentity, false, 'a step change keeps what was recorded');
+
+    r = await s.api('POST', '/api/onboarding', { step: 'halfway' });
+    assert.strictEqual(r.status, 400, 'an unknown step is refused, not silently stored');
+
+    // The board can see it — that is the whole point of it not being a local file.
+    const board = await s.api('GET', '/api/board');
+    assert.strictEqual(board.body.onboarding.step, 'project');
+  } finally { await s.stop(); }
+});
+
+test('init --onboard leaves a board with Bridget on it, and a re-run resumes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
+  const port = await freePort();
+  const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
+  try {
+    let r = await runCli(args, onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, new RegExp('board: http://localhost:' + port + '/'));
+    // git identity is a WARNING, never a wall: the board came up without one.
+    assert.match(r.stderr, /git has no identity here/);
+
+    const api = async (p) => (await fetch('http://127.0.0.1:' + port + p)).json();
+
+    // …a chartered lieutenant, spawned…
+    const { lieutenants } = await api('/api/board');
+    assert.strictEqual(lieutenants.length, 1);
+    const bridget = lieutenants[0];
+    assert.strictEqual(bridget.id, 'bridget');
+    assert.strictEqual(bridget.prefix, 'BRI');
+    assert.ok(bridget.ref && bridget.ref.session, 'her session was started');
+    const charter = fs.readFileSync(path.join(dir, 'lieutenants', 'bridget', 'README.md'), 'utf8');
+    assert.match(charter, /onboarding lieutenant/i);
+    assert.match(charter, /bc-axi onboarding/, 'her charter tells her where the first-run state is');
+
+    // …with a message already waiting, before anyone has said anything.
+    assert.strictEqual(bridget.chat.length, 1);
+    assert.strictEqual(bridget.chat[0].author, 'Bridget');
+    assert.match(bridget.chat[0].text, /Welcome aboard/);
+
+    // …and first-run state the board can see.
+    assert.strictEqual((await api('/api/onboarding')).onboarding.step, 'board-up');
+    assert.strictEqual((await api('/api/onboarding')).onboarding.gitIdentity, false);
+
+    // A re-run is a resume: no second welcome, no second charter, no spawning
+    // over a live session, and the step it had reached is kept.
+    r = await runCli(['onboarding', 'set', 'tools', '--workspace', dir, '--port', String(port)]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    r = await runCli(args, onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /charter left alone/);
+    assert.match(r.stdout, /welcome message already on the board/);
+    assert.match(r.stdout, /session is already live/);
+    assert.match(r.stdout, /resuming, not restarting/);
+
+    const after = (await api('/api/board')).lieutenants[0];
+    assert.strictEqual(after.chat.length, 1, 'the welcome is seeded exactly once');
+    assert.strictEqual((await api('/api/onboarding')).onboarding.step, 'tools');
+
+    r = await runCli(['onboarding', '--workspace', dir, '--port', String(port), '--json']);
+    assert.strictEqual(JSON.parse(r.stdout).step, 'tools');
+  } finally {
+    await runCli(['stop', '--workspace', dir, '--port', String(port)]);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('init --onboard continues an existing workspace instead of refusing it', async () => {
+  // The re-entry case, and the reason the workspace check comes first: this
+  // folder is now full of the scaffolding a code-project test would trip on.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
+  const port = await freePort();
+  const args = ['init', '--onboard', '--workspace', dir, '--port', String(port), '--harness', 'fake'];
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), '{}'); // a repo would be refused…
+    let r = await runCli(args, onboardEnv(home));
+    assert.strictEqual(r.code, 1);
+    assert.match(r.stderr, /first run refused \(project\)/);
+
+    // …until the person says this folder is the workspace.
+    r = await runCli(args.concat('--here'), onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+
+    // From here on the workspace answer wins on its own — no --here needed.
+    r = await runCli(args, onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+    assert.match(r.stdout, /welcome message already on the board/);
+  } finally {
+    await runCli(['stop', '--workspace', dir, '--port', String(port)]);
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('init --onboard walks forward off a port somebody else is holding', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-onboard-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-'));
+  const taken = await freePort();
+  const squatter = require('node:net').createServer();
+  await new Promise((r) => squatter.listen(taken, '127.0.0.1', r));
+  try {
+    const r = await runCli(
+      ['init', '--onboard', '--workspace', dir, '--port', String(taken), '--harness', 'fake'],
+      onboardEnv(home));
+    assert.strictEqual(r.code, 0, r.stderr + r.stdout);
+    assert.match(r.stderr, new RegExp('port ' + taken + ' was taken'));
+    const used = JSON.parse(fs.readFileSync(path.join(dir, '.bridge-commander', 'config.json'), 'utf8')).port;
+    assert.ok(used > taken, 'it moved forward and wrote the port it landed on');
+    // …and wrote it down, so every later bc-axi call in this workspace finds it.
+    const st = await runCli(['status', '--workspace', dir]);
+    assert.match(st.stdout, /server: up/);
+    await runCli(['stop', '--workspace', dir]);
+  } finally {
+    squatter.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});

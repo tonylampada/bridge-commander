@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Verify the README install procedure end-to-end in a pristine Docker container.
+# Verify the README install + FIRST-RUN procedure end-to-end in a pristine Docker container:
+# a stranger's machine, nothing installed that the instructions do not name.
 #
 #   test/install/docker-install-test.sh          install test only; PASS/FAIL; container removed
 #   test/install/docker-install-test.sh --demo   also populate a demo board (fixture for the
@@ -18,6 +19,10 @@ DEMO=0
 CONTAINER=bc-install-test
 IMAGE=node:22-bookworm
 PORT=4790
+# The checkout the container clones. Defaults to the published main; point them at a
+# branch to test a first run BEFORE it merges — which is the only way to test one.
+REPO_URL=${BC_REPO_URL:-https://github.com/tonylampada/bridge-commander.git}
+REF=${BC_REF:-main}
 
 docker rm -f $CONTAINER >/dev/null 2>&1
 docker run -d --name $CONTAINER --network host $IMAGE sleep infinity >/dev/null
@@ -25,47 +30,87 @@ docker run -d --name $CONTAINER --network host $IMAGE sleep infinity >/dev/null
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 
-# ---------------------------------------------------------------- phase 1: install per README
-cat > "$TMP/phase-install.sh" <<'PHASE1'
+# ---------------------------------------------------------------- phase 1: the first run, per README
+# This is the stranger test: a bare image, and NOTHING is installed that the README and
+# FIRST-RUN.md do not say to install. Every step here mirrors what the user's own agent
+# does on a first `/bridge-commander` — including hitting the tmux-missing block before
+# tmux exists, which is exactly what a fresh machine gives you.
+cat > "$TMP/phase-install.sh" <<PHASE1
 #!/bin/bash
 set -uxo pipefail
 export HOME=/root
+export BC_REPO_URL="$REPO_URL" BC_REF="$REF"
 cd /root
+PHASE1
+cat >> "$TMP/phase-install.sh" <<'PHASE1'
 
-echo "=== prerequisites (README Dependencies: Node >= 18, tmux, git) ==="
-apt-get update -qq >/dev/null && apt-get install -y -qq tmux >/dev/null 2>&1
-node --version && git --version && tmux -V || exit 1
-
-echo "=== README Install: treehouse ==="
-curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh || exit 1
-export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
-command -v treehouse || exit 1
-
-echo "=== README Install: no-mistakes ==="
-curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh || exit 1
-command -v no-mistakes || exit 1
-
-echo "=== README Install: npx skills add ==="
+echo "=== README Install: one skill, nothing else ==="
 npx -y skills add tonylampada/bridge-commander -g -y || exit 1
 test -f ~/.agents/skills/bridge-commander/SKILL.md || exit 1
 
 echo "=== SKILL.md step 0: self-bootstrap (what the agent does on first /bridge-commander) ==="
 if [ ! -x ~/.agents/skills/bridge-commander/cli/bc-axi ]; then
-  git clone --quiet https://github.com/tonylampada/bridge-commander.git ~/.local/share/bridge-commander || exit 1
+  git clone --quiet --branch "$BC_REF" "$BC_REPO_URL" ~/.local/share/bridge-commander || exit 1
 fi
-test -x ~/.local/share/bridge-commander/cli/bc-axi || exit 1
-
-echo "=== teleport: bc-axi init inside tmux ==="
-git config --global user.email demo@example.com
-git config --global user.name "Demo User"
-git config --global init.defaultBranch main
 BC=/root/.local/share/bridge-commander/cli/bc-axi
-mkdir -p /root/myfleet
-tmux new-session -d -s myfleet "cd /root/myfleet && $BC init --name Dax --id dax --port 4790 > /root/init.log 2>&1; sleep infinity"
-for i in $(seq 1 30); do grep -q "http://" /root/init.log 2>/dev/null && break; sleep 1; done
+test -x $BC || exit 1
+test -f /root/.local/share/bridge-commander/FIRST-RUN.md || exit 1
+
+echo "=== FIRST-RUN.md: a code project is refused, naming what it found ==="
+mkdir -p /root/somerepo && cd /root/somerepo && git init -q && echo '{}' > package.json && mkdir -p src
+$BC init --onboard > /root/refuse.log 2>&1
+test $? -eq 1 || { echo "a code project was NOT refused"; exit 1; }
+cat /root/refuse.log
+grep -q "first run refused (project)" /root/refuse.log || exit 1
+grep -q "package.json" /root/refuse.log || exit 1
+grep -q "src/" /root/refuse.log || exit 1
+test -d /root/somerepo/.bridge-commander && { echo "it wrote state into a refused dir"; exit 1; }
+
+echo "=== FIRST-RUN.md: no tmux yet -> blocked, with an install command and NO tmux command ==="
+mkdir -p /root/myfleet && cd /root/myfleet
+$BC init --onboard --port 4790 > /root/notmux.log 2>&1
+test $? -eq 1 || { echo "a machine without tmux was NOT blocked"; exit 1; }
+cat /root/notmux.log
+grep -q "first run blocked (tmux-missing)" /root/notmux.log || exit 1
+grep -q "apt-get install -y tmux" /root/notmux.log || exit 1
+grep -qE "tmux (new|attach|new-session)" /root/notmux.log && { echo "it asked someone to type a tmux command"; exit 1; }
+
+echo "=== what the agent does after asking: install tmux, run the same command again ==="
+apt-get update -qq >/dev/null && apt-get install -y -qq tmux >/dev/null 2>&1
+tmux -V || exit 1
+
+echo "=== the first run itself (no authenticated claude in here — the board must come up anyway) ==="
+cd /root/myfleet
+$BC init --onboard --port 4790 > /root/init.log 2>&1
 cat /root/init.log
-grep -q "founding lieutenant" /root/init.log || exit 1
+grep -q "board: http://localhost:4790/" /root/init.log || exit 1
 curl -sf http://127.0.0.1:4790/api/status | grep -q '"workspace":"/root/myfleet"' || exit 1
+
+echo "=== Bridget: registered, chartered, and already talking ==="
+test -s /root/myfleet/lieutenants/bridget/README.md || exit 1
+curl -sf http://127.0.0.1:4790/api/board > /root/board.json
+grep -q '"id":"bridget"' /root/board.json || exit 1
+grep -q "Welcome aboard" /root/board.json || exit 1
+curl -sf http://127.0.0.1:4790/api/onboarding | grep -q '"step":"board-up"' || exit 1
+
+echo "=== the git-identity warning is a warning, not a wall ==="
+grep -q "git has no identity here" /root/init.log || exit 1
+
+echo "=== twice in a row: a re-run resumes, it does not restart ==="
+$BC init --onboard --port 4790 > /root/init2.log 2>&1
+cat /root/init2.log
+grep -q "charter left alone" /root/init2.log || exit 1
+grep -q "welcome message already on the board" /root/init2.log || exit 1
+grep -q "resuming, not restarting" /root/init2.log || exit 1
+test "$(grep -c 'Welcome aboard' /root/board.json)" = "1" || exit 1
+
+echo "=== the tools the README no longer asks for, installed the way Bridget would ==="
+export PATH="$HOME/.local/bin:$HOME/bin:$PATH"
+curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh || exit 1
+command -v treehouse || exit 1
+curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh || exit 1
+command -v no-mistakes || exit 1
+
 echo INSTALL_TEST_PASS
 PHASE1
 
@@ -87,6 +132,12 @@ exec sleep infinity
 SHIM
 chmod +x /usr/local/bin/claude
 
+# The git identity the demo commits need. The first run only WARNED about it missing —
+# it is not a precondition for a board, only for a commit.
+git config --global user.email demo@example.com
+git config --global user.name "Demo User"
+git config --global init.defaultBranch main
+
 for p in nimbus-web nimbus-api; do
   mkdir -p /root/src/$p && cd /root/src/$p
   git init -q
@@ -95,8 +146,11 @@ for p in nimbus-web nimbus-api; do
 done
 cd /root/myfleet
 
-$BC project add /root/src/nimbus-web --mode direct-PR
-$BC project add /root/src/nimbus-api --mode local-only
+$BC project add /root/src/nimbus-web
+$BC project add /root/src/nimbus-api
+# Phase 1 leaves Bridget (the onboarding lieutenant) on the board; these two own the
+# demo cards.
+$BC lieutenant create --name Dax --id dax
 $BC lieutenant create --name Kira --id kira
 
 # The demo board is READ, so its cards carry readable ids — and the CLI no

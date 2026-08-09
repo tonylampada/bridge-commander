@@ -18,24 +18,26 @@ kanban board.
 
 ## Install
 
-Just some dependencies and a new skill:
+One skill:
 
 ```sh
-# dependencies
-curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh
-curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh
-
-# bridge-commander
-npx skills add tonylampada/bridge-commander -g -y   # first /bridge-commander run clones the full tool
+npx skills add tonylampada/bridge-commander -g -y
 ```
 
-## Quickstart
+That is the whole install. The rest happens in the terminal you already have.
 
-- Create an empty folder (e.g. `myfleet`)
-- Start `claude` in that folder, **inside tmux** (not optional — the lieutenant lives in the tmux session)
+## Start
+
+- Make an empty folder (e.g. `myfleet`) and start `claude` in it
 - `/bridge-commander`
-- Open the printed board URL (default `http://localhost:4780/`)
-- Talk to your lieutenant from there — he'll guide you through the rest of the setup
+- Open the board URL it prints (default `http://localhost:4780/`)
+
+**Bridget** is already there with a message waiting. She's your first lieutenant, and she does the
+rest of the setup with you — the two optional tools, your first repo, and a short checklist that
+runs as real cards on the board.
+
+You need `tmux` and `git` on the machine (your agent will offer to install `tmux` if it is
+missing). You never have to use tmux yourself.
 
 ## Board views
 

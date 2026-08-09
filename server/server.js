@@ -72,6 +72,7 @@ const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
+const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
 const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
@@ -650,7 +651,16 @@ async function spawnLieutenant(body) {
   if (!name) return { error: 'name required' };
   const id = body.id ? String(body.id) : lieutenantIdFrom(name);
   if (!/^[\w][\w.-]*$/.test(id)) return { error: 'bad lieutenant id (use [A-Za-z0-9_.-])' };
-  if (findLieutenant(id)) return { error: 'lieutenant exists: ' + id, code: 409 };
+  // revive:true is what makes `bc-axi init --onboard` re-runnable: the founding
+  // lieutenant already exists, and the question is only whether her session is
+  // still up. A live one is left strictly alone (spawning over a live session
+  // is how you lose a conversation); a dead or never-spawned one gets a new
+  // session on the same record, charter and chat history included.
+  const existing = findLieutenant(id);
+  if (existing && !body.revive) return { error: 'lieutenant exists: ' + id, code: 409 };
+  if (existing && (await sessionState(existing)) === 'live') {
+    return { lieutenant: existing, spawned: false };
+  }
   const harnessName = String(body.harness || readConfig().harness || 'claude');
   let impl;
   try { impl = getHarness(harnessName); } catch (e) { return { error: String(e.message || e) }; }
@@ -667,7 +677,11 @@ async function spawnLieutenant(body) {
   } catch (e) {
     return { error: 'spawn failed: ' + String((e && e.message) || e), code: 502 };
   }
-  return createLieutenant(Object.assign({}, body, { id, ref }));
+  if (existing) {
+    existing.ref = ref;
+    return { lieutenant: existing, spawned: true };
+  }
+  return Object.assign({ spawned: true }, createLieutenant(Object.assign({}, body, { id, ref })));
 }
 
 // lieutenant.retire — explicit only (the DNA). Refuses while the lieutenant
@@ -3273,6 +3287,25 @@ const server = http.createServer(async (req, res) => {
         sysload: sysload.stats(), // the monitoring refcount probe: {subscribers, sampling}
       });
     }
+    // ----- first-run state (the onboarding conversation's memory) -----
+    // Onboarding is a conversation, and a conversation that restarts from the
+    // top on every server bounce is a conversation nobody finishes. The step
+    // lives on the board (so it survives the session that is having it, and the
+    // UI ships with it in GET /api/board) and Bridget reads it as her first act.
+    if (route === 'GET /api/onboarding') return sendJson(res, 200, { onboarding: board.onboarding || null });
+    if (route === 'POST /api/onboarding') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const cur = board.onboarding || { started: now() };
+      const step = body.step === undefined ? cur.step : String(body.step || '');
+      if (step && !ONBOARDING_STEPS.includes(step)) {
+        return sendJson(res, 400, { error: 'unknown step: ' + step + ' (want ' + ONBOARDING_STEPS.join(' | ') + ')' });
+      }
+      const next = Object.assign({}, cur, body, { step, updated: now() });
+      delete next.actor;
+      board.onboarding = next;
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, onboarding: board.onboarding });
+    }
     if (route === 'GET /api/archive') {
       // Paginated read over the append-only log, newest first: a limit+offset
       // window plus the total, so the UI's 🧊 archived mode can page-in ("load
@@ -3603,7 +3636,9 @@ const server = http.createServer(async (req, res) => {
       const r = body.spawn ? await spawnLieutenant(body) : createLieutenant(body);
       if (r.error) return sendJson(res, r.code || 400, { error: r.error });
       saveBoard(); broadcast();
-      return sendJson(res, 200, { ok: true, lieutenant: r.lieutenant });
+      // `spawned` is how a re-run of `init --onboard` tells "I revived her" from
+      // "she was already up" — the second is not worth a line of anyone's output.
+      return sendJson(res, 200, { ok: true, lieutenant: r.lieutenant, spawned: r.spawned });
     }
     const ltRoute = /^\/api\/lieutenants\/([^/]+)$/.exec(p);
     if (ltRoute && req.method === 'DELETE') { // lieutenant.retire — explicit only

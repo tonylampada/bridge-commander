@@ -60,6 +60,7 @@ const opts = {
   playbook: null, briefFile: null, resume: false, outcome: null, model: null, effort: null, park: false,
   uri: null, file: null, version: null,
   card: null, trigger: null, key: null, source: null, limit: 0,
+  onboard: false, here: false,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -91,6 +92,8 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--label') opts.labels.push(argv[++i]);
   else if (a === '--json') opts.json = true;
   else if (a === '--spawn') opts.spawn = true;
+  else if (a === '--onboard') opts.onboard = true;
+  else if (a === '--here') opts.here = true;
   else if (a === '--harness') opts.harness = argv[++i];
   else if (a === '--model') opts.model = argv[++i];
   else if (a === '--effort') opts.effort = argv[++i];
@@ -172,8 +175,12 @@ function readConfig() {
   } catch (e) {}
   return {};
 }
-const PORT = opts.port || (Number.isInteger(readConfig().port) && readConfig().port > 0 ? readConfig().port : DEFAULT_PORT);
-const BASE = 'http://127.0.0.1:' + PORT;
+// PORT/BASE are settled here for every command but one: `init --onboard` may
+// have to walk forward off a port something else already holds (see usePort),
+// and a first run that dies on "address in use" is a first run that ends there.
+let PORT = opts.port || (Number.isInteger(readConfig().port) && readConfig().port > 0 ? readConfig().port : DEFAULT_PORT);
+let BASE = 'http://127.0.0.1:' + PORT;
+function usePort(p) { PORT = p; BASE = 'http://127.0.0.1:' + PORT; }
 
 // ---------- helpers ----------
 function request(method, urlPath, body, timeoutMs) {
@@ -350,15 +357,22 @@ function installStatusLine(workspace) {
   excludeFromGit(workspace, '.claude/settings.local.json');
 }
 async function cmdInit() {
+  if (opts.onboard) return cmdInitOnboard();
   if (!opts.name) {
     die('usage: bc-axi init --name <founding-lieutenant-name> [--id id] [--charter-file f|-] [--port N] [--host H]\n' +
       '  Run from inside the tmux session that will BE the founding lieutenant.');
   }
   // 1. teleport precondition: the caller's tmux session becomes the lieutenant's address
+  // No tmux command is ever printed for a human to type — not here, not in any
+  // other message. The first run starts tmux itself and never mentions it; this
+  // path is the teleport, and a session that is not in tmux simply cannot BE the
+  // lieutenant, so it is pointed at the path that works.
   if (!process.env.TMUX) {
-    die('not inside tmux — a lieutenant lives in a tmux session.\n' +
-      'Start one and re-run init from within it:\n' +
-      '  tmux new -s ' + slugId(path.basename(WORKSPACE)));
+    die('not inside tmux — a lieutenant\'s address IS its tmux session, so this session cannot be one.\n' +
+      'First run? Use the onboarding path instead — it handles tmux itself, and the person never sees it:\n' +
+      '  bc-axi init --onboard\n' +
+      'Joining an existing workspace? Only a session that was launched inside tmux can be registered\n' +
+      'as a lieutenant; from here, `bc-axi open` prints the board URL.');
   }
   let tmuxSession = '';
   try {
@@ -402,10 +416,17 @@ async function cmdInit() {
     console.log('founding lieutenant ' + id + ' already registered — session ref refreshed (' + tmuxSession + ')');
   }
 
-  // 4. workspace-level turn-end Stop hook -> POST /api/turn-end. Session-agnostic
-  // pseudo-name "ws": it fires for every claude in this cwd and the server
-  // dedupes by session_id. NOTE: claude captures hooks at startup, so the
-  // founding session's own turn-ends start flowing on its next restart.
+  await installTurnEndHook();
+  scaffoldWorkspace();
+
+  console.log('\nboard: http://localhost:' + PORT + '/');
+}
+
+// The workspace-level turn-end Stop hook -> POST /api/turn-end. Session-agnostic
+// pseudo-name "ws": it fires for every claude in this cwd and the server
+// dedupes by session_id. NOTE: claude captures hooks at startup, so the
+// founding session's own turn-ends start flowing on its next restart.
+async function installTurnEndHook() {
   const { installHooks } = require(path.join(SELF_DIR, '..', 'harness', 'claude-tmux.js'));
   // Harness state is workspace-scoped (never the harness's global last-resort
   // dir); BC_HARNESS_STATE stays an explicit override, matching the server.
@@ -414,8 +435,11 @@ async function cmdInit() {
   console.log('turn-end hook installed (.claude/settings.local.json -> /api/turn-end)');
   installStatusLine(WORKSPACE);
   console.log('statusLine installed (.claude/settings.local.json -> real context window sidecar)');
+}
 
-  // 5. shared memory scaffold (never overwrite what exists)
+// The shared memory scaffold (never overwrites what exists), plus the playbooks
+// and the worker-duties skill. Both init paths land the same workspace.
+function scaffoldWorkspace() {
   const agentsMd = path.join(WORKSPACE, 'AGENTS.md');
   if (!fs.existsSync(agentsMd)) {
     fs.writeFileSync(agentsMd,
@@ -454,8 +478,193 @@ async function cmdInit() {
       'Per-project engineering learnings — one file per project, maintained by lieutenants.\n');
     console.log('scaffolded learnings/');
   }
+}
+
+// ---------- init --onboard: the first run, with nobody watching ----------
+// The other init is a teleport: an agent already inside tmux makes ITSELF the
+// founding lieutenant. This one is for a person who has just installed the
+// skill, in a plain Claude Code session, in an empty folder, who has never
+// heard of tmux and never should. It runs OUTSIDE tmux, refuses to eat someone's
+// code project, brings the board up on the fewest dependencies that will start,
+// and leaves Bridget on it — chartered, spawned, and already talking.
+//
+// Everything it does is idempotent: a second run resumes a half-finished first
+// one (revives a dead Bridget, never re-welcomes, never re-charters) instead of
+// starting over.
+const BRIDGET = { name: 'Bridget', id: 'bridget', prefix: 'BRI' };
+const ONBOARDING_DIR = path.join(SELF_DIR, '..', 'onboarding');
+
+function writeConfigKeys(patch) {
+  let cfg = {};
+  try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')); } catch (e) {}
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
+  Object.assign(cfg, patch);
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + '\n');
+}
+
+// A first run that dies on "address already in use" is a first run that ends
+// there, so a taken port moves us forward instead of stopping us. Our OWN board
+// on that port is not "taken" — that is just the re-run case.
+async function settleOnboardPort(fr) {
+  const wanted = PORT;
+  for (let p = wanted; p < wanted + 20; p++) {
+    usePort(p);
+    if (await fr.portFree(p, opts.host || '127.0.0.1')) return { moved: p !== wanted, mine: false };
+    const st = await serverUp();
+    if (st && st.workspace === WORKSPACE) return { moved: p !== wanted, mine: true };
+  }
+  usePort(wanted);
+  return null;
+}
+
+async function cmdInitOnboard() {
+  const fr = require(path.join(SELF_DIR, '..', 'server', 'firstrun.js'));
+
+  // 1. What IS this directory? Decided before one byte is written, in the one
+  //    order that works: workspace, then empty, then refuse and name what it found.
+  const target = opts.workspace ? path.resolve(opts.workspace) : process.cwd();
+  const look = fr.inspectTarget(target);
+  if (look.verdict === 'missing') die('no such directory: ' + target);
+  // WORKSPACE walks UP from cwd, so a folder inside an existing workspace
+  // resolves to that workspace — which is the same "continue, do not refuse"
+  // answer, just found one level out. Say so; a silent jump is a foot-gun.
+  const inherited = WORKSPACE !== target;
+  const resuming = inherited || look.verdict === 'workspace';
+  if (inherited) console.error('already inside the workspace at ' + WORKSPACE + ' — continuing it');
+  if (!resuming && look.verdict !== 'empty' && !opts.here) {
+    die('bc-axi: first run refused (' + look.verdict + ')\n\n' + fr.refusalText(target, look));
+  }
+
+  // 2. Can this machine run a board at all? Nothing here installs anything —
+  //    each answer is written for the agent that will relay it and ASK.
+  const harness = opts.harness || 'claude';
+  const tmuxBacked = harness === 'claude' || harness === 'codex';
+  if (tmuxBacked && !fr.hasBin('tmux')) {
+    die('bc-axi: first run blocked (tmux-missing)\n\n' + fr.tmuxMissingText());
+  }
+  // git identity is a precondition for the first COMMIT, not for a board, so it
+  // is a warning that Bridget picks up in conversation — never a wall between a
+  // stranger and a running board.
+  const git = fr.gitIdentity();
+  if (!git.ok) console.error('\n⚠ ' + fr.gitIdentityText(git) + '\n');
+
+  const port = await settleOnboardPort(fr);
+  if (!port) {
+    die('bc-axi: first run blocked (port-busy)\n\n'
+      + 'ports ' + PORT + '-' + (PORT + 19) + ' are all in use, so the board has nowhere to listen.\n'
+      + 'Free one, or pick a port yourself: bc-axi init --onboard --port <N>');
+  }
+  if (port.moved) console.error('port ' + (opts.port || DEFAULT_PORT) + ' was taken by something else — using ' + PORT);
+
+  console.error('┌─ bridge-commander first run');
+  console.error('│  workspace : ' + WORKSPACE + (resuming ? '   (existing)' : '   (NEW)'));
+  console.error('│  board     : http://localhost:' + PORT + '/');
+  console.error('└─ lieutenant: ' + BRIDGET.name);
+
+  // 3. The workspace itself.
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  excludeFromGit(WORKSPACE, '.bridge-commander/');
+  if (PORT !== DEFAULT_PORT) writeConfigKeys({ port: PORT }); // so every later bc-axi call finds it
+  const { started } = await ensureServer();
+  console.log('server ' + (started ? 'started' : 'already running') + ' on port ' + PORT);
+  await installTurnEndHook();
+  scaffoldWorkspace();
+
+  // 4. Bridget's charter, then Bridget. The charter goes down FIRST: it is what
+  //    her session is launched on, and a spawn that beats it to disk gets a
+  //    lieutenant with no idea why she exists.
+  const id = opts.id || BRIDGET.id;
+  const name = opts.name || BRIDGET.name;
+  const charterFile = path.join(ONBOARDING_DIR, 'bridget.md');
+  if (fs.existsSync(charterPath(WORKSPACE, id))) {
+    console.log('charter left alone — ' + charterPath(WORKSPACE, id) + ' already exists');
+  } else {
+    console.log('charter written to ' + writeCharter(WORKSPACE, id, fs.readFileSync(charterFile, 'utf8')));
+  }
+  try {
+    await request('POST', '/api/lieutenants', { name, id, prefix: BRIDGET.prefix, actor: 'user' });
+    console.log('lieutenant "' + name + '" (' + id + ') registered');
+  } catch (e) {
+    if (!/HTTP 409/.test(e.message)) throw e;
+    console.log('lieutenant ' + id + ' already registered');
+  }
+
+  // 5. The message that is already waiting. Board state, not agent output — it
+  //    has to be there whether or not a session ever starts, and exactly once.
+  const board = await request('GET', '/api/board');
+  const lt = (board.lieutenants || []).find((l) => l.id === id);
+  if (lt && !(lt.chat || []).length) {
+    await request('POST', '/api/message', {
+      target: 'lieutenant:' + id,
+      text_md: fs.readFileSync(path.join(ONBOARDING_DIR, 'welcome.md'), 'utf8').trim(),
+      author: name,
+    });
+    console.log('welcome message seeded — it is on the board before anyone says anything');
+  } else {
+    console.log('welcome message already on the board — left alone');
+  }
+
+  // 6. First-run state, so a re-run resumes instead of restarting.
+  const cur = await request('GET', '/api/onboarding');
+  if (!cur.onboarding) {
+    await request('POST', '/api/onboarding', {
+      step: 'board-up', lieutenant: id, gitIdentity: git.ok,
+      note: git.ok ? '' : 'git identity missing at init — ask before the first card',
+    });
+    console.log('onboarding state: board-up');
+  } else {
+    console.log('onboarding state: ' + (cur.onboarding.step || '?') + ' — resuming, not restarting');
+  }
+
+  // 7. Her session. The one step that needs an authenticated agent CLI, and the
+  //    one step whose failure must NOT take the board down with it.
+  let live = true;
+  try {
+    const body = { name, id, spawn: true, revive: true };
+    if (opts.harness) body.harness = opts.harness;
+    const r = await request('POST', '/api/lieutenants', body, 180000);
+    console.log(r.spawned === false
+      ? name + '\'s session is already live'
+      : name + '\'s session started');
+  } catch (e) {
+    live = false;
+    const why = (e.body && e.body.error) || e.message;
+    console.log('\n⚠ ' + name + '\'s session did not start: ' + why + '\n'
+      + '  The board is up and her welcome message is on it — she just cannot answer yet.\n'
+      + '  This is almost always the `claude` CLI: not installed, or not logged in.\n'
+      + '  Sort that out and run the SAME command again; it picks up where it stopped.');
+  }
 
   console.log('\nboard: http://localhost:' + PORT + '/');
+  if (live) {
+    console.log('\nGive that URL to the person and stop here. ' + name + ' is on the board with a message\n'
+      + 'already waiting, and the rest of the setup — tools, projects, the checklist — is hers.');
+  }
+}
+
+// ---------- onboarding state ----------
+async function cmdOnboarding() {
+  const sub = positional[0];
+  if (!sub) {
+    const r = await request('GET', '/api/onboarding');
+    if (opts.json) return console.log(JSON.stringify(r.onboarding, null, 2));
+    if (!r.onboarding) return console.log('no onboarding state — this workspace was not started with `init --onboard`');
+    const o = r.onboarding;
+    return console.log('step: ' + (o.step || '?')
+      + (o.note ? '\nnote: ' + o.note : '')
+      + (o.updated ? '\nupdated: ' + o.updated : ''));
+  }
+  if (sub !== 'set') die('usage: bc-axi onboarding [--json] | bc-axi onboarding set <step> [--note "..."]');
+  const step = positional[1];
+  if (!step) die('usage: bc-axi onboarding set <step> [--note "..."]  (steps: '
+    + require(path.join(SELF_DIR, '..', 'server', 'firstrun.js')).ONBOARDING_STEPS.join(' | ') + ')');
+  const body = { step };
+  if (opts.note != null) body.note = opts.note;
+  let r;
+  try { r = await request('POST', '/api/onboarding', body); }
+  catch (e) { die(e.body && e.body.error ? e.body.error : e.message); }
+  console.log('onboarding step: ' + r.onboarding.step);
 }
 
 async function cmdStop() {
@@ -1306,6 +1515,7 @@ async function cmdConfig() {
 const commands = {
   init: cmdInit,
   open: cmdOpen, stop: cmdStop, status: cmdStatus, config: cmdConfig,
+  onboarding: cmdOnboarding,
   board: cmdBoard, thread: cmdThread, archived: cmdArchived, kinds: cmdKinds,
   'lieutenant create': cmdLtCreate, 'lieutenant list': cmdLtList, 'lieutenant retire': cmdLtRetire,
   'lieutenant patch': cmdLtPatch,
@@ -1335,6 +1545,16 @@ if (!commands[cmd]) {
     '                                         session as the founding lieutenant, installs the turn-end hook,\n' +
     '                                         scaffolds AGENTS.md + captain.md + learnings/, seeds the\n' +
     '                                         playbooks and symlinks the worker-duties skill. Idempotent\n' +
+    '  init --onboard [--here] [--port N] [--host H]\n' +
+    '                                         the FIRST run, for a session that is NOT in tmux: refuses a\n' +
+    '                                         code project (naming what it found), continues an existing\n' +
+    '                                         workspace, brings the board up, and leaves lieutenant Bridget\n' +
+    '                                         on it — chartered, spawned in her own tmux session, with a\n' +
+    '                                         welcome message already waiting. Installs nothing. Idempotent:\n' +
+    '                                         a re-run resumes (see `onboarding`). --here overrides the\n' +
+    '                                         refusal for a non-empty folder — ask the person first\n' +
+    '  onboarding [--json]                    the first-run step the board remembers\n' +
+    '  onboarding set <step> [--note "..."]   advance it: board-up | tools | project | checklist | done\n' +
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +
     '                                         Bootstraps .bridge-commander/ in cwd on first run.\n' +
     '  status                                 up/down, cards, lieutenants, pending queue items, and the\n' +

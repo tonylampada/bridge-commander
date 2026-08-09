@@ -1,6 +1,6 @@
 ---
 name: bridge-commander
-description: Turn the current directory into a Bridge Commander workspace and become its founding lieutenant (the teleport), or re-enter an existing one. Use when the user asks to init/set up bridge command, open the bridge board, or orchestrate work through the kanban board.
+description: Set up Bridge Commander for the first time (an empty folder becomes a board with a lieutenant already on it), or turn the current directory into a workspace and become its founding lieutenant (the teleport), or re-enter an existing one. Use when the user asks to init/set up bridge command, open the bridge board, or orchestrate work through the kanban board.
 ---
 
 # Bridge Commander — the teleport
@@ -22,23 +22,32 @@ Some skill installers copy only this file. Resolve the tool checkout, in order:
 full usage). `DOCTRINE.md` and `OPERATIONS.md` live in the checkout root — read them from
 there, not next to this file, unless this dir is the tool.
 
-## 1. Verify you are inside tmux
+## 1. Which of the two runs is this?
 
-Check `$TMUX`. If it is empty, REFUSE to init and tell the user exactly this, then stop:
+**Is there a `.bridge-commander/` directory here (or in a parent)?**
 
-> Bridge Commander lieutenants live in tmux sessions — I need to be running inside one.
-> Please start `tmux new -s <workspace-name>`, launch me again in there, and re-invoke
-> this skill.
+- **No — this is a first run.** Read **`FIRST-RUN.md` in the checkout** and follow it, instead of
+  the rest of this file. It is one command, and it ends with a board and a lieutenant named
+  Bridget already talking to the user; onboarding is hers from there. Do not ask the user to
+  start tmux — the first run handles tmux itself and never mentions it to them.
+- **Yes — a workspace exists.** Continue below: you are joining it as a lieutenant.
 
-(Your tmux session becomes your permanent address: the server wakes you by typing into it,
-and the captain can always `tmux attach` to it.)
+## 2. Verify you are inside tmux
 
-## 2. Confirm you are in the intended workspace directory
+Check `$TMUX`. If it is empty you cannot BE a lieutenant of this workspace from here — a
+lieutenant's tmux session is its permanent address (the server wakes it by typing into it, and
+the captain can `tmux attach` to it). Do not ask the user to start one. Instead:
+
+- Print the board URL for them: `bc-axi open`.
+- Say that the board's lieutenants are already reachable there, and that you can act as their
+  hands in this terminal but are not on the board yourself.
+
+## 3. Confirm you are in the intended workspace directory
 
 Run `pwd` first: `init` uses cwd by default, and initializing the wrong dir (e.g. `$HOME`) is
 the classic mistake. If it isn't the intended workspace, `cd` in or pass `--workspace <dir>`.
 
-## 3. Initialize the workspace (idempotent)
+## 4. Initialize the workspace (idempotent)
 
 Agree on your lieutenant name with the user (suggest one if they don't care), then from the
 workspace directory run:
@@ -56,13 +65,13 @@ memory, and what a future session of yours is launched on. It never replaces an 
 (a re-run says so and leaves it alone); edit the file to change your charter.
 Give the user that URL — the board is the captain's cockpit.
 
-## 4. Load your operating knowledge, in this order
+## 5. Load your operating knowledge, in this order
 
 1. `DOCTRINE.md` (checkout root, per step 0) — how a lieutenant behaves. It is your job description.
 2. The workspace `captain.md` — the captain's preferences and working style.
 3. The workspace `learnings/` — per-project engineering learnings.
 
-## 5. Operate
+## 6. Operate
 
 From now on behave per the doctrine: `bc-axi drain` as the first act of every turn, ack only
 after handling, orchestrate through cards, never implement in a project yourself, talk to

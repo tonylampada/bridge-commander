@@ -66,7 +66,7 @@ and its cards carry that color stripe.
 
 ## Operations
 
-Callers · mechanisms: 🤠 captain (UI click/drag) · ⚓ lieutenant (CLI) · 🛠️ worker (CLI/hook) · ⚙️ server (automatic — no agent turn involved)
+Callers · mechanisms: 🤠 captain (UI click/drag) · ⚓ lieutenant (CLI) · 🛠️ worker (CLI/hook) · ⚙️ server (automatic — no agent turn involved) · 🙋 the user's own agent (CLI, first run only — it is not on the board)
 
 Trust model (v0): the server binds loopback (or a private mesh address) and has no app auth;
 actor strings are honor-system. The network boundary is the auth boundary.
@@ -76,6 +76,8 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | Operation | Signature | Who | When |
 |---|---|---|---|
 | `workspace.init` | `dir → workspace` | ⚓ (the founding agent) | skill invoked in a fresh dir, **inside tmux** (refuses outside, with instruction); creates `.bridge-commander/`, boots the server, registers the caller as the first lieutenant — the "teleport" |
+| `workspace.onboard` | `dir → workspace, lieutenant` | 🙋 (the user's OWN agent, not a lieutenant) | the FIRST run, from a session that is not in tmux: refuses a dir holding a code project (naming what it found) and continues one already holding `.bridge-commander/`; then everything `workspace.init` does, except the founding lieutenant is **Bridget** — chartered from `onboarding/bridget.md`, spawned into her own tmux session, with a welcome message seeded on her thread before the person has said anything, and `board.onboarding` recording the step. Installs nothing; every part is idempotent, so a re-run resumes a half-finished first run |
+| `workspace.onboardingStep` | `step → onboarding` | ⚓ (Bridget) | the first-run conversation's memory, on the board so it survives the session having it: `board-up → tools → project → checklist → done` |
 | `workspace.open` | `dir → workspace` | ⚓ · 🤠 (CLI) | boot or attach to the board WITHOUT the teleport: bootstraps `.bridge-commander/` in cwd if absent, starts the server when down, prints the URL; no founding lieutenant involved |
 | `workspace.addProject` | `url \| path → project` | ⚓ | captain asks to bring a repo into the workspace |
 | `workspace.playbooks` | `→ [playbookId]` | ⚓ · 🤠 (the new-card dropdown, and the ✎ picker on a **Backlog** card's playbook chip — a started card rendered its brief already, so its chip shows the pointer and offers no editor) | list the playbooks a card can point at; read off disk on every call |
