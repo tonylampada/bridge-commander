@@ -16,6 +16,7 @@ them drift.
    │  queue/*.jsonl = write-ahead, at-least-once delivery per lieutenant │
    │  supervision loop: dead lieutenant → resume; dead worker → flag     │
    │  PR watch: merged PR → archive card + release worktree + kill worker│
+   │  the clock: schedules (board.json) → hook run → owner on a failure  │
    └──────────────────────────────────────────────────────────────────┬──┘
         ▲ bc-axi (CLI: drain/ack, cards, projects, worker verbs)       │
         │                                                              ▼
@@ -42,6 +43,12 @@ them drift.
   worktree back (a playbook's `keep_worktree: true` holds it for a card reworked in place;
   a worktree still holding work is never released) — running the playbook's `teardown`
   command in the checkout first, best effort, so nothing the run started outlives it.
+- **The clock is a board object**: schedules live in `board.json` (so they travel with the
+  repo, unlike host cron) and fire a NAMED HOOK through the same `hook run` every other caller
+  uses. A schedule's cursor is the due time of the last window it handled, so a restart neither
+  loses a window nor double-fires one; `overlap` and `catch-up` say what happens when a firing
+  outlives its interval or the machine slept through one. A failed firing wakes the schedule's
+  owner with the hook's output.
 - **Supervision is infrastructure**: the server watches sessions, turn-ends, and PRs. Dead
   lieutenants are auto-respawned (resume), dead workers flag their owner, merged PRs archive
   the card, release the worktree, and kill the lingering worker session (never hand-archive

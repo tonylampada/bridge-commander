@@ -135,7 +135,8 @@ Env knobs (set on the server process):
 | `BC_WORKER_TTL_SECS` | `600` | card status lease TTL — `working`/`needs-you` decays to `idle` past it |
 | `BC_WORKTREE_TOOL` | auto | `treehouse` \| `git` — worker worktree provisioning |
 | `BC_HARNESS_STATE` | `~/.bridge-commander/harness` | harness state dir (prompts, session ids, turn-end logs) |
-| `BC_GH_CMD` | `gh` | gh binary used by the PR watch |
+| `BC_GH_CMD` | `gh` | gh binary used by the PR watch and by the packaged `gh-watch` hook |
+| `BC_SCHEDULE_INTERVAL_MS` | `15000` | schedule tick — how often the clock looks for due windows; `0` disables |
 | `BC_TURNEND_URL` | — | default callback URL baked into installed turn-end hooks |
 | `BC_SEND_RETRIES` / `BC_SEND_SLEEP_MS` | `3` / `400` | verified-submit tuning for `harness.send` |
 | `BC_HOOK_TIMEOUT_MS` | `120000` | per-script timeout for workspace hooks, lifecycle and named alike |
@@ -178,7 +179,7 @@ bc-axi artifact write $f --file draft.sh --version ''
 ```
 
 `hook run` is the ONE door: an outside trigger already running on this machine, the board's ▶
-and (later) a schedule all come through it. One run per hook name at a time — a second call
+and the board's own clock all come through it. One run per hook name at a time — a second call
 while the first is in flight is refused, naming the one going.
 
 Every run of either kind appends a line to `.bridge-commander/hookruns.jsonl` — hook, trigger,
@@ -186,6 +187,45 @@ card, when, how long, exit code, timed-out flag, output tail. `hook runs` reads 
 tail. The config screen's **hooks** tab shows the same thing as one row per hook, with ✎ to edit
 one in the board's file editor and ▶ to run a named one — on a lifecycle row ▶ is disabled, since
 its event is what fires it and a hand-run would hand a card-shaped script no card.
+
+### Schedules — the board's own clock
+
+A schedule is a board object like a card — a name, an owner, a life in `board.json` (so a clone
+of the workspace carries it; host cron did not) — and it **fires a hook, and nothing else**. The
+hook is bash with `bc-axi` on its PATH and decides the rest, so the clock never has to know
+about cards, commands or wakes.
+
+```sh
+bc-axi schedule add nightly --hook sweep --when '0 3 * * *' --owner ada
+bc-axi schedule add poller  --hook gh-watch --when 5m --owner ada --overlap skip --catch-up latest
+bc-axi schedule list                   # what fires, when it fires next, how it last went
+bc-axi schedule show nightly           # the same, plus its recent firings
+bc-axi schedule pause nightly          # …and resume / remove
+```
+
+`--when` is a 5-field cron expression in **local** time or an interval (`30s`, `5m`, `2h`, `1d`).
+A bad expression, a hook that is not there and an owner who is not a lieutenant are all refused
+at `add`.
+
+The cursor a schedule keeps is the DUE TIME of the last window it handled, so a restart neither
+loses a due window nor fires one twice. `--catch-up` says what happens to the windows a sleeping
+laptop missed — `latest` (default) fires once, `all` fires each, `none` fires none. `--overlap`
+says what a window does when the previous firing is still running — `skip` (default) records the
+skip rather than swallowing it, `queue` re-offers the window when the firing finishes, `restart`
+kills what is running and takes its place.
+
+A failed firing wakes the schedule's OWNER with the hook's output (level-1 event +
+`schedule-failed` queue item) — never only a log line. A hook or owner that goes missing under a
+live schedule puts a loud `problem` on it and wakes the owner ONCE, so a dead window is never
+silent.
+
+A fresh workspace is initialized with one schedule already working: **`gh-watch`**, every five
+minutes, waking the owner when a check goes red on the `bc/` branch of a live card — once per
+failure, silent on green.
+
+| var | default | meaning |
+|---|---|---|
+| `BC_SCHEDULE_INTERVAL_MS` | `15000` | how often the clock looks for due windows; `0` disables it |
 
 To tear down infrastructure one **playbook** starts (a dev container, a compose stack), reach
 for that playbook's `teardown` key instead: the command runs in the worktree immediately

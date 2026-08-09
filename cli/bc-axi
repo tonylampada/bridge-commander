@@ -26,6 +26,9 @@ const gitrev = require(path.join(SELF_DIR, '..', 'server', 'gitrev.js'));
 // The playbooks a workspace is seeded with, and the worker-duties skill that
 // goes with them — one call, because they are one thing (see playbooks.js).
 const { seedPlaybooksAndDuties } = require(path.join(SELF_DIR, '..', 'server', 'playbooks.js'));
+// The packaged hooks (this repo's hooks/) are installed into a fresh workspace
+// the way the packaged playbooks are — copies, and only the missing ones.
+const { seedHooks } = require(path.join(SELF_DIR, '..', 'server', 'hooks.js'));
 // --charter-file writes the lieutenant's memory file, not a board field — the
 // charter is prose the agent reads at launch (see server/charter.js).
 const { charterPath, readCharter, writeCharter } = require(path.join(SELF_DIR, '..', 'server', 'charter.js'));
@@ -61,6 +64,7 @@ const opts = {
   uri: null, file: null, version: null,
   card: null, trigger: null, key: null, source: null, limit: 0,
   onboard: false, here: false, allowRoot: false,
+  hook: null, when: null, overlap: null, catchup: null,
 };
 const positional = [];
 for (let i = 0; i < argv.length; i++) {
@@ -113,6 +117,10 @@ for (let i = 0; i < argv.length; i++) {
   else if (a === '--key') opts.key = argv[++i];
   else if (a === '--source') opts.source = argv[++i];
   else if (a === '--limit') opts.limit = parseInt(argv[++i], 10);
+  else if (a === '--hook') opts.hook = argv[++i];
+  else if (a === '--when') opts.when = argv[++i];
+  else if (a === '--overlap') opts.overlap = argv[++i];
+  else if (a === '--catch-up' || a === '--catchup') opts.catchup = argv[++i];
   // An unknown --flag is an error, never a positional: a flag that was removed
   // (or mistyped) has to say so, instead of silently sliding into <source> or
   // <card-id> and half-working. Positionals here are ids, paths and URLs —
@@ -125,7 +133,7 @@ for (let i = 0; i < argv.length; i++) {
 }
 let cmd = positional.shift();
 // Two-word verbs mirror the DNA operation names: `card create`, `lieutenant list`, …
-if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line' || cmd === 'playbook' || cmd === 'hook') && positional.length) cmd = cmd + ' ' + positional.shift();
+if ((cmd === 'card' || cmd === 'lieutenant' || cmd === 'project' || cmd === 'worker' || cmd === 'artifact' || cmd === 'line' || cmd === 'playbook' || cmd === 'hook' || cmd === 'schedule') && positional.length) cmd = cmd + ' ' + positional.shift();
 // Three-word verb: `card artifact add|rm`.
 if (cmd === 'card artifact' && positional.length) cmd = cmd + ' ' + positional.shift();
 
@@ -386,6 +394,24 @@ function installStatusLine(workspace) {
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
   excludeFromGit(workspace, '.claude/settings.local.json');
 }
+// The first schedule, registered at init and never re-registered: `add` refuses
+// a duplicate name, and a captain who removed gh-watch (or repointed it, or
+// paused it) has said what he wants — an init that put it back would be an
+// upgrade overwriting a decision.
+async function seedGhWatchSchedule(owner) {
+  let existing = [];
+  try { existing = (await request('GET', '/api/schedules')).schedules || []; }
+  catch (e) { return; } // an older server on this port has no clock; nothing to seed
+  if (existing.some((s) => s.name === 'gh-watch')) return;
+  try {
+    await request('POST', '/api/schedules',
+      { name: 'gh-watch', hook: 'gh-watch', when: '5m', owner, actor: 'user' });
+    console.log('schedule gh-watch registered — red checks on live bc/ branches wake ' + owner + ', every 5m');
+  } catch (e) {
+    console.log('gh-watch schedule not registered (' + ((e.body && e.body.error) || e.message) + ')');
+  }
+}
+
 async function cmdInit() {
   if (opts.onboard) return cmdInitOnboard();
   if (!opts.name) {
@@ -448,6 +474,7 @@ async function cmdInit() {
 
   await installTurnEndHook();
   scaffoldWorkspace();
+  await seedGhWatchSchedule(id);
 
   console.log('\nboard: ' + boardUrl(opts.host));
 }
@@ -500,6 +527,12 @@ function scaffoldWorkspace() {
   const seeded = seedPlaybooksAndDuties(STATE_DIR);
   if (seeded.playbooks.length) console.log('seeded playbooks: ' + seeded.playbooks.join(', '));
   if (seeded.skill) console.log('worker duties symlinked (' + seeded.skill + ' -> the packaged skill)');
+
+  // the packaged hooks. The gh-watch SCHEDULE that fires one of them is seeded
+  // by each init path once its founding lieutenant exists — a schedule needs an
+  // owner for its failures to land on.
+  const seededHooks = seedHooks(WORKSPACE);
+  if (seededHooks.length) console.log('seeded hooks: ' + seededHooks.join(', '));
 
   const learnings = path.join(WORKSPACE, 'learnings');
   if (!fs.existsSync(learnings)) {
@@ -634,6 +667,9 @@ async function cmdInitOnboard() {
     if (!/HTTP 409/.test(e.message)) throw e;
     console.log('lieutenant ' + id + ' already registered');
   }
+  // A clock with nothing on it is a feature nobody tests: gh-watch polls the
+  // `bc/` branches of live cards and wakes the owner ONCE per red check.
+  await seedGhWatchSchedule(id);
 
   // 5. The message that is already waiting. Board state, not agent output — it
   //    has to be there whether or not a session ever starts, and exactly once.
@@ -1301,11 +1337,17 @@ function ago(iso) {
   if (s < 86400) return Math.round(s / 3600) + 'h ago';
   return Math.round(s / 86400) + 'd ago';
 }
-// How a run ended, in the words the board's row uses.
+// How a run ended, in the words the board's row uses. A skipped window and a
+// run something killed mid-flight are both on this trace — a clock's firings —
+// and they read as themselves rather than as a mysterious "killed".
+function howRunEnded(r) {
+  return r.skipped ? 'skipped' : r.timedOut ? 'timed out' : r.error ? 'failed to start'
+    : r.canceled ? 'restarted mid-run' : r.code === null ? 'killed' : 'exit ' + r.code;
+}
 function runOutcome(r) {
   if (!r) return 'never ran';
-  return 'ran ' + ago(r.started) + ' · ' + (r.timedOut ? 'timed out' : r.error ? 'failed to start'
-    : r.code === null ? 'killed' : 'exit ' + r.code);
+  if (r.skipped) return 'skipped ' + ago(r.started) + ' (a run was already going)';
+  return 'ran ' + ago(r.started) + ' · ' + howRunEnded(r);
 }
 
 async function cmdHookList() {
@@ -1358,12 +1400,122 @@ async function cmdHookRuns() {
   if (opts.json) return console.log(JSON.stringify(r.runs, null, 2));
   if (!r.runs.length) return console.log(name ? 'no runs recorded for ' + name : 'no hook runs recorded yet');
   for (const run of r.runs) {
-    const how = run.timedOut ? 'timed out' : run.error ? 'failed to start'
-      : run.code === null ? 'killed' : 'exit ' + run.code;
+    const how = howRunEnded(run);
     console.log(hhmm(run.started) + '  ' + run.hook + '  ' + run.trigger
       + (run.card ? ' ' + run.card : '') + '  ' + how + '  ' + run.ms + 'ms');
     if (run.output) console.log('    ' + run.output.replace(/\n/g, '\n    '));
   }
+}
+
+// ---------- schedules ----------
+// The board's own clock. A schedule fires a NAMED HOOK and nothing else — the
+// hook is bash and decides for itself what to do, so the clock never has to
+// know about cards, commands or wakes. It lives in board.json, which means it
+// travels with the repository; the host cron it replaces did not.
+function untilText(iso) {
+  const t = Date.parse(iso || '');
+  if (!t) return 'never';
+  const s = Math.round((t - Date.now()) / 1000);
+  if (s <= 0) return 'due now';
+  if (s < 60) return 'in ' + s + 's';
+  if (s < 3600) return 'in ' + Math.round(s / 60) + 'm';
+  if (s < 86400) return 'in ' + Math.round(s / 3600) + 'h';
+  return 'in ' + Math.round(s / 86400) + 'd';
+}
+// How a firing ended, in one phrase. A SKIP is a firing too — that is the whole
+// point of recording it — so it reads as one.
+function fireOutcome(r) {
+  if (!r) return 'never fired';
+  if (r.skipped) return 'skipped ' + ago(r.started) + ' (previous firing still going)';
+  return 'fired ' + ago(r.started) + ' · ' + howRunEnded(r);
+}
+
+async function cmdScheduleAdd() {
+  const name = positional[0];
+  if (!name || !opts.hook || !opts.when || !opts.owner) {
+    die('usage: bc-axi schedule add <name> --hook <hook> --when <cron|interval> --owner <lieutenant-id>\n' +
+      '                              [--overlap skip|queue|restart] [--catch-up latest|all|none]\n' +
+      '  A schedule fires a NAMED hook (bc-axi hook list) and nothing else — the hook is bash\n' +
+      '  with bc-axi on its PATH and decides the rest.\n' +
+      '  --when     an interval (30s, 5m, 2h, 1d) or a 5-field cron expression in LOCAL time\n' +
+      '             ("*/5 * * * *", "0 8 * * mon-fri"). A bad one is refused here, naming it.\n' +
+      '  --owner    the lieutenant a failed firing wakes. Never the captain.\n' +
+      '  --overlap  what a firing does when the PREVIOUS one is still running (default skip):\n' +
+      '             skip = do not run, and record the skip · queue = run it when the current\n' +
+      '             one finishes · restart = kill the running one and take its place\n' +
+      '  --catch-up what to do with windows that came due while the board was down (default\n' +
+      '             latest): latest = fire ONCE · all = fire every missed window · none = fire\n' +
+      '             none of them');
+  }
+  const body = { name, hook: opts.hook, when: opts.when, owner: opts.owner };
+  if (opts.overlap) body.overlap = opts.overlap;
+  if (opts.catchup) body.catchup = opts.catchup;
+  let r;
+  try { r = await request('POST', '/api/schedules', body); }
+  catch (e) {
+    if (e.status === 400 || e.status === 409) die((e.body && e.body.error) || e.message);
+    throw e;
+  }
+  const s = r.schedule;
+  console.log('schedule ' + s.name + ' added — ' + s.hook + ' ' + s.describe + ', owner ' + s.owner
+    + ' (overlap ' + s.overlap + ', catch-up ' + s.catchup + '); next fire ' + untilText(s.next));
+}
+
+async function cmdScheduleList() {
+  const r = await request('GET', '/api/schedules');
+  if (opts.json) return console.log(JSON.stringify(r.schedules, null, 2));
+  if (!r.schedules.length) return console.log('no schedules (bc-axi schedule add <name> --hook <h> --when <w> --owner <lt>)');
+  for (const s of r.schedules) {
+    console.log(s.name + '\t' + s.hook + '\t' + s.describe + '\t' + s.owner
+      + '\t' + (s.paused ? 'PAUSED' : 'next ' + untilText(s.next)) + '\t' + fireOutcome(s.last));
+    if (s.problem) console.log('  !! ' + s.problem);
+  }
+}
+
+async function cmdScheduleShow() {
+  const name = positional[0];
+  if (!name) die('usage: bc-axi schedule show <name>   (what it fires, when it fires next, how it last went)');
+  let r;
+  try { r = await request('GET', '/api/schedules/' + encodeURIComponent(name)); }
+  catch (e) { if (e.status === 404) die((e.body && e.body.error) || e.message); throw e; }
+  if (opts.json) return console.log(JSON.stringify(r, null, 2));
+  const s = r.schedule;
+  console.log('# ' + s.name + (s.paused ? '  (PAUSED)' : ''));
+  console.log('hook:      ' + s.hook);
+  console.log('when:      ' + s.describe);
+  console.log('owner:     ' + s.owner);
+  console.log('overlap:   ' + s.overlap + '     catch-up: ' + s.catchup);
+  console.log('last fire: ' + fireOutcome(s.last));
+  console.log('next fire: ' + (s.paused ? 'paused' : untilText(s.next) + (s.next ? '  (' + s.next + ')' : '')));
+  if (s.problem) console.log('PROBLEM:   ' + s.problem);
+  if (r.runs.length) {
+    console.log('\n--- firings ---');
+    for (const run of r.runs) {
+      console.log(hhmm(run.started) + '  ' + howRunEnded(run) + '  ' + run.ms + 'ms');
+      if (run.output) console.log('    ' + run.output.replace(/\n/g, '\n    '));
+    }
+  }
+}
+
+async function cmdSchedulePause() { return schedulePaused(true); }
+async function cmdScheduleResume() { return schedulePaused(false); }
+async function schedulePaused(paused) {
+  const name = positional[0];
+  if (!name) die('usage: bc-axi schedule ' + (paused ? 'pause' : 'resume') + ' <name>');
+  let r;
+  try { r = await request('PATCH', '/api/schedules/' + encodeURIComponent(name), { paused }); }
+  catch (e) { if (e.status === 404) die((e.body && e.body.error) || e.message); throw e; }
+  console.log('schedule ' + name + (paused
+    ? ' paused — it fires nothing until resumed'
+    : ' resumed — next fire ' + untilText(r.schedule.next)));
+}
+
+async function cmdScheduleRemove() {
+  const name = positional[0];
+  if (!name) die('usage: bc-axi schedule remove <name>   (the hook itself is untouched)');
+  try { await request('DELETE', '/api/schedules/' + encodeURIComponent(name)); }
+  catch (e) { if (e.status === 404) die((e.body && e.body.error) || e.message); throw e; }
+  console.log('schedule ' + name + ' removed (the hook is still there — bc-axi hook list)');
 }
 
 // ---------- conversation & delivery ----------
@@ -1490,6 +1642,12 @@ async function cmdDrain() {
     } else if (it.kind === 'card-created') {
       head = 'new card for you — ' + cardBit(it.card);
       hint = 'read it: bc-axi card show ' + it.card;
+    } else if (it.kind === 'schedule-failed') {
+      head = 'SCHEDULE ' + (it.schedule || '?') + ' — a firing failed';
+      hint = 'the board\'s clock ran a hook for you and it did not come back clean: read the output above, '
+        + 'then look at the schedule (bc-axi schedule show ' + (it.schedule || '<name>') + ') and the hook it fires. '
+        + 'Fix the hook, or pause the schedule (bc-axi schedule pause ' + (it.schedule || '<name>') + ') so it stops '
+        + 'waking you while you do';
     } else if (it.kind === 'card-event') {
       head = 'CARD EVENT' + (it.eventKind ? ' [' + it.eventKind + ']' : '') + ' — ' + cardBit(it.card);
       hint = 'an outside process (a workflow, a cron, a CI hook) put this on the timeline and woke you: read the text and act';
@@ -1587,6 +1745,8 @@ const commands = {
   'project add': cmdProjectAdd, 'project list': cmdProjectList,
   'playbook list': cmdPlaybookList,
   'hook list': cmdHookList, 'hook run': cmdHookRun, 'hook runs': cmdHookRuns,
+  'schedule add': cmdScheduleAdd, 'schedule list': cmdScheduleList, 'schedule show': cmdScheduleShow,
+  'schedule pause': cmdSchedulePause, 'schedule resume': cmdScheduleResume, 'schedule remove': cmdScheduleRemove,
   'card create': cmdCreate, 'card move': cmdMove, 'card patch': cmdPatch,
   'card archive': cmdArchive, 'card restore': cmdRestore, 'card show': cmdShow,
   'card start': cmdStart, 'card park': cmdCardPark,
@@ -1674,6 +1834,24 @@ if (!commands[cmd]) {
     '                                         .bridge-commander/hookruns.jsonl\n' +
     '  A hook is bash with bc-axi on its PATH — there is no hook API. It wakes a lieutenant the\n' +
     '  way anyone else does: bc-axi event <card> --wake-owner (add --key to poll without spamming)\n' +
+    '\nschedule (the board\'s own clock — a schedule fires a NAMED HOOK, and nothing else):\n' +
+    '  schedule add <name> --hook <h> --when <cron|interval> --owner <lieutenant-id>\n' +
+    '              [--overlap skip|queue|restart] [--catch-up latest|all|none]\n' +
+    '                                         --when is an interval (30s, 5m, 2h, 1d) or a 5-field\n' +
+    '                                         cron expression in LOCAL time ("*/5 * * * *"). A bad\n' +
+    '                                         expression, a hook that is not there and an owner who\n' +
+    '                                         is not a lieutenant are all refused HERE.\n' +
+    '                                         --overlap is what a firing does when the previous one\n' +
+    '                                         is still running; --catch-up is what happens to the\n' +
+    '                                         windows a sleeping laptop missed\n' +
+    '  schedule list [--json]                 every schedule: what it fires, when it fires next,\n' +
+    '                                         and how it last went\n' +
+    '  schedule show <name> [--json]          the same, plus its recent firings off the trace\n' +
+    '  schedule pause <name> / resume <name>  stop the clock for one schedule (resume re-arms it\n' +
+    '                                         at NOW — a pause is not a queue)\n' +
+    '  schedule remove <name>                 forget the schedule; the hook itself is untouched\n' +
+    '  Schedules live in board.json, so a clone of the workspace carries them. A failed firing\n' +
+    '  wakes the schedule\'s OWNER with the hook\'s output — never only a log line\n' +
     '\nread:\n' +
     '  board [--json]                         lane + columns + card one-liners (or full JSON)\n' +
     '  card show <card-id> [--json]           one card: type, owner, attrs, body, events, thread\n' +

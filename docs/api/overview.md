@@ -54,6 +54,7 @@ and its cards carry that color stripe.
 | QueueItem | One durable delivery to a lieutenant. Kinds: captain `message`, `line-passed`, `start-order`, `rework-order`, `card-created` / `card-moved` (captain acts echoed to the owner), `worker-signal`, `worker-said` (a non-owner posted on the card thread), `worker-stopped`, `worker-died`, `worker-stalled`, `worker done`, `pr-merged`, `pr-closed`. `seq`-ordered, at-least-once. A `message` may carry `via: "line"` — the channel lives in the ENVELOPE, never appended to the captain's text. (`worker-paused` is an event kind only — pausing is the lieutenant's own act, it never queues) |
 | Line | The captain's voice channel: ONE holder at a time, held board-side (`board.line`) because the phone is not the only client. `chat.say` accepts the target `line` meaning "whoever holds it". It follows the last lieutenant to speak in a main chat, or is handed over by `line.pass`; a board that never had a conversation defaults to the founding lieutenant, and only a board with no lieutenant has nobody on the line |
 | Archive | Append-only frozen card snapshots with `reason`; `card.restore` resurrects with full state and a loud level-1 event (a snapshot frozen in Working restores to Backlog — only `card.start` may enter Working) |
+| Schedule | The board's own clock, and a board object like a card: `name`, the named `hook` it fires, `when` (a cron expression or an interval), `owner` (a lieutenant — where a firing's failure lands), `overlap` (`skip` \| `queue` \| `restart`), `catchup` (`latest` \| `all` \| `none`), `paused`, and its cursor `lastWindow` — the DUE TIME of the last window it handled, never "when it last ran". It fires a HOOK and nothing else. Lives in board state, so a clone of the workspace carries its schedules; host cron did not |
 | Label | Board-level tag registry: name + color, palette auto-assigned; cards carry label names |
 
 ## Value objects
@@ -137,6 +138,16 @@ actor strings are honor-system. The network boundary is the auth boundary.
 | `hook.runs` | `hook?, limit? → [run]` | ⚓ · 🤠 | the trace, newest first, read from the TAIL of `hookruns.jsonl` |
 | `hook.edit` | — | 🤠 · ⚓ | a hook is a FILE, so editing one is `card.artifact.write` and the file screen: the same 💾, the same version check, the same 409. The gate widens by exactly one shape — an executable file under `.bridge-commander/hooks/`, one level deep or two, no symlink, the path built server-side and compared for equality. A hook nobody has written yet reads as the empty document at version `""` (see `card.artifact.write`), so `bc-axi artifact read` then `write --version ""` is how a lieutenant writes one with nothing but the CLI. A hook created there is born executable, and `hooks/` itself is created on the first write (a fixed name the board owns, like a lieutenant's memory folder) so a workspace with no hooks yet is not the one place a lieutenant cannot write the first one. An EVENT directory is never created: a directory invented from a typo is a hook that silently never fires, so a write into a missing one is refused with the event named and the ones the board fires listed — a legal path whose tree is missing gets that answer, not "unknown artifact" |
 
+### schedule
+
+| Operation | Signature | Who | When |
+|---|---|---|---|
+| `schedule.add` | `name, hook, when, owner, overlap?, catchup? → schedule` | ⚓ · 🤠 | something should happen on its own — "poll the PRs every five minutes", "sweep at 03:00". The refusals ARE the operation: a `when` that does not parse is refused NAMING the offending text, a `hook` that is not an executable file in `hooks/` is refused (a schedule pointing at nothing is a window that fires nothing, every window, forever), and an owner who is not a registered lieutenant is refused (a failure would land nowhere) |
+| `schedule.list` | `() → [schedule + next, last]` | ⚓ · 🤠 | what this board does on its own, when each fires next, and how each last went. A schedule you cannot see is one you will not trust |
+| `schedule.show` | `name → schedule + next, last, [run]` | ⚓ · 🤠 | the same for one, plus its recent firings — read from `hookruns.jsonl`, never a second copy |
+| `schedule.pause` / `schedule.resume` | `name → ()` | ⚓ · 🤠 | stop one clock without forgetting it. Resume re-arms the cursor at NOW: a pause is not a queue, and a schedule paused over a weekend must not wake up owing sixty windows |
+| `schedule.remove` | `name → ()` | ⚓ · 🤠 | forget the schedule. The hook it fired is untouched — they are different objects |
+
 ### harness port (internal seam — the multi-harness contract)
 
 | Verb | Signature | Called by | Purpose |
@@ -209,6 +220,8 @@ session status, window adoption):
 | lieutenant session dies | server auto-respawn (resume when possible; else relaunch with charter + owned cards + pending queue as the prompt), level-1 event, drain nudge; 3 failed attempts → level-1 needs-captain |
 | level-1 event / owed reply | captain's bell: unseen = level-1 events ∪ unseen lieutenant thread replies, per user, cleared by reading — bridge semantics |
 | `worker.done` · worker death · card archived | lifecycle hooks: the workspace's own executable scripts in `.bridge-commander/hooks/<event>/` run (see below) |
+| a schedule's window comes due | `hook.run` on its hook, `trigger: schedule:<name>` — one trace line like any other run. A firing that FAILS lands a level-1 board event and a `schedule-failed` QueueItem on the schedule's OWNER, carrying the hook's output; a firing that succeeds says so on the trace and nowhere else (a clock that narrated every success would be noise). Never the captain — owners are lieutenants |
+| a schedule's hook or owner goes missing | the schedule carries a `problem` and says so in `list`/`show`, and its owner is woken ONCE — never a silent dead window, and never one wake per window |
 
 ### Hooks
 
@@ -240,14 +253,61 @@ flight is refused, naming what is already running, so a five-minute poll and an 
 not overlap. A name that is not an executable file in `hooks/` is an error naming the
 directory, never a silent success.
 
+### The clock — schedules
+
+Nothing in a workspace should have to say *"do that at eight tomorrow"* through host cron:
+invisible to the board, gone when the machine is reimaged, living outside the repo that carries
+everything else. A **schedule** is a board object instead — an owner, a life in board state, a
+visible last fire and next fire — and it **fires a hook, and nothing else**. That is the whole
+simplification named hooks buy: the clock does not need to know about commands, cards or wakes,
+because the hook is bash and decides for itself. It goes through `hook.run` like every other
+caller; the clock gets no private door.
+
+**when** is a cron expression (5 fields, LOCAL time, `*/n`, ranges, lists, `jan`/`mon` names,
+and the classic day-of-month OR day-of-week rule) or an interval (`30s`, `5m`, `2h`, `1d`). An
+interval's windows are a fixed grid anchored at creation, so deferring one never drifts the
+rest. A `when` that does not parse is refused at `schedule.add`, naming the offending text.
+
+**The cursor is `lastWindow`** — the DUE TIME of the last window handled, never "when it last
+ran". Windows are a function of that cursor and the clock, which is what makes a restart
+neither lose a due window nor fire one twice: the first tick after a boot sees exactly the
+windows that came due while nobody was watching.
+
+**catch-up** decides what happens to those: `latest` (default) fires ONCE — the answer to a
+laptop that slept over the weekend —, `all` fires each of them in order (capped, and the cap is
+reported), `none` fires only what came due while the scheduler was actually watching. Every
+policy still advances the cursor past what it dropped.
+
+**overlap** decides what a window does when the previous firing is still running — the
+five-minute poll that takes six minutes. `hook.run` already refuses a second run of a hook in
+flight; this is the policy over that refusal. `skip` (default) does not run **and records the
+skip** in the trace, because a schedule whose every window is skipped must not look like one
+that is working. `queue` leaves the cursor where it is, so the window is re-offered when the
+firing in flight finishes — a queue that survives a restart, because it is board state and not
+a list in memory. `restart` kills what is running (the whole process group, traced as
+`canceled`) and lets the displaced window take the name. A catch-up backlog is NOT an overlap:
+it drains one window at a time, in order.
+
+**A firing that fails lands on its owner** — a level-1 board event and a `schedule-failed`
+QueueItem carrying the hook's output, never only a log line. So does a schedule whose hook or
+owner has gone missing since it was added, once rather than once per window, with the reason
+sitting on the schedule where `list` and `show` print it.
+
+The board ships with one hook and one schedule, registered at `workspace.init`: **`gh-watch`**,
+every 5 minutes, polling `gh` for the `bc/` branches of live cards and waking the owner when a
+check goes red, with the check name and the link. `event.append --key` is what keeps one red
+check from being sixty wakes. A clock with nothing on it is a feature nobody tests.
+
 ### The trace — `hookruns.jsonl`
 
 Every run of either kind appends one line to `.bridge-commander/hookruns.jsonl`:
 `{hook, trigger, card, started, ms, code, ok, timedOut, output}` — append-only, the same shape
 as `archive.jsonl` and the delivery queues. It is written by the RUNNER, so lifecycle hooks
 land in it too. `trigger` is the lifecycle event for a lifecycle hook and whatever the caller
-named itself for a named one (`cli`, `board`, a schedule). `hook.runs` reads it from the TAIL,
-never whole.
+named itself for a named one (`cli`, `board`, `schedule:<name>`). `hook.runs` reads it from the
+TAIL, never whole. Two more flags appear on firings the clock produced: `skipped: true` for a
+window an overlap policy refused to run (no exit code — it never ran), and `canceled: true` for
+a run `restart` killed mid-flight. Both are firings, and both are visible as such.
 
 Hooks are fire-and-forget — they never block or fail the lifecycle outcome they observe
 (per-hook timeout ~120s, `BC_HOOK_TIMEOUT_MS` overrides, then kill; output captured and

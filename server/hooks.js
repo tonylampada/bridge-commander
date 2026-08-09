@@ -32,6 +32,15 @@
 // back from the TAIL (readRuns) so a long-lived board never pays for its own
 // history.
 //
+// The board's CLOCK is a caller like any other: a schedule fires a named hook
+// with trigger `schedule:<name>`, which is what lets two schedules on one hook
+// each read their own last firing back out of the trace (lastRunsFor). Two
+// things the clock needs and nobody else does live here beside the runner,
+// because they belong to the trace: traceSkip (a window an overlap policy
+// refused to run — a firing that did not run is still a firing) and
+// cancelNamedHook (kill the run in flight, traced `canceled`, so a `restart`
+// policy leaves a record of what it interrupted).
+//
 // Fire-and-forget semantics live at the CALL SITE (server.js fireHooks): a
 // hook never blocks or fails the lifecycle outcome it observes. This module's
 // only job is to run the scripts and report what happened — it never throws
@@ -118,6 +127,8 @@ function listHooks(workspace, event) {
 // ('error' event: broken shebang, EACCES...) is ok:false with `error` set.
 // opts.tail keeps the LAST OUTPUT_CAP bytes instead of the first — what a
 // caller wants when the interesting part is where the command gave up.
+// opts.onSpawn(kill) hands the caller a way to end the run early — the whole
+// process group, exactly as the timeout does. What `restart` is built on.
 function runOne(hook, cmd, args, env, cwd, timeoutMs, opts) {
   const tail = !!(opts && opts.tail);
   const startedAt = Date.now();
@@ -156,6 +167,7 @@ function runOne(hook, cmd, args, env, cwd, timeoutMs, opts) {
       catch (e) { try { child.kill('SIGKILL'); } catch (e2) {} }
     };
     const timer = setTimeout(() => { timedOut = true; killTree(); }, timeoutMs);
+    if (opts && typeof opts.onSpawn === 'function') { try { opts.onSpawn(killTree); } catch (e) {} }
     let graceTimer = null;
     const finish = (code, signal) => {
       clearTimeout(timer);
@@ -315,15 +327,41 @@ async function runNamedHook(workspace, name, ctx, opts) {
   const trigger = String((opts && opts.trigger) || 'cli');
   const card = String((ctx && ctx.card) || '');
   const timeoutMs = (opts && opts.timeoutMs > 0) ? opts.timeoutMs : DEFAULT_TIMEOUT_MS;
-  inFlight.set(key, { hook: name, trigger, card, started: new Date().toISOString() });
+  // The record IS the lock, and it carries the two things a canceller needs:
+  // how to end the run, and a promise that settles when it has.
+  const rec = { hook: name, trigger, card, started: new Date().toISOString(), kill: null, canceled: false };
+  inFlight.set(key, rec);
+  // BC_EVENT carries the hook's own name; the card fields stay empty unless a
+  // caller supplied a card. Output keeps the TAIL — a hook that gave up says
+  // so at the end.
+  const env = bcEnv(name, ctx);
+  const p = runOne(name, file, [], env, workspace, timeoutMs, {
+    tail: true,
+    onSpawn: (kill) => { rec.kill = kill; if (rec.canceled) kill(); },
+  });
+  rec.done = p.then(() => {}, () => {});
   try {
-    // BC_EVENT carries the hook's own name; the card fields stay empty unless a
-    // caller supplied a card. Output keeps the TAIL — a hook that gave up says
-    // so at the end.
-    const env = bcEnv(name, ctx);
-    const r = await runOne(name, file, [], env, workspace, timeoutMs, { tail: true });
+    const r = await p;
+    if (rec.canceled) r.canceled = true;
     return traceRun(workspace, trigger, card, r);
   } finally { inFlight.delete(key); }
+}
+
+// cancelNamedHook(workspace, name) -> Promise<bool> — kill the run in flight
+// (the whole process group) and resolve once it has actually finished and
+// traced. `false` when there was nothing to cancel.
+//
+// The killed run still lands on the trace, marked `canceled`, which is the
+// point: `restart` that leaves no record of what it interrupted is a clock
+// nobody can audit. A run whose child has not spawned yet is marked and killed
+// the instant it does — the window where cancel could be a no-op is closed.
+async function cancelNamedHook(workspace, name) {
+  const rec = inFlight.get(workspace + '\0' + name);
+  if (!rec) return false;
+  rec.canceled = true;
+  if (rec.kill) { try { rec.kill(); } catch (e) {} }
+  await rec.done;
+  return true;
 }
 
 // ---------- the trace ----------
@@ -344,8 +382,72 @@ function traceRun(workspace, trigger, card, r) {
     output: r.output || '',
   };
   if (r.error) rec.error = String(r.error).slice(0, 500);
+  if (r.canceled) rec.canceled = true;
   try { fs.appendFileSync(runsFile(workspace), JSON.stringify(rec) + '\n'); } catch (e) {}
   return rec;
+}
+
+// traceSkip(workspace, {hook, trigger, reason}) -> the record it appended.
+// A firing that did NOT run is still a firing, and the ONE thing a `skip`
+// overlap policy must not do is swallow it: a schedule whose every window is
+// skipped would otherwise look identical to one that is working. Same file,
+// same shape, `skipped: true` and nothing where an exit code would be.
+function traceSkip(workspace, opts) {
+  const rec = {
+    hook: String((opts && opts.hook) || ''),
+    trigger: String((opts && opts.trigger) || ''),
+    card: String((opts && opts.card) || ''),
+    started: new Date().toISOString(),
+    ms: 0,
+    code: null,
+    ok: false,
+    timedOut: false,
+    skipped: true,
+    output: String((opts && opts.reason) || '').slice(0, OUTPUT_CAP),
+  };
+  try { fs.appendFileSync(runsFile(workspace), JSON.stringify(rec) + '\n'); } catch (e) {}
+  return rec;
+}
+
+// lastRunsFor(workspace, wants) -> Map key -> newest trace record, for callers
+// that identify a run by its (hook, trigger) pair rather than by hook alone —
+// a schedule, whose trigger is `schedule:<name>`, so two schedules on one hook
+// each read their OWN last firing. One backward walk for the whole list, the
+// same bounded tail lastRuns() uses.
+function lastRunsFor(workspace, wants) {
+  const out = new Map();
+  if (!wants || !wants.length) return out;
+  scanBack(runsFile(workspace), (rec) => {
+    for (const w of wants) {
+      if (out.has(w.key)) continue;
+      if (rec.hook === w.hook && rec.trigger === w.trigger) out.set(w.key, rec);
+    }
+    return out.size >= wants.length;
+  }, LAST_RUN_BYTES);
+  return out;
+}
+
+// seedHooks(workspace) -> the names it copied. The packaged hooks (this repo's
+// `hooks/`) are installed into a fresh workspace the way the packaged playbooks
+// are: COPIES, and only the ones missing, because a hook is the USER's to edit
+// and an upgrade must never overwrite one. Never throws — an unwritable hooks
+// dir is not a reason to fail an init.
+const PACKAGED_HOOKS_DIR = path.join(__dirname, '..', 'hooks');
+function seedHooks(workspace) {
+  const out = [];
+  const dst = hooksDir(workspace);
+  try {
+    fs.mkdirSync(dst, { recursive: true });
+    for (const name of fs.readdirSync(PACKAGED_HOOKS_DIR).sort()) {
+      if (!NAME_RE.test(name) || fs.existsSync(path.join(dst, name))) continue;
+      const src = path.join(PACKAGED_HOOKS_DIR, name);
+      if (!fs.statSync(src).isFile()) continue;
+      fs.copyFileSync(src, path.join(dst, name));
+      fs.chmodSync(path.join(dst, name), 0o755); // a hook the runner would skip is not a hook
+      out.push(name);
+    }
+  } catch (e) { /* nothing to install into — the board still runs the hooks it has */ }
+  return out;
 }
 
 // scanBack(file, visit, maxBytes) — walk the jsonl BACKWARDS, newest line
@@ -468,6 +570,7 @@ function runTeardown(command, ctx, opts) {
 
 module.exports = {
   runHooks, runTeardown, listHooks, listAllHooks, namedHookFile, runNamedHook, runningHook,
-  readRuns, lastRuns, hookKey, hooksDir, runsFile, HOOK_NAME_RE: NAME_RE, LIFECYCLE_EVENTS,
+  cancelNamedHook, traceSkip, seedHooks, PACKAGED_HOOKS_DIR,
+  readRuns, lastRuns, lastRunsFor, hookKey, hooksDir, runsFile, HOOK_NAME_RE: NAME_RE, LIFECYCLE_EVENTS,
   DEFAULT_TIMEOUT_MS, TEARDOWN_TIMEOUT_MS,
 };

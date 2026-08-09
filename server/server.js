@@ -65,7 +65,10 @@ const crypto = require('crypto');
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
 const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
-  hooksDir, TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE, LIFECYCLE_EVENTS } = require(path.join(__dirname, 'hooks.js'));
+  hooksDir, namedHookFile, cancelNamedHook, traceSkip, lastRunsFor,
+  TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE, LIFECYCLE_EVENTS } = require(path.join(__dirname, 'hooks.js'));
+const { parseWhen, nextAfter, dueWindows, pickWindows, describeWhen, normalizeSchedules,
+  NAME_RE: SCHEDULE_NAME_RE, OVERLAP, CATCHUP } = require(path.join(__dirname, 'schedules.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -294,7 +297,7 @@ function defaultBoard() {
   return {
     title: path.basename(WORKSPACE), subtitle: '', updated: now(), seq: 0,
     columns: COLUMNS, lieutenants: [], cards: [], events: [], labels: [], reads: {}, kinds: {},
-    projects: [], workers: [], line: null,
+    projects: [], workers: [], schedules: [], line: null,
   };
 }
 function normalizeBoard(doc) {
@@ -324,6 +327,11 @@ function normalizeBoard(doc) {
   for (const p of b.projects) delete p.mode;
   if (!Array.isArray(b.workers)) b.workers = [];
   b.workers = b.workers.filter((w) => w && typeof w === 'object' && w.card && isHarnessRef(w.ref));
+  // schedules: the board's own clock. A schedule whose `when` no longer parses
+  // is KEPT (it says so on the schedule, and the tick refuses to fire it) —
+  // dropping it would be a clock that silently loses an entry, which is the
+  // exact failure host cron already had.
+  b.schedules = normalizeSchedules(b.schedules);
   for (const c of b.cards) {
     if (!Array.isArray(c.events)) c.events = [];
     if (!Array.isArray(c.thread)) c.thread = [];
@@ -421,6 +429,12 @@ const BUILTIN_KINDS = {
   'worker-died': { emoji: '💀', level: 2 },
   'hook-ran': { emoji: '🪝', level: 2 },
   'hook-failed': { emoji: '🧨', level: 1 },
+  schedule: { emoji: '⏰', level: 2 },
+  // What the packaged gh-watch hook puts on a card when a check goes red. A
+  // kind is an open token, but the one hook this board ships with earns an
+  // emoji: an unlabelled row on the timeline is the thing nobody reads.
+  'ci-failed': { emoji: '🔴', level: 1 },
+  'schedule-failed': { emoji: '🔔', level: 1 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
   'worker-stalled': { emoji: '🐢', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
@@ -3095,6 +3109,268 @@ async function prWatchTick() {
 }
 if (Number.isInteger(PRWATCH_MS) && PRWATCH_MS > 0) setInterval(prWatchTick, PRWATCH_MS).unref();
 
+// ---------- the clock (schedules; server/schedules.js holds the timing) ----------
+//
+// A schedule fires A HOOK, through `hook run` and nothing else — the clock gets
+// no private door. Everything a firing needs to decide (which card, whether to
+// wake anybody, what to say) is the hook's business, because a hook is bash
+// with `bc-axi` on its PATH.
+//
+// The cursor is `lastWindow`: the DUE TIME of the last window this schedule
+// handled. Windows are a function of that cursor and the clock, so a restart
+// neither loses a due window nor fires one twice — the tick after the boot sees
+// exactly the windows that came due while nobody was looking, and the catch-up
+// policy says what to do with them.
+const SCHEDULE_MS = process.env.BC_SCHEDULE_INTERVAL_MS !== undefined
+  ? parseInt(process.env.BC_SCHEDULE_INTERVAL_MS, 10) : 15000;
+// The line between "missed while the server was down" and "came due while we
+// were watching" — the whole meaning of catch-up `none`.
+const SCHEDULER_BOOT = Date.now();
+
+function findSchedule(name) { return board.schedules.find((s) => s.name === name); }
+// The trace's `trigger` for a firing. It names the SCHEDULE, not just "a
+// schedule": two schedules on one hook each read their own last fire out of
+// hookruns.jsonl, and nobody keeps a second copy of what already happened.
+function scheduleTrigger(s) { return 'schedule:' + s.name; }
+
+// scheduleProblem(s) -> '' or why this schedule cannot fire right now. Checked
+// on EVERY tick, not just at `add`: a hook deleted out from under a live
+// schedule has to make that schedule say so, rather than failing silently every
+// window forever.
+function scheduleProblem(s) {
+  try { parseWhen(s.when); } catch (e) { return e.message; }
+  if (!namedHookFile(WORKSPACE, s.hook)) {
+    return 'hook "' + s.hook + '" is gone from ' + hooksDir(WORKSPACE) + ' — this schedule fires nothing';
+  }
+  if (!findLieutenant(s.owner)) {
+    return 'owner "' + s.owner + '" is not a registered lieutenant — a failure here would land nowhere';
+  }
+  return '';
+}
+
+// A problem is announced ONCE, when it appears, and once when it clears. The
+// board's bell is level 1 because a schedule that stopped firing is exactly the
+// silent failure this card exists to end; a level-2 line marks the recovery.
+// An unregistered owner cannot be woken, so the board stream is all there is.
+function announceScheduleProblem(s, problem) {
+  const text = problem
+    ? 'schedule ' + s.name + ' cannot fire: ' + problem
+    : 'schedule ' + s.name + ' is healthy again';
+  board.events.push(mkEvent({ text, actor: 'server', level: problem ? 1 : 2 },
+    { kind: problem ? 'schedule-failed' : 'schedule' }));
+  if (findLieutenant(s.owner)) {
+    queuePush(s.owner, { kind: 'schedule-failed', schedule: s.name, text,
+      source: 'schedule ' + s.name });
+  }
+}
+
+// A firing that fails lands on its OWNER, carrying the hook's output — never
+// only in a log. The trace already holds the run detail; this is the wake.
+function landScheduleFailure(s, run) {
+  const how = run.timedOut ? 'timed out' : run.error ? String(run.error)
+    : run.code === null ? 'killed' : 'exit ' + run.code;
+  const text = ('schedule ' + s.name + ' — hook ' + s.hook + ' FAILED (' + how + ')'
+    + (run.output ? ':\n' + run.output : '')).slice(0, 2000);
+  board.events.push(mkEvent({ text, actor: 'server' }, { kind: 'schedule-failed' }));
+  if (findLieutenant(s.owner)) {
+    queuePush(s.owner, { kind: 'schedule-failed', schedule: s.name, text,
+      source: 'schedule ' + s.name });
+  }
+  saveBoard(); broadcast();
+}
+
+// recordSkip(s, why) — a firing that did NOT run is still a firing. `skip` that
+// swallows its windows makes a schedule which never runs look exactly like one
+// that is working, so every skipped window gets a line in the same trace the
+// runs land in.
+function recordSkip(s, why) {
+  traceSkip(WORKSPACE, { hook: s.hook, trigger: scheduleTrigger(s), reason: 'skipped: ' + why });
+}
+
+// fireSchedule(s) -> 'ran' | 'skipped' | 'queued' — one window, awaited to the
+// end. The EBUSY here is the OTHER overlap: not this schedule's own previous
+// firing (the tick handles that, below) but somebody else's run of the same
+// hook — the board's ▶, a lieutenant at the CLI, a second schedule. Same
+// policy, because from the window's point of view it is the same situation.
+async function fireSchedule(s) {
+  const trigger = scheduleTrigger(s);
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const run = await runNamedHook(WORKSPACE, s.hook, {}, {
+        trigger, timeoutMs: HOOK_TIMEOUT_MS || 0,
+      });
+      // A run cancelled to make room for another already answered its own
+      // caller; only a genuine failure wakes the owner.
+      if (!run.ok && !run.canceled) landScheduleFailure(s, run);
+      return 'ran';
+    } catch (e) {
+      if (e && e.code === 'ENOHOOK') return 'skipped'; // scheduleProblem says it on the next tick
+      if (!e || e.code !== 'EBUSY') throw e;
+      if (s.overlap === 'queue') return 'queued';
+      if (s.overlap === 'restart' && attempt === 0) {
+        await cancelNamedHook(WORKSPACE, s.hook);
+        continue; // and if someone took the name in that instant, skip below
+      }
+      recordSkip(s, e.message);
+      return 'skipped';
+    }
+  }
+}
+
+// runSchedule(s, windows, cursor) — one schedule's due windows, oldest first,
+// ONE AT A TIME. A catch-up backlog is not an overlap: `all` over a weekend
+// means fire each of those windows, in order, and the next one starts when the
+// last one is done. Runs outside the tick, which decides and never waits.
+const firing = new Set();
+async function runSchedule(s, windows, cursorMs) {
+  let cursor = cursorMs;
+  try {
+    for (const w of windows) {
+      const outcome = await fireSchedule(s);
+      if (outcome === 'queued') { cursor = w - 1; break; } // re-offered next tick
+    }
+  } catch (e) {
+    console.error(now() + ' schedule ' + s.name + ' failed to fire: ' + String((e && e.message) || e));
+  } finally {
+    // The cursor advances even for a firing that threw: at-least-once belongs to
+    // delivery, and a schedule that retries a broken hook every tick forever is
+    // a wake storm, not a recovery. The trace and the owner's drain hold what
+    // happened.
+    const live = findSchedule(s.name);
+    if (live) live.lastWindow = new Date(cursor).toISOString();
+    saveBoard(); broadcast();
+  }
+}
+
+// The overlap POLICY: a window came due while this schedule's PREVIOUS firing
+// is still running. It is a policy over `hook run`'s refusal, not a second
+// opinion about what is running — the five-minute poll that takes six minutes
+// is the case, and all three answers are defensible depending on the hook.
+//
+//   skip     don't run — and record every window it dropped
+//   queue    leave the cursor where it is; the window is re-offered when the
+//            firing in flight finishes. It survives a restart because the
+//            cursor is board state, not a list in memory
+//   restart  kill what is running (the whole process group, traced as canceled)
+//            and let the next tick start the window that displaced it
+// Returns true when the cursor was moved.
+function overlapPolicy(s, due) {
+  if (s.overlap === 'queue') return false;
+  if (s.overlap === 'restart') {
+    cancelNamedHook(WORKSPACE, s.hook).catch(() => {});
+    return false;
+  }
+  for (const w of due) recordSkip(s, 'the previous firing (window ' + new Date(w).toISOString() + ') is still running');
+  s.lastWindow = new Date(due[due.length - 1]).toISOString();
+  return true;
+}
+
+let scheduleTicking = false;
+async function scheduleTick() {
+  if (scheduleTicking) return;
+  scheduleTicking = true;
+  try {
+    let changed = false;
+    const nowMs = Date.now();
+    for (const s of [...board.schedules]) {
+      const problem = scheduleProblem(s);
+      if (problem !== s.problem) {
+        // A paused schedule still reports a problem it has — you pause a clock,
+        // you do not stop wanting to know its hook was deleted — but announcing
+        // it would be a wake nobody asked for.
+        if (!s.paused) announceScheduleProblem(s, problem);
+        s.problem = problem;
+        changed = true;
+      }
+      if (problem || s.paused) continue;
+      const when = parseWhen(s.when);
+      const anchor = Date.parse(s.created) || 0;
+      // A schedule that has never fired starts its cursor HERE: `add` is not a
+      // firing, and a fresh 5m schedule that fired the instant it was created
+      // would make every `add` a surprise.
+      if (!s.lastWindow) { s.lastWindow = new Date(nowMs).toISOString(); changed = true; continue; }
+      const due = dueWindows(when, Date.parse(s.lastWindow), nowMs, anchor);
+      if (!due.length) continue;
+      // Its own previous firing is still running: that is what `overlap` is for.
+      if (firing.has(s.name)) { if (overlapPolicy(s, due)) changed = true; continue; }
+      const { fire, dropped } = pickWindows(due, s.catchup, SCHEDULER_BOOT);
+      if (dropped) {
+        // No silent caps: a policy that drops windows says how many, so `all`
+        // hitting its ceiling is never mistaken for full coverage.
+        console.error(now() + ' schedule ' + s.name + ': ' + dropped + ' due window(s) not fired (catch-up '
+          + s.catchup + ')');
+      }
+      firing.add(s.name);
+      const cursor = due[due.length - 1];
+      // Deliberately not awaited: the tick's job is to decide, not to wait out
+      // a hook. Every window still fires in order, one at a time, per schedule.
+      runSchedule(s, fire, cursor).finally(() => firing.delete(s.name));
+    }
+    if (changed) { saveBoard(); broadcast(); }
+  } catch (e) {
+    console.error(now() + ' schedule tick failed: ' + String((e && e.message) || e));
+  } finally {
+    scheduleTicking = false;
+  }
+}
+if (Number.isInteger(SCHEDULE_MS) && SCHEDULE_MS > 0) setInterval(scheduleTick, SCHEDULE_MS).unref();
+
+// What `schedule list` and `schedule show` read: the stored schedule plus the
+// two things that make it trustworthy — when it fires next, and how it last
+// went. The last fire comes off hookruns.jsonl (one backward walk for the whole
+// list); there is no second copy of a run anywhere on this board.
+function publicSchedules() {
+  const last = lastRunsFor(WORKSPACE, board.schedules.map((s) => ({
+    key: s.name, hook: s.hook, trigger: scheduleTrigger(s),
+  })));
+  return board.schedules.map((s) => {
+    let next = null;
+    try {
+      const when = parseWhen(s.when);
+      const from = Date.parse(s.lastWindow) || Date.now();
+      const t = nextAfter(when, from, Date.parse(s.created) || 0);
+      next = t ? new Date(t).toISOString() : null;
+    } catch (e) { /* an unparseable `when` has no next fire — `problem` says why */ }
+    return Object.assign({}, s, { next, last: last.get(s.name) || null, describe: describeWhenSafe(s.when) });
+  });
+}
+function describeWhenSafe(text) {
+  try { return describeWhen(parseWhen(text)); } catch (e) { return String(text || ''); }
+}
+
+// validateSchedule(body, existing?) -> {error} | {schedule}
+// The refusals are the point of `add`: a bad expression names the offending
+// text, a hook that is not there is refused before it can become a dead window
+// every five minutes, and an unregistered owner is refused because a firing's
+// failure would land nowhere.
+function validateSchedule(body, existing) {
+  const name = String(body.name || '').trim();
+  if (!SCHEDULE_NAME_RE.test(name)) {
+    return { error: 'bad schedule name "' + name + '" (letters, digits, _ . - ; starts with a letter, digit or _)' };
+  }
+  if (!existing && findSchedule(name)) return { error: 'schedule "' + name + '" already exists', status: 409 };
+  const hook = String(body.hook || '').trim();
+  if (!HOOK_NAME_RE.test(hook)) return { error: 'a schedule fires a NAMED hook — give one with --hook' };
+  if (!namedHookFile(WORKSPACE, hook)) {
+    return { error: 'no hook "' + hook + '" — a named hook is an executable file in ' + hooksDir(WORKSPACE)
+      + ' (bc-axi hook list). A schedule naming a hook that does not exist is a window that fires nothing' };
+  }
+  let when;
+  try { when = parseWhen(body.when); } catch (e) { return { error: e.message }; }
+  const owner = String(body.owner || '').trim();
+  if (!findLieutenant(owner)) {
+    return { error: 'unknown lieutenant "' + owner + '" — a schedule needs an owner for its failures to land on' };
+  }
+  const overlap = body.overlap === undefined || body.overlap === null || body.overlap === ''
+    ? 'skip' : String(body.overlap);
+  if (!OVERLAP.includes(overlap)) return { error: 'overlap must be one of: ' + OVERLAP.join(', ') };
+  const catchup = body.catchup === undefined || body.catchup === null || body.catchup === ''
+    ? 'latest' : String(body.catchup);
+  if (!CATCHUP.includes(catchup)) return { error: 'catch-up must be one of: ' + CATCHUP.join(', ') };
+  return { schedule: { name, hook, when: when.text, owner, overlap, catchup,
+    paused: false, created: now(), lastWindow: '', problem: '' } };
+}
+
 // ---------- static ui ----------
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
@@ -4050,6 +4326,57 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, 200, {
         runs: readRuns(WORKSPACE, { hook: url.searchParams.get('hook') || '', limit }),
       });
+    }
+
+    // ----- schedules (the board's own clock) -----
+    // A schedule is board state, so it rides board.json into git with everything
+    // else — which is the whole difference from the host cron it replaces.
+    if (route === 'GET /api/schedules') {
+      return sendJson(res, 200, { schedules: publicSchedules() });
+    }
+    if (route === 'POST /api/schedules') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const v = validateSchedule(body);
+      if (v.error) return sendJson(res, v.status || 400, { error: v.error });
+      board.schedules.push(v.schedule);
+      board.events.push(mkEvent({
+        text: 'schedule ' + v.schedule.name + ' added — hook ' + v.schedule.hook + ', '
+          + describeWhenSafe(v.schedule.when) + ', owner ' + v.schedule.owner,
+        actor: String(body.actor || 'agent'), level: 2,
+      }, { kind: 'schedule' }));
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true, schedule: publicSchedules().find((s) => s.name === v.schedule.name) });
+    }
+    const schedRoute = /^\/api\/schedules\/([^/]+)$/.exec(p);
+    if (schedRoute) {
+      const name = decodeURIComponent(schedRoute[1]);
+      const s = findSchedule(name);
+      if (!s) return sendJson(res, 404, { error: 'unknown schedule: ' + name });
+      if (req.method === 'GET') {
+        // The firings come off the trace — the run detail is already there, and
+        // a second copy on the schedule would be a second truth.
+        const limit = Math.min(parseInt(url.searchParams.get('limit') || '10', 10) || 10, 200);
+        const runs = readRuns(WORKSPACE, { hook: s.hook, limit: limit * 20 })
+          .filter((r) => r.trigger === scheduleTrigger(s)).slice(0, limit);
+        return sendJson(res, 200, { schedule: publicSchedules().find((x) => x.name === name), runs });
+      }
+      if (req.method === 'PATCH') {
+        const body = JSON.parse(await readBody(req) || '{}');
+        if (typeof body.paused !== 'boolean') return sendJson(res, 400, { error: 'only {paused: true|false} is patchable' });
+        // Resuming re-arms the cursor at NOW: a schedule paused over the weekend
+        // is paused, not queued, and must not wake up owing sixty windows.
+        if (s.paused && !body.paused) s.lastWindow = now();
+        s.paused = body.paused;
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, schedule: publicSchedules().find((x) => x.name === name) });
+      }
+      if (req.method === 'DELETE') {
+        board.schedules = board.schedules.filter((x) => x.name !== name);
+        board.events.push(mkEvent({ text: 'schedule ' + name + ' removed', actor: 'agent', level: 2 },
+          { kind: 'schedule' }));
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true });
+      }
     }
 
     // ----- board-level events (free-form notify) -----

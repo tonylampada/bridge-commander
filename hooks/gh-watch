@@ -1,0 +1,93 @@
+#!/bin/bash
+# gh-watch — the first schedule, and the reason the clock exists.
+#
+# We open pull requests and then stop watching them. The day this was written
+# GitHub Actions had a major outage: a pipeline opened a PR, no workflow ever
+# dispatched, and nobody would have found out until a human opened the page.
+#
+# So: every five minutes, ask `gh` about the checks on the `bc/` branch of every
+# live card, and wake that card's OWNER when one is red — with the check name and
+# the link, on the card's own timeline. Green is silent.
+#
+# One red check must not become sixty wakes, and it does not: `bc-axi event --key`
+# is at-most-once per card for seven days, and the key carries the check's run
+# LINK — so a re-run of the same check after a new push is a new failure and does
+# wake, while the same failure seen twelve times an hour is written once.
+#
+# A hook is bash with bc-axi on its PATH. That is the whole API.
+#
+#   BC_GH_CMD   the gh binary (default `gh`)
+#
+# Exit code is about THIS SCRIPT, never about the checks: a red check is the hook
+# working, and it says so through the wake. Non-zero here means the hook could
+# not do its job, which is what lands a failure on the schedule's owner.
+set -uo pipefail
+
+GH="${BC_GH_CMD:-gh}"
+
+if ! command -v "$GH" >/dev/null 2>&1; then
+  echo "gh is not installed — nothing to watch"
+  exit 0
+fi
+
+board=$(bc-axi board --json) || { echo "cannot read the board" >&2; exit 1; }
+
+# Live cards with a bc/ branch and a registered repo to ask gh from.
+# node, not jq: the board speaks JSON and node is what runs it — jq is a
+# dependency this workspace has never required.
+targets=$(printf '%s' "$board" | node -e '
+let s = "";
+process.stdin.on("data", (c) => { s += c; }).on("end", () => {
+  const b = JSON.parse(s);
+  const repos = Object.create(null);
+  for (const p of b.projects || []) repos[p.name] = p.path;
+  for (const c of b.cards || []) {
+    const a = c.attributes || {};
+    const branch = String(a.branch || "");
+    if (!branch.startsWith("bc/")) continue;
+    const repo = repos[String(a.repo || "")] || "";
+    if (!repo) continue;
+    process.stdout.write([c.id, branch, repo].join("\t") + "\n");
+  }
+});') || { echo "cannot read the board" >&2; exit 1; }
+
+if [ -z "$targets" ]; then
+  echo "no live card has a bc/ branch — nothing to watch"
+  exit 0
+fi
+
+watched=0
+red=0
+while IFS=$'\t' read -r card branch repo; do
+  [ -n "$card" ] || continue
+  watched=$((watched + 1))
+  # Exit code is deliberately ignored: gh exits non-zero for pending (8) and for
+  # failing (1) checks, and both are answers, not errors. No PR for the branch
+  # prints nothing parseable and falls through as "nothing to say".
+  checks=$(cd "$repo" && "$GH" pr checks "$branch" --json name,bucket,link 2>/dev/null)
+  [ -n "$checks" ] || continue
+
+  failures=$(printf '%s' "$checks" | node -e '
+let s = "";
+process.stdin.on("data", (c) => { s += c; }).on("end", () => {
+  let rows;
+  try { rows = JSON.parse(s); } catch (e) { return; }
+  if (!Array.isArray(rows)) return;
+  const clean = (v) => String(v == null ? "" : v).replace(/[\t\n\r]+/g, " ").trim();
+  for (const r of rows) {
+    if (!r || r.bucket !== "fail") continue;
+    process.stdout.write([clean(r.name), clean(r.link)].join("\t") + "\n");
+  }
+});') || continue
+
+  [ -n "$failures" ] || continue
+  while IFS=$'\t' read -r name link; do
+    [ -n "$name" ] || continue
+    red=$((red + 1))
+    printf 'check "%s" is RED on %s (%s)\n%s\n' "$name" "$branch" "$card" "$link" \
+      | bc-axi event "$card" --level 1 --kind ci-failed --wake-owner \
+          --source gh-watch --key "gh-watch:$name:$link" --text-file -
+  done <<< "$failures"
+done <<< "$targets"
+
+echo "$watched branch(es) watched, $red red check(s)"
