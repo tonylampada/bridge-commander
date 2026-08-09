@@ -59,7 +59,9 @@ directly checks nothing and destroys his edit silently. A write that lands also 
 open editor live, with the changed lines marked — that is why the door is worth using even
 when nobody is racing you. Hand a worker an artifact to edit and this goes in its brief.
 
-**Scope: only files under joint editing** — card artifacts. Worktree code, reports, notes,
+**Scope: only files under joint editing** — card artifacts, plus the board-owned files the same
+screen edits: a workspace playbook, your charter, a hook (the README's *Hooks* section shows
+writing the first one, which is this same door). Worktree code, reports, notes,
 anything nobody has open on the board: ordinary files, ordinary tools. There is no general
 rule here and there should not be one.
 
