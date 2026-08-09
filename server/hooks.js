@@ -39,7 +39,9 @@
 // RESULTS, not errors).
 //
 // Context reaches the script via env (empty string when not applicable):
-//   BC_EVENT     the event name (worker-done | worker-died | card-archived | teardown)
+//   BC_EVENT     what this is running as: the lifecycle event (worker-done |
+//                worker-died | card-archived | teardown) — or, for a named hook,
+//                its own name (see bcEnv)
 //   BC_CARD      card id
 //   BC_REPO      project repo path (the registered clone)
 //   BC_WORKTREE  absolute worker worktree path (empty once it was released)

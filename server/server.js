@@ -3301,9 +3301,12 @@ const server = http.createServer(async (req, res) => {
         'X-Content-Type-Options': 'nosniff',
       });
     }
-    // Artifact serve, for the UI's popup viewer. Only a uri listed verbatim in
-    // some live card's attributes.artifacts is servable — never an arbitrary
-    // file read. Default (no raw): TEXT content of the file. raw=1: the raw
+    // Artifact serve, for the UI's popup viewer. Servable is a uri listed
+    // verbatim in some live card's attributes.artifacts, or one of the
+    // workspace-owned files the same screen edits (playbookSource, charterFile,
+    // hookTarget) — never an arbitrary file read. Same allowlist the write below
+    // uses, plus the packaged playbooks, which are read-only.
+    // Default (no raw): TEXT content of the file. raw=1: the raw
     // bytes with a real Content-Type, backing the inline <img> and downloads.
     if (route === 'GET /api/artifact') {
       const uri = url.searchParams.get('uri') || '';
@@ -3392,9 +3395,9 @@ const server = http.createServer(async (req, res) => {
     // the auth boundary), so every guard below is load-bearing:
     //   - the uri must ALREADY be listed on a live card, or be a WORKSPACE
     //     playbook (playbookSource), or a registered lieutenant's charter
-    //     (charterFile) — the GET's allowlist minus the packaged playbooks,
-    //     which are read-only. Anything else is 403, and there is no flag to
-    //     turn it off;
+    //     (charterFile), or a hook file (hookTarget) — the GET's allowlist minus
+    //     the packaged playbooks, which are read-only. Anything else is 403, and
+    //     there is no flag to turn it off;
     //   - file:// only, absolute, no `..` (path.resolve is idempotent on a
     //     clean absolute path), and no symlink anywhere along it (realpath must
     //     come back unchanged), so a listed artifact can never be a door to
