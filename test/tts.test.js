@@ -167,6 +167,70 @@ test('a client abort reaches the engine', async () => {
   } finally { await s.stop(); await engine.stop(); }
 });
 
+// An engine that dies mid-response is a truncation, not a hang: the error lands
+// on the upstream RESPONSE, not on the request, and the browser has to see it —
+// a stuck fetch would leave the speech queue draining forever.
+test('an engine that dies after the headers truncates the client, it does not hang it', async () => {
+  const engine = await startEngine((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    res.write('first');
+    setTimeout(() => req.socket.destroy(), 100);        // synthesis dies mid-stream
+  });
+  const s = await startServer({ seed: seedConfig({ tts: { url: engine.url } }) });
+  try {
+    const r = await fetch(s.base + '/api/tts/v1/audio/speech', { method: 'POST', body: '{}' });
+    const reader = r.body.getReader();
+    assert.equal(Buffer.from((await reader.read()).value).toString(), 'first');
+    const ended = reader.read().then(() => 'closed', () => 'errored');
+    assert.notEqual(await Promise.race([ended, sleep(3000).then(() => 'hung')]), 'hung');
+  } finally { await s.stop(); await engine.stop(); }
+});
+
+// The gap is between BYTES, never a cap on the whole request.
+test('an engine that goes quiet past the gap is hung up on', async () => {
+  const engine = await startEngine((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    res.write('first');                                  // ...and then nothing, ever
+  });
+  const s = await startServer({
+    seed: seedConfig({ tts: { url: engine.url } }),
+    env: { BC_TTS_IDLE_MS: '400' },
+  });
+  try {
+    const t0 = Date.now();
+    const r = await fetch(s.base + '/api/tts/v1/audio/speech', { method: 'POST', body: '{}' });
+    const reader = r.body.getReader();
+    assert.equal(Buffer.from((await reader.read()).value).toString(), 'first');
+    const ended = reader.read().then(() => 'closed', () => 'errored');
+    assert.notEqual(await Promise.race([ended, sleep(5000).then(() => 'hung')]), 'hung');
+    assert.ok(Date.now() - t0 >= 400, 'hung up before the gap had elapsed');
+  } finally { await s.stop(); await engine.stop(); }
+});
+
+// The other half of the same rule: a slow engine that keeps trickling runs well
+// past the gap and is left alone. A total-time cap would cut this one off.
+test('an engine that keeps trickling past the gap is not cut off', async () => {
+  const engine = await startEngine((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    let n = 0;
+    const timer = setInterval(() => {
+      if (++n > 10) { clearInterval(timer); return res.end('done'); }
+      res.write('.');                                    // every 150ms, for 1.5s
+    }, 150);
+    res.on('close', () => clearInterval(timer));
+  });
+  const s = await startServer({
+    seed: seedConfig({ tts: { url: engine.url } }),
+    env: { BC_TTS_IDLE_MS: '400' },
+  });
+  try {
+    const t0 = Date.now();
+    const r = await fetch(s.base + '/api/tts/v1/audio/speech', { method: 'POST', body: '{}' });
+    assert.equal(await r.text(), '..........done');
+    assert.ok(Date.now() - t0 > 400, 'the engine did not actually outlast the gap');
+  } finally { await s.stop(); await engine.stop(); }
+});
+
 // No engine, no route: the board is exactly as silent as it is today.
 test('no tts block: the proxy path is a plain 404', async () => {
   const s = await startServer({ seed: seedConfig({ voices: ['Luciana'] }) });
