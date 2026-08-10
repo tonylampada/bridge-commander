@@ -428,6 +428,10 @@ function createDevServer(opts) {
       if (route === 'GET /api/board') return sendJson(res, 200, publicBoard());
       // Same shape the real server sends (server.js ttsConfig): no tts key at
       // all when there is no engine, so the UI sees exactly what it sees today.
+      // One difference on purpose: the real server hands the browser its own
+      // proxy prefix (/api/tts) and reaches the engine itself; the playground
+      // has no proxy and hands over the engine address raw, so the engine has
+      // to allow this origin (CORS).
       if (route === 'GET /api/config') {
         const cfg = { voices: null };
         if (ttsUrl) cfg.tts = { enabled: true, url: ttsUrl, lang: 'pt', voice: null, params: {} };
