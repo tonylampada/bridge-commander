@@ -20,6 +20,13 @@
 // every one after it. A request may legitimately run for minutes as long as
 // bytes keep arriving; a total-time cap would truncate every long response and
 // is exactly the wrong shape here.
+//
+// It measures ONE thing: the upstream has gone quiet. It deliberately does not
+// measure a slow CLIENT. A client behind on its reading pauses the upstream
+// stream (backpressure), and a client still uploading its request has not asked
+// the upstream for anything yet — in both cases the silence is ours, not the
+// engine's, so the deadline re-arms instead of firing. The connection is cut
+// only when the upstream is quiet AND the client is keeping up.
 const http = require('http');
 const https = require('https');
 
@@ -49,9 +56,13 @@ function proxyTts(req, res, engine, rest) {
     res.writeHead(502, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ error: String((e && e.message) || e) }));
   };
+  const ourSilence = () => !req.readableEnded || res.writableNeedDrain || res.writableLength > 0;
   const arm = () => {
     disarm();
-    timer = setTimeout(() => fail(new Error('no bytes from upstream for ' + IDLE_MS + 'ms')), IDLE_MS);
+    timer = setTimeout(() => {
+      if (ourSilence()) return arm();
+      fail(new Error('no bytes from upstream for ' + IDLE_MS + 'ms'));
+    }, IDLE_MS);
   };
   const up = mod.request(target, { method: req.method, headers }, (r) => {
     res.writeHead(r.statusCode, r.headers);

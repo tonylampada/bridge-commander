@@ -221,13 +221,47 @@ test('an engine that keeps trickling past the gap is not cut off', async () => {
   });
   const s = await startServer({
     seed: seedConfig({ tts: { url: engine.url } }),
-    env: { BC_TTS_IDLE_MS: '400' },
+    env: { BC_TTS_IDLE_MS: '1000' },
   });
   try {
     const t0 = Date.now();
     const r = await fetch(s.base + '/api/tts/v1/audio/speech', { method: 'POST', body: '{}' });
     assert.equal(await r.text(), '..........done');
-    assert.ok(Date.now() - t0 > 400, 'the engine did not actually outlast the gap');
+    assert.ok(Date.now() - t0 > 1000, 'the engine did not actually outlast the gap');
+  } finally { await s.stop(); await engine.stop(); }
+});
+
+// The deadline is about the ENGINE going quiet, never about a slow client. A
+// phone on a thin link stops draining, backpressure pauses the upstream stream,
+// and no bytes arrive for seconds — that is our silence, not the engine's, and
+// hanging up on it would kill exactly the case this proxy exists for.
+test('a client that stops draining is not mistaken for a quiet engine', async () => {
+  const CHUNK = 64 * 1024;
+  const CHUNKS = 128;
+  const engine = await startEngine((req, res) => {
+    res.writeHead(200, { 'Content-Type': 'audio/wav' });
+    let n = 0;
+    const timer = setInterval(() => {
+      if (++n > CHUNKS) { clearInterval(timer); return res.end(); }
+      res.write(Buffer.alloc(CHUNK, 'a'));               // still synthesizing, happily
+    }, 2);
+    res.on('close', () => clearInterval(timer));
+  });
+  const s = await startServer({
+    seed: seedConfig({ tts: { url: engine.url } }),
+    env: { BC_TTS_IDLE_MS: '500' },
+  });
+  try {
+    const r = await fetch(s.base + '/api/tts/v1/audio/speech', { method: 'POST', body: '{}' });
+    const reader = r.body.getReader();
+    let got = (await reader.read()).value.length;
+    await sleep(2000);                                   // four gaps, reading nothing
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      got += value.length;
+    }
+    assert.equal(got, CHUNK * CHUNKS);
   } finally { await s.stop(); await engine.stop(); }
 });
 
