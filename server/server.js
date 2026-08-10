@@ -76,6 +76,7 @@ const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.jo
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
 const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
+const { proxyTts } = require(path.join(__dirname, 'ttsproxy.js'));
 const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
@@ -176,11 +177,9 @@ const ARTIFACT_MIME = {
 };
 
 const DEFAULT_PORT = 4780;
-// External TTS proxy timeouts — a hanging engine must never hang the board.
-// The speech deadline is on SILENCE, never on the whole request: audio streams in
-// for as long as synthesis runs (~34 s for the 1200 characters the UI sends), so a
-// cap on the total would truncate every long message. This is the gap allowed
-// before the first chunk and between any two after it.
+// The one prefix the TTS engine is served under, both ends of it: what the
+// browser is handed as its engine address, and what the proxy strips.
+const TTS_PREFIX = '/api/tts';
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
   try {
@@ -196,11 +195,14 @@ function userConfig() {
     const voices = c.voices.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
     if (voices.length) out.voices = voices;
   }
-  // The browser IS the engine's client — url and defaults go to it whole. No tts
-  // config => no tts key => the UI is byte-for-byte what it was before this
-  // feature existed.
+  // The browser is the engine's client, through us: it gets the defaults whole
+  // and, for the address, the board's own proxy prefix. A relative base resolves
+  // against whatever origin the page came from, so the phone off the tailnet and
+  // the https page both reach the engine, and the real engine address stays the
+  // server's business. No tts config => no tts key => the UI is byte-for-byte
+  // what it was before this feature existed.
   const t = ttsConfig();
-  if (t) out.tts = Object.assign({ enabled: true }, t);
+  if (t) out.tts = Object.assign({ enabled: true }, t, { url: TTS_PREFIX });
   return out;
 }
 // External TTS engine (voxbench API), optional: config.json
@@ -3713,6 +3715,15 @@ const server = http.createServer(async (req, res) => {
     // ----- reads -----
     if (route === 'GET /api/board') return sendJson(res, 200, publicBoard(url.searchParams.get('user') || 'user'));
     if (route === 'GET /api/config') return sendJson(res, 200, userConfig());
+    // ----- the TTS engine, on the board's own origin -----
+    // Any method, any path under the prefix, streamed both ways. No engine
+    // configured means no route at all: this falls through to the ordinary 404
+    // and the board is as silent as it is with no tts block.
+    if (p === TTS_PREFIX || p.startsWith(TTS_PREFIX + '/')) {
+      const t = ttsConfig();
+      // p, not a decoded path: what the browser encoded is what the engine gets.
+      if (t) return proxyTts(req, res, t.url, p.slice(TTS_PREFIX.length) + url.search);
+    }
     if (route === 'GET /api/status') {
       let pending = 0;
       for (const lt of queueIds()) pending += pendingItems(lt).length;
