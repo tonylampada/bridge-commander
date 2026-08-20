@@ -4693,12 +4693,23 @@ const server = http.createServer(async (req, res) => {
         // A free-form lieutenant message in its main chat is a level-1 notification.
         const ev = mkEvent({ text: text.slice(0, 200), actor: msg.author, level: body.level, kind: body.kind }, { level: 1 });
         board.events.push(ev);
+        // A PEER's message into another lieutenant's main chat must also be
+        // DELIVERED to that lieutenant: the chat append alone notifies nobody
+        // (same rule as the non-owner card-thread say above). Without this,
+        // lieutenant→lieutenant orders sit in the chat unread forever.
+        const fromPeer = !!(caller && lt && caller.id !== lt.id);
+        if (fromPeer) {
+          queuePush(lt.id, { kind: 'peer-message', target, author: msg.author,
+            text: text.slice(0, 4000), attachments });
+        }
         // …and it is the last voice the captain heard, so the line follows it:
         // an answer over the line keeps the line, and a lieutenant that speaks
         // up on its own becomes who he reaches when he answers with the screen
         // off. Card threads never move it — they are a board surface, read with
-        // eyes on a picker, not the channel with no picker.
-        if (lt) lineFollow(lt.id);
+        // eyes on a picker, not the channel with no picker. A peer's post is
+        // the PEER speaking, not the chat's owner — the line must not follow
+        // the silent recipient.
+        if (lt && !fromPeer) lineFollow(lt.id);
       }
       saveBoard(); broadcast(); // owed clears on ACK, not here — the reply alone leaves it derived from the queue
       return sendJson(res, 200, { ok: true });

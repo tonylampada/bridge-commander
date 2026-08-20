@@ -1654,6 +1654,9 @@ async function cmdDrain() {
     } else if (it.kind === 'message') {
       head = 'captain message (your main chat)';
       hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
+    } else if (it.kind === 'peer-message') {
+      head = 'message from ' + (it.author || 'a fellow lieutenant') + ' (your main chat)';
+      hint = 'a colleague wrote in your chat — act on it; reply in THEIR chat: bc-axi say lieutenant:<their-id> --text-file <f|->';
     } else if (it.kind === 'line-passed') {
       head = 'YOU ARE ON THE LINE — passed by ' + (it.from || 'user');
       hint = 'greet him in ONE spoken line before anything else (bc-axi say lieutenant:' + it.lieutenant
