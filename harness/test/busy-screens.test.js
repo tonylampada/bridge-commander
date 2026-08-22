@@ -17,7 +17,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 
-const { BUSY } = require(path.join(__dirname, '..', 'claude-tmux.js'));
+const { BUSY, SETTLE } = require(path.join(__dirname, '..', 'claude-tmux.js'));
 const { paneTail } = require(path.join(__dirname, '..', 'tmux-session.js'));
 
 // The harness never asks these questions of a whole capture — the current
@@ -250,6 +250,34 @@ const BUSY_QUEUED = `
 ❯ Press up to edit queued messages
 ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
   Opus 5 | █░░░░░░░░░░░░░░░░░░░ 5% | 53k/1000k | 5h 8% (2h36m) | 7d 22% (2d4h)
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+
+// THE COUNTER-EXAMPLE. Not one more sample — the frame that proved the shape
+// wrong, lifted verbatim from settle-screens.test.js's READY fixture, where it
+// had been sitting in this repo the whole time.
+//
+// The label was pinned to a SINGLE word because every frame anybody had sampled
+// happened to carry one, and an accident of sampling was written down as if it
+// were the contract. `Compacting conversation…` is two words, so this screen —
+// a real session mid-compaction — read as IDLE, and /output-style would have
+// killed the compaction it exists to protect. /compact is a pass-through the
+// same command list offers, so "compact, then restyle" is not a contrived
+// sequence; it is a Tuesday.
+//
+// It also carries the other lesson, and the tests below keep it: READY and BUSY
+// are ORTHOGONAL axes over one screen, not opposites. This pane's main UI is up
+// — all readyRe asks — AND it is mid-turn. A busy screen is not "not ready".
+const BUSY_COMPACTING = `
+✻ Cooked for 22s
+
+❯ /compact
+
+* Compacting conversation…
+───────────────────────────────────────────────────────────────────────
+❯
+───────────────────────────────────────────────────────────────────────
+  Opus 5 | █████░░░░░░░░░░░░░░░ 27% | 270k/1000k | 5h 5% (3h17m) | 7d…
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
 `;
 
@@ -495,8 +523,34 @@ test('the shape after the ellipsis is pinned too: a progress note, or nothing', 
   assert.ok(BUSY.spinnerRe.test('✻ Working…'), 'bare form, end of line');
   assert.ok(!BUSY.spinnerRe.test('✻ Loading… done'),
     'prose after the ellipsis is a sentence, not a spinner');
-  assert.ok(!BUSY.spinnerRe.test('✻ Compacting conversation…'),
-    'two words is not the measured spinner shape');
+  // What separates `Loading… done` from `Compacting conversation…` is not how
+  // many words precede the ellipsis — it is what FOLLOWS it. A spinner ends
+  // there, or continues into a ` (` progress note. Prose carries on.
+  assert.ok(BUSY.spinnerRe.test('✻ Compacting conversation…'),
+    'the label may carry spaces — pinning it to one word was an accident of sampling');
+});
+
+test('a session mid-COMPACTION is busy — the frame that proved the one-word label wrong', () => {
+  assert.ok(busy(BUSY_COMPACTING),
+    'this screen sat in the repo reading as idle; a cycle here loses the compaction');
+  assert.ok(BUSY.spinnerRe.test('* Compacting conversation…'),
+    '* is a spinner glyph like any other — the class excludes the markers that mean something');
+});
+
+test('READY and BUSY are orthogonal: a mid-compaction pane is both', () => {
+  // Nothing here relaxes settle's own expectations, and nothing may: readyRe
+  // asks "is the main UI up", which on this screen is simply yes. The busy axis
+  // is added ALONGSIDE it. Reading "ready" as "idle" is how a cycle lands on a
+  // session that is working.
+  assert.ok(SETTLE.readyRe.test(BUSY_COMPACTING), 'the main UI is up');
+  assert.ok(busy(BUSY_COMPACTING), 'and it is mid-turn at the same time');
+});
+
+test('the truncated status footer is not a spinner — it is INDENTED', () => {
+  // Same fixture, two lines down. The footer abbreviates itself with the very
+  // same U+2026, and only the column-zero anchor turns it away. A cheap guard
+  // against the anchor being loosened later.
+  assert.ok(!BUSY.spinnerRe.test('  Opus 5 | █████░░░░░░░░░░░░░░░ 27% | 270k/1000k | 5h 5% (3h17m) | 7d…'));
 });
 
 test('the past-tense spinner is never mistaken for the live one', () => {

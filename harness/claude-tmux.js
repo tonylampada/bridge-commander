@@ -115,10 +115,10 @@ const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, f
 //   idle   `✻ Baked for 1s`, `✻ Sautéed for 1s`, or no spinner line at all
 //
 // What holds across every frame sampled is the SHAPE, and only the shape: the
-// rotating spinner glyph, one space, one gerund, U+2026, and then either the
-// end of the line or a ` (` progress note — against `<PastTense> for <N>s` once
-// the turn is done. Three things it is deliberately NOT built on:
-//   - not the glyph itself. It rotates over at least ✻ ✶ ✳ ✽ ·, and a matcher
+// rotating spinner glyph, one space, the label, U+2026, and then either the end
+// of the line or a ` (` progress note — against `<PastTense> for <N>s` once the
+// turn is done. Four things it is deliberately NOT built on:
+//   - not the glyph itself. It rotates over at least ✻ ✶ ✳ ✽ · *, and a matcher
 //     built from the glyphs that had been SEEN missed ✽ the first time out. So
 //     the class EXCLUDES the markers that do have a fixed meaning — ● assistant,
 //     ❯ user echo and composer, ⎿ tool detail and tips, ⚠ warning, and the box
@@ -126,8 +126,19 @@ const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, f
 //     reads as a spinner; a marker with a job never does.
 //   - not the word. It is randomised (Working, Churning, Tinkering,
 //     Prestidigitating, Accomplishing, …); there is no list to hold.
+//   - not the NUMBER of words either, and that one cost a real screen: the
+//     label was pinned to a single word because every sampled frame happened to
+//     have one, and `* Compacting conversation…` — a frame already sitting in
+//     this repo's own settle fixtures — read as idle. /compact is a
+//     pass-through this same command list offers, so "compact, then restyle" is
+//     an ordinary sequence, and calling that screen idle kills the compaction
+//     this check exists to protect. The label may carry spaces.
 //   - NOT "esc to interrupt". UI_READY_RE still names it, but this build never
 //     renders it — ~100 frames across several turns, not once.
+//
+// Where the shape is ambiguous it resolves to BUSY. This guards a destructive
+// act, and the two errors do not cost the same: a refusal is retried in five
+// seconds, a killed turn is not retried at all.
 //
 // Every part of the anchor is there because something real walked through a
 // looser one, and both of these refuse an IDLE session, which is the direction
@@ -140,8 +151,11 @@ const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, f
 //     was captured on a fully idle pane: column zero, plain space, U+2026 in
 //     the first word. It is turned away twice over — by its ● marker, and by
 //     the text that follows the ellipsis where a progress note or a line end
-//     has to be. Ellipses are common prose, so this is not a corner.
-const BUSY_SPINNER_RE = /^[^\s●❯⎿⚠│─╭╮╰╯]\x20\p{L}+…(?:\x20\(|[\x20\t]*$)/mu;
+//     has to be. Ellipses are common prose, so this is not a corner, and it is
+//     the negative the multi-word label has to keep rejecting.
+//   - the status footer truncates itself the same way (`… | 7d…`) but is
+//     INDENTED, which the column-zero anchor turns away.
+const BUSY_SPINNER_RE = /^[^\s●❯⎿⚠│─╭╮╰╯]\x20\p{L}+(?:\x20\p{L}+)*…(?:\x20\(|[\x20\t]*$)/mu;
 
 // The third state, and the one a cycle would destroy quietest of all: messages
 // typed while the session was busy sit in a queue that lives in the process.
