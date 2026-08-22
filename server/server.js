@@ -1515,8 +1515,10 @@ async function resetLieutenant(id) {
 }
 // A slash command may deliberately RESTART the session it runs against —
 // claude's /output-style cycles it through kill+resume, because the style is
-// read at process start and a live session cannot be repainted. Supervision has
-// one rule about a session that is down: it died. pauseWorker sets w.paused
+// read at process start and a live session cannot be repainted, and /reset
+// kills a lieutenant and spawns it fresh on its launch prompt (a longer window
+// still: a whole spawn with a brief to deliver). Supervision has one rule about
+// a session that is down: it died. pauseWorker sets w.paused
 // BEFORE its own kill for exactly this reason ("the death must never look like
 // a crash"), and the lieutenant half of superviseTick respawns anything it
 // finds down — which mid-cycle means a second resume racing the first for the
@@ -1576,7 +1578,7 @@ async function runChatCommand(target, text) {
   // on one whose session has died — bringing it back is the whole point.
   if (boardCommands(target).some((c) => c.name === name)) {
     const id = /^lieutenant:(.+)$/.exec(target)[1];
-    const out = await resetLieutenant(id);
+    const out = await withCycleGuard(target, () => resetLieutenant(id));
     if (out.error) reply('bridge', '⚠ ' + name + ' — ' + out.error);
     else reply('bridge', 'reset — ' + id + ' is a new session on the launch prompt (doctrine, charter, and what it owns). The conversation before this one is gone.');
     return { ok: true, command: name };

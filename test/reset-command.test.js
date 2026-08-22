@@ -6,7 +6,7 @@
 // lieutenant is, and the launch prompt is doctrine + charter + what it owns.
 const test = require('node:test');
 const assert = require('node:assert');
-const { startServerWithLieutenant, LT } = require('./helper');
+const { startServerWithLieutenant, sleep, LT } = require('./helper');
 
 async function commands(s, target) {
   const r = await fetch(s.base + '/api/commands?target=' + encodeURIComponent(target));
@@ -63,5 +63,45 @@ test('the command and its reply both land in the thread', async () => {
     assert.strictEqual(asked.author, 'user');
     assert.strictEqual(asked.text, '/reset');
     assert.ok(!asked.cmd.reply);
+  } finally { await s.stop(); }
+});
+
+// /reset kills the lieutenant's session and spawns a fresh one on its launch
+// prompt. Between those two halves the lieutenant is legitimately down, and
+// supervision's rule for a lieutenant that is down is to respawn it — which
+// here means a second spawn racing this one for the same pane, and a captain
+// told his lieutenant "died" while he was the one who restarted it. The window
+// is longer than /output-style's cycle, because a spawn also delivers a brief.
+//
+// BC_FAKE_SPAWN_MS holds the fake's spawn open so ticks land inside it, the way
+// they would against a real launch-settle.
+test('/reset does not race supervision: the restart it performs is not a death', async () => {
+  const s = await startServerWithLieutenant({
+    env: {
+      BC_SUPERVISE_INTERVAL_MS: '60', BC_PRWATCH_INTERVAL_MS: '0',
+      BC_FAKE_SPAWN_MS: '500',
+    },
+  });
+  try {
+    const ref = { harness: 'fake', session: 'bc-lt-' + LT, window: 'lt', cwd: '/tmp', resumeId: 'uuid-live' };
+    assert.strictEqual((await s.api('PATCH', '/api/lieutenants/' + LT, { ref })).status, 200);
+
+    const r = await s.api('POST', '/api/feedback', { actor: 'user', target: 'lieutenant:' + LT, text: '/reset' });
+    assert.strictEqual(r.status, 200);
+
+    let board = (await s.api('GET', '/api/board')).body;
+    const chat = board.lieutenants.find((l) => l.id === LT).chat;
+    assert.match(chat[chat.length - 1].text, /new session on the launch prompt/);
+    assert.ok(!board.events.some((e) => e.kind === 'respawned'),
+      'a captain-ordered reset is not a crash supervision recovered from: '
+      + JSON.stringify(board.events.map((e) => e.kind)));
+    assert.ok(!board.events.some((e) => e.kind === 'needs-captain'));
+
+    // and released afterwards — a guard left on would make this lieutenant
+    // unsupervised for good, which is worse than the race it was closing.
+    await sleep(400);
+    board = (await s.api('GET', '/api/board')).body;
+    assert.ok(!board.events.some((e) => e.kind === 'respawned'),
+      'the reset session is alive, so unguarded ticks stay quiet too');
   } finally { await s.stop(); }
 });

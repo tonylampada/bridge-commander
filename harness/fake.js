@@ -129,6 +129,14 @@ function emitTurnEnd(name) {
   });
 }
 
+// BC_FAKE_SPAWN_MS holds spawn open for that long before it returns. A real
+// spawn is seconds — createPane, then launch-settle blocking until the composer
+// is up — and everything racing that window (supervision landing on a session
+// that is legitimately down mid-restart) is invisible against a fake that
+// returns instantly.
+const SPAWN_MS = parseInt(process.env.BC_FAKE_SPAWN_MS, 10) > 0
+  ? parseInt(process.env.BC_FAKE_SPAWN_MS, 10) : 0;
+
 async function spawn(cwd, prompt, opts = {}) {
   const session = opts.session || 'bc-' + crypto.randomBytes(3).toString('hex');
   const window = opts.window === undefined || opts.window === null ? undefined : String(opts.window);
@@ -136,6 +144,7 @@ async function spawn(cwd, prompt, opts = {}) {
   if (sessions.has(key) && sessions.get(key).alive) {
     throw new Error(`fake: session ${key} already exists`);
   }
+  if (SPAWN_MS) await new Promise((r) => setTimeout(r, SPAWN_MS));
   const resumeId = crypto.randomUUID();
   sessions.set(key, {
     alive: true,

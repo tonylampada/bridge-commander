@@ -114,23 +114,34 @@ const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, f
 //          `✽ Accomplishing… (0s · ↓ 1.7k tokens)`   `· Churning…`
 //   idle   `✻ Baked for 1s`, `✻ Sautéed for 1s`, or no spinner line at all
 //
-// What holds across every frame sampled is the SHAPE, and only the shape: one
-// glyph, one space, one gerund, then U+2026 — against " for <N>s" once the turn
-// is done. Three things it is deliberately NOT built on:
-//   - not the glyph. It rotates over at least ✻ ✶ ✳ ✽ ·, and a matcher built
-//     from the glyphs that had been SEEN missed ✽ the first time out.
+// What holds across every frame sampled is the SHAPE, and only the shape: the
+// rotating spinner glyph, one space, one gerund, U+2026, and then either the
+// end of the line or a ` (` progress note — against `<PastTense> for <N>s` once
+// the turn is done. Three things it is deliberately NOT built on:
+//   - not the glyph itself. It rotates over at least ✻ ✶ ✳ ✽ ·, and a matcher
+//     built from the glyphs that had been SEEN missed ✽ the first time out. So
+//     the class EXCLUDES the markers that do have a fixed meaning — ● assistant,
+//     ❯ user echo and composer, ⎿ tool detail and tips, ⚠ warning, and the box
+//     drawing — and accepts anything else. A glyph nobody has seen yet still
+//     reads as a spinner; a marker with a job never does.
 //   - not the word. It is randomised (Working, Churning, Tinkering,
 //     Prestidigitating, Accomplishing, …); there is no list to hold.
 //   - NOT "esc to interrupt". UI_READY_RE still names it, but this build never
 //     renders it — ~100 frames across several turns, not once.
 //
-// The anchoring is load-bearing, and here is what it is for: the startup
-// welcome box truncates its "What's new" entries with the same U+2026, inside
-// rows that begin with `│ `. A bare /…/ therefore reads a freshly launched,
-// perfectly idle session as busy — refusing the command exactly when it is most
-// likely to be run. So: column zero, one glyph that is not box-drawing, one
-// space, and the ellipsis on the FIRST word.
-const BUSY_SPINNER_RE = /^[^\s│─╭╮╰╯]\x20\S*…/m;
+// Every part of the anchor is there because something real walked through a
+// looser one, and both of these refuse an IDLE session, which is the direction
+// that costs the captain a command that will never work again until the pane
+// scrolls:
+//   - the startup welcome box truncates its "What's new" entries with the same
+//     U+2026, inside rows that begin with `│ `. A bare /…/ reads a freshly
+//     launched session as busy.
+//   - an ordinary reply containing an ellipsis does the same. `● Loading… done`
+//     was captured on a fully idle pane: column zero, plain space, U+2026 in
+//     the first word. It is turned away twice over — by its ● marker, and by
+//     the text that follows the ellipsis where a progress note or a line end
+//     has to be. Ellipses are common prose, so this is not a corner.
+const BUSY_SPINNER_RE = /^[^\s●❯⎿⚠│─╭╮╰╯]\x20\p{L}+…(?:\x20\(|[\x20\t]*$)/mu;
 
 // The third state, and the one a cycle would destroy quietest of all: messages
 // typed while the session was busy sit in a queue that lives in the process.

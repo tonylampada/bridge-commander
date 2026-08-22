@@ -84,12 +84,12 @@ const BUSY_WORKING = `  24
 
 // The same session a moment later, on a different glyph and a different verb.
 // Saved during the investigation under the name IDLE_SCREEN.txt, which it is
-// not: the spinner reads "Accomplishing…", so this is a turn in flight and the
-// empty composer below it means nothing. It is kept as a busy fixture BECAUSE
-// of that — a frame a person mislabelled at a glance is exactly the frame the
-// matcher has to get right, and the direction of any doubt here is "busy",
-// since the cost of refusing a cycle is five seconds and the cost of taking one
-// is a lost turn.
+// not — the capture loop that was meant to overwrite it with an idle frame
+// never did, so a busy one kept the idle name. It is kept HERE, as a busy
+// fixture, because a frame that was filed as idle by mistake is exactly the
+// frame the matcher has to read correctly: the empty composer below the spinner
+// means nothing, and the direction of any doubt is "busy" — refusing a cycle
+// costs five seconds and taking one costs a turn.
 const BUSY_ACCOMPLISHING = `
   53
   54
@@ -324,6 +324,115 @@ const IDLE_AFTER_TURN = `
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
 `;
 
+// The clean idle capture, taken after a turn that ENDED: an assistant line, a
+// past-tense spinner ("Churned for 1s"), an empty composer. No column-zero
+// ellipsis anywhere on the screen.
+const IDLE_CLEAN = `
+╭─── Claude Code v2.1.239 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                    │
+│                 Welcome back Tony!                 │ Ask Claude to create a new app or clone a repository                                                                        │
+│                                                    │ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▛█                      │ What's new                                                                                                                  │
+│                      ▝▜██████▀                     │ Cost estimates (\`/cost\`, status line, \`--max-budget-usd\`) now include the 1.1× US-only-inference premium for data-residenc… │
+│                        ▝▝ ▝▝                       │ Added the one-time fullscreen renderer offer on Bedrock, Vertex, Foundry and other previously excluded setups; new install… │
+│       Opus 5 with high effort · Claude Max ·       │ Added \`/claude-api upgrade\` to migrate Python projects from \`anthropic\` 0.x to 1.x, and updated the skill's Python referen… │
+│       tonylampada@gmail.com's Organization         │ /release-notes for more                                                                                                     │
+│                 /…/scratchpad/idle2                │                                                                                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ⚠ 2 MCP servers need authentication · run /mcp
+
+❯ Say only: ok
+
+● ok
+
+✻ Churned for 1s
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+
+// And the one that matters most, because it is ordinary rather than exotic: a
+// FULLY IDLE session whose last reply happens to contain an ellipsis.
+//
+//   ● Loading… done
+//   ✻ Crunched for 1s
+//
+// Column zero, plain space, U+2026 inside the first word — every anchor the
+// first matcher had, and the session is doing nothing at all. A matcher that
+// reads this as busy refuses /output-style for as long as that line stays in
+// the tail, which on an idle pane is forever: nothing scrolls it away, so the
+// captain re-runs the command and gets the same refusal every time. Ellipses in
+// prose are common, so this is the failure that would actually have been met.
+const IDLE_ELLIPSIS = `
+╭─── Claude Code v2.1.239 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│                                                    │ Tips for getting started                                                                                                    │
+│                 Welcome back Tony!                 │ Ask Claude to create a new app or clone a repository                                                                        │
+│                                                    │ ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── │
+│                       ▐▛███▛█                      │ What's new                                                                                                                  │
+│                      ▝▜██████▀                     │ Cost estimates (\`/cost\`, status line, \`--max-budget-usd\`) now include the 1.1× US-only-inference premium for data-residenc… │
+│                        ▝▝ ▝▝                       │ Added the one-time fullscreen renderer offer on Bedrock, Vertex, Foundry and other previously excluded setups; new install… │
+│       Opus 5 with high effort · Claude Max ·       │ Added \`/claude-api upgrade\` to migrate Python projects from \`anthropic\` 0.x to 1.x, and updated the skill's Python referen… │
+│       tonylampada@gmail.com's Organization         │ /release-notes for more                                                                                                     │
+│                 /…/scratchpad/idle2                │                                                                                                                             │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+
+ ⚠ 2 MCP servers need authentication · run /mcp
+
+❯ Say only: ok
+
+● ok
+
+✻ Churned for 1s
+
+❯ Read the file /home/ai/repos/roboflow-commander/.bridge-commander/worktrees/MNC-108/harness/claude-tmux.js and tell me its first line only.
+
+  Read 1 file
+
+● 'use strict';
+
+✻ Sautéed for 3s
+
+❯ Reply with exactly this and nothing else: Loading… done
+
+● Loading… done
+
+✻ Crunched for 1s
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Opus 5 | █░░░░░░░░░░░░░░░░░░░ 5% | 53k/1000k | 5h 12% (2h12m) | 7d 22% (2d4h)
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents
+`;
+
 test('a session mid-turn reads as busy — whatever glyph and whatever verb', () => {
   assert.ok(busy(BUSY_WORKING), '✻ Working… (12s · …)');
   assert.ok(busy(BUSY_ACCOMPLISHING), '✽ Accomplishing… (0s · ↓ 1.7k tokens)');
@@ -349,6 +458,45 @@ test('an idle session reads as idle, welcome box and all', () => {
   assert.ok(!BUSY.spinnerRe.test(IDLE_FRESH),
     'and not even against the WHOLE screen — the welcome box is the trap');
   assert.ok(!busy(IDLE_AFTER_TURN), '"Baked for 1s" is a turn that ENDED');
+  assert.ok(!busy(IDLE_CLEAN), '"Churned for 1s" over an empty composer is idle');
+  assert.ok(!BUSY.spinnerRe.test(IDLE_CLEAN));
+});
+
+test('an idle session whose REPLY contains an ellipsis is not busy', () => {
+  assert.ok(IDLE_ELLIPSIS.includes('\n● Loading… done'),
+    'the fixture really does carry the line, at column zero');
+  assert.ok(!busy(IDLE_ELLIPSIS),
+    'a reply is not a spinner — this refusal would never have lifted');
+  assert.ok(!BUSY.spinnerRe.test(IDLE_ELLIPSIS), 'nor anywhere else on the screen');
+});
+
+test('the markers that have a job are never read as the spinner glyph', () => {
+  // The spinner glyph rotates and cannot be enumerated — an unlisted ✽ already
+  // slipped through once. So the class turns away the glyphs that DO mean
+  // something fixed, and lets every other one be a spinner.
+  for (const line of [
+    '● Loading… done',                  // assistant output
+    '● Thinking…',                      // assistant output that reads exactly like one
+    '❯ Write a 400-word essay…',        // echoed user message
+    '⎿  Tip: something…',               // tool detail / tip
+    '⚠ 2 MCP servers need authentication…',
+    '│ Added the one-time renderer offer; new installs there now start in…',
+    '…/scratchpad/busy',                // an abbreviated path, alone on the line
+  ]) {
+    assert.ok(!BUSY.spinnerRe.test(line), line + ' is not a turn in flight');
+  }
+  // …while an unseen glyph still reads as one, which is the whole point of
+  // excluding rather than enumerating.
+  assert.ok(BUSY.spinnerRe.test('◈ Confabulating…'), 'a glyph nobody has captured yet');
+});
+
+test('the shape after the ellipsis is pinned too: a progress note, or nothing', () => {
+  assert.ok(BUSY.spinnerRe.test('✻ Working… (12s · still thinking with high effort)'));
+  assert.ok(BUSY.spinnerRe.test('✻ Working…'), 'bare form, end of line');
+  assert.ok(!BUSY.spinnerRe.test('✻ Loading… done'),
+    'prose after the ellipsis is a sentence, not a spinner');
+  assert.ok(!BUSY.spinnerRe.test('✻ Compacting conversation…'),
+    'two words is not the measured spinner shape');
 });
 
 test('the past-tense spinner is never mistaken for the live one', () => {
