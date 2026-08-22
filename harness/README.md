@@ -159,9 +159,11 @@ focus, so an agent with siblings must always carry its window.
   claude itself does with the setting: it WRITES it and says when it lands. The
   style goes into the SESSION's own `<cwd>/.claude/settings.local.json` (merged,
   so the Stop hook survives; never `~/.claude/settings.json`, which would
-  repaint every claude on the machine), and the reply says it takes effect on
-  the session's next conversation — the setting is read at process start —
-  with `/reset` to start one now. Nothing is killed and nothing is resumed. The
+  repaint every claude on the machine), and the reply says it applies the next
+  time this session starts — the setting is read at process start. It names no
+  command to get there: `/reset` is a board command that exists only for
+  lieutenant targets, so a card thread would be sent at a command its worker
+  session refuses. Nothing is killed and nothing is resumed. The
   offered styles are the built-ins plus every `*.md` under
   `<cwd>/.claude/output-styles/` and `~/.claude/output-styles/` (project shadows
   user; `opts.stylesDir` / `BC_CLAUDE_OUTPUT_STYLES_DIR` override the user

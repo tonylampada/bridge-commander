@@ -219,11 +219,11 @@ test('a good name writes outputStyle into the SESSION cwd and leaves the session
     assert.strictEqual(settings.outputStyle, 'ELI5', 'canonical casing, not what was typed');
     assert.ok(settings.hooks && settings.hooks.Stop.length === 1, 'the Stop hook survived the write');
 
-    // The reply says WHEN it lands, and how to have it now — the setting is
-    // read at session start, so the running conversation keeps its own style.
-    assert.match(reply, /output style set to ELI5/);
-    assert.match(reply, /next conversation/);
-    assert.match(reply, /\/reset/);
+    // The reply says WHEN it lands and names no command to get there — the
+    // setting is read at session start, so the running conversation keeps its
+    // own style, and /reset exists only on lieutenant targets.
+    assert.strictEqual(reply,
+      'output style set to ELI5 — it applies the next time this session starts');
 
     // and the session itself was not touched: nothing killed, nothing relaunched
     assert.ok(!mock.calls.some((c) => c.fn === 'tmux' && String(c.args[0]).includes('kill')),

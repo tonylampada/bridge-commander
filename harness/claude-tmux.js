@@ -383,8 +383,14 @@ const PASSTHROUGH = new Set(['/compact', '/autocompact']);
 // ~/.claude/settings.json, which would repaint every claude on the machine.
 //
 // The setting is read when a session STARTS, so the running conversation keeps
-// the style it was born with and the reply says so: the next conversation wears
-// the new one, and /reset starts one now. The board does not restart a session
+// the style it was born with and the reply says WHEN the new one lands, without
+// naming a command to get there. It cannot: /reset is a board command that only
+// exists for lieutenant targets, so on a card thread the same reply would send
+// the captain at a command the worker session refuses as unknown — a reply that
+// teaches the board is broken is worse than one that says nothing. (Appending
+// the hint server-side, where the target kind IS known, was considered and
+// rejected: it would park knowledge of one harness command in the server
+// forever to decorate one parenthetical.) The board does not restart a session
 // on the captain's behalf — a kill takes that session's background work with it.
 const OUTPUT_STYLE = '/output-style';
 
@@ -514,7 +520,7 @@ async function runCommand(ref, command, opts = {}) {
     if (!hit) throw new Error('unknown output style "' + want + '" — available: ' + available);
     await writeOutputStyle(ref.cwd, hit.value);
     return 'output style set to ' + hit.value
-      + " — it takes effect on this session's next conversation (/reset to start one now)";
+      + ' — it applies the next time this session starts';
   }
   if (PASSTHROUGH.has(name)) {
     await send(ref, line); // verified submit; claude's own command runs in-session

@@ -90,9 +90,10 @@
 //       argument is missing or unrecognised, BEFORE it does anything: claude's
 //       /output-style writes a setting to disk, and a typo must not sit there
 //       waiting to surprise the next conversation. A command that changes
-//       something the session only reads at STARTUP says so in its reply
-//       (/output-style: next conversation, /reset to start one now) — no verb
-//       here restarts a session on the caller's behalf.
+//       something the session only reads at STARTUP says WHEN it applies in
+//       its reply (/output-style: the next time this session starts) without
+//       naming a command to get there, which a harness cannot know exists —
+//       no verb here restarts a session on the caller's behalf.
 //   status(ref, opts?) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
 //       model + context usage read from the files the harness already
 //       writes (transcript / rollout log); null — never a throw — when
