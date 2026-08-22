@@ -41,6 +41,7 @@
 // (and optionally POSTs to a callback URL). onTurnEnd() tails that file.
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
@@ -315,15 +316,128 @@ async function kill(ref) {
 // command line (args included) is typed into the session via verified submit
 // and claude's own implementation runs in-place.
 const PASSTHROUGH = new Set(['/compact', '/autocompact']);
+
+// ---------- /output-style (claude only, and NOT a pass-through) ----------
+// claude USED to answer `/output-style`; it does not any more. Verified against
+// the 2.1.239 binary in a live pane: the composer answers "No commands match
+// /output-style" and submitting the line comes back "Unknown command:
+// /output-style". The binary's own migration table says it outright — "/output-
+// style | Open /config → Output style. Output styles still exist as a feature;
+// only the dedicated command was removed". /config is an INTERACTIVE dialog, so
+// a pass-through here would park a worker on exactly the menu this command
+// exists to keep it off.
+//
+// So the board sets the style the only way that works from outside a session:
+// WRITE, THEN CYCLE.
+//   write  — outputStyle into <ref.cwd>/.claude/settings.local.json, the
+//            session's OWN cwd (a worker's worktree, a lieutenant's workspace).
+//            Never ~/.claude/settings.json: that repaints every claude on the
+//            machine, and this command speaks for one session.
+//   cycle  — kill(), then the harness's own resume(): a new process, so it
+//            reads the setting at startup, and `claude --resume` brings the
+//            conversation back with it.
+// Both halves verified live on 2.1.239: after the cycle the session still
+// answered a codeword given BEFORE it and reported the new style in its system
+// prompt. A live session cannot be repainted in place — the setting is read at
+// startup only — so the restart is the mechanism, not an implementation detail;
+// runCommand's reply says so in as many words.
+//
+// resume() prefers the hook-recorded session-id over ref.resumeId, and spawn
+// pins both to the same uuid (`--session-id`, and --resume does not fork), so
+// the cycled session keeps the ref it had — nothing for the caller to re-record.
+// installHooks: false on the way back in: the session already carries whatever
+// Stop hook it was born with, and the cycle changes ONE thing, the style.
+const OUTPUT_STYLE = '/output-style';
+
+// The built-ins, pinned against the 2.1.239 binary's own style table (name and
+// description lifted verbatim) rather than against memory — an earlier list
+// that "everyone knows" was already wrong by two entries. `default` is the
+// no-style entry; the other four are claude's built-in styles.
+const BUILTIN_OUTPUT_STYLES = [
+  { value: 'default', description: 'Claude completes coding tasks efficiently and provides concise responses' },
+  { value: 'Proactive', description: 'Claude executes immediately, minimizes interruptions, and prefers action over planning' },
+  { value: 'Concise', description: 'Claude responds tersely, leading with results and skipping preamble and narration' },
+  { value: 'Explanatory', description: 'Claude explains its implementation choices and codebase patterns' },
+  { value: 'Learning', description: 'Claude pauses and asks you to write small pieces of code for hands-on practice' },
+];
+
+// The `name:`/`description:` front matter of a style file. Deliberately a
+// couple of lines and not a YAML dependency: these two scalars are the whole
+// contract, and a file that does not have them still has a basename.
+function frontMatter(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  if (!m) return {};
+  const out = {};
+  for (const line of m[1].split(/\r?\n/)) {
+    const kv = /^([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]*(.*)$/.exec(line);
+    if (kv) out[kv[1].toLowerCase()] = kv[2].trim().replace(/^["']|["']$/g, '');
+  }
+  return out;
+}
+
+// outputStyles(opts?) -> [{ value, description }] — what `/output-style` accepts
+// HERE: the built-ins plus every *.md under ~/.claude/output-styles/. A style is
+// named by its front-matter `name:` (the string the setting takes), and falls
+// back to its basename when the file has none. An unreadable directory or file
+// is not an error — it just means there are no custom styles to offer, and the
+// command still works for the built-ins.
+function outputStyles(opts = {}) {
+  const out = BUILTIN_OUTPUT_STYLES.map((st) => ({ ...st }));
+  const dir = opts.stylesDir || process.env.BC_CLAUDE_OUTPUT_STYLES_DIR
+    || path.join(os.homedir(), '.claude', 'output-styles');
+  let files;
+  try {
+    files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
+  } catch {
+    return out; // no directory, no permission — the built-ins alone, never a throw
+  }
+  const taken = new Set(out.map((st) => st.value.toLowerCase()));
+  for (const f of files) {
+    let fm;
+    try {
+      fm = frontMatter(fs.readFileSync(path.join(dir, f), 'utf8'));
+    } catch {
+      continue; // unreadable file — skip it, the rest of the list still stands
+    }
+    const value = fm.name || path.basename(f, '.md');
+    if (!value || taken.has(value.toLowerCase())) continue;
+    taken.add(value.toLowerCase());
+    out.push({ value, description: fm.description || 'custom output style (' + f + ')' });
+  }
+  return out;
+}
+
+// writeOutputStyle — merge-in-place, because installHooks writes its Stop hook
+// into this very file: read, set the one key, write back.
+function writeOutputStyle(cwd, style) {
+  const dir = path.join(cwd, '.claude');
+  const file = path.join(dir, 'settings.local.json');
+  fs.mkdirSync(dir, { recursive: true });
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    settings = null;
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) settings = {};
+  settings.outputStyle = style;
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+}
+
 function commands() {
   return SLASH_COMMANDS.map((c) => ({ ...c })).concat([
     { name: '/autocompact', description: 'set how full the context gets before auto-compaction' },
+    {
+      name: OUTPUT_STYLE,
+      description: 'switch this session\'s output style (resumes the session to apply it)',
+      args: outputStyles(),
+    },
   ]);
 }
 async function status(ref) {
   return claudeStatus(ref);
 }
-async function runCommand(ref, command) {
+async function runCommand(ref, command, opts = {}) {
   const line = String(command || '').trim();
   const name = line.split(/\s+/)[0];
   const key = s.stateKey(ref.session, ref.window);
@@ -332,6 +446,23 @@ async function runCommand(ref, command) {
     const st = await status(ref);
     if (!st) throw new Error('no status for ' + key + ' — session transcript not found');
     return formatStatus(st);
+  }
+  if (name === OUTPUT_STYLE) {
+    // Everything after the command name is ONE style name — a style file may
+    // carry spaces in its `name:`, so the argument is not tokenized.
+    const want = line.slice(name.length).trim();
+    const styles = outputStyles();
+    const available = styles.map((st) => st.value).join(', ');
+    // The bare form is refused rather than typed: claude has no /output-style
+    // to answer it, and the whole point is that nobody has to remember the list.
+    if (!want) throw new Error(OUTPUT_STYLE + ' needs a style name — available: ' + available);
+    const hit = styles.find((st) => st.value.toLowerCase() === want.toLowerCase());
+    // Refused BEFORE anything is written: a bad name must not cost a restart.
+    if (!hit) throw new Error('unknown output style "' + want + '" — available: ' + available);
+    writeOutputStyle(ref.cwd, hit.value);
+    await kill(ref);
+    await resume(ref, Object.assign({}, opts, { installHooks: false }));
+    return 'output style now ' + hit.value + ' — session resumed to pick it up';
   }
   if (PASSTHROUGH.has(name)) {
     await send(ref, line); // verified submit; claude's own command runs in-session
@@ -353,6 +484,9 @@ const { onTurnEnd, openPane, paneSnapshot, paneInput, adoptWindow } = s;
 // commands/runCommand/status are OPTIONAL capability verbs (port.js).
 module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks,
   openPane, paneSnapshot, paneInput, commands, runCommand, status, adoptWindow,
+  // Exported for the tests that pin the style list against a temp directory and
+  // the built-ins against the binary.
+  outputStyles, BUILTIN_OUTPUT_STYLES,
   // Exported for the test that pins them against REAL captured screens. These
   // regexes decide whether an unattended revival works or sits on a menu until
   // it is given up on, and that is not a judgement to make by reading them.

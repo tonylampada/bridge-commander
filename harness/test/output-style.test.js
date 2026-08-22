@@ -1,0 +1,266 @@
+'use strict';
+// claude's /output-style: the style list it offers as `args`, and the
+// write-then-cycle that applies one.
+//
+// Why this command is not a pass-through at all is in claude-tmux.js's own
+// comment: claude 2.1.239 answers "Unknown command: /output-style" — the
+// dedicated command was removed and styles moved into the interactive /config
+// dialog, which is precisely the menu a worker must never be parked on. So the
+// board writes the setting into the session's OWN cwd and cycles the session
+// through kill+resume to pick it up.
+//
+// tmux is mocked (tmux-mock.js), so the cycle runs end-to-end here with no real
+// tmux and no real claude: what is pinned is the settings file that gets written
+// and the fact that the session comes back on --resume.
+const test = require('node:test');
+const assert = require('node:assert');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const claude = require('../claude-tmux.js');
+const codex = require('../codex-tmux.js');
+const { mockTmux } = require('./tmux-mock.js');
+
+const READY = '⏵⏵ bypass permissions on (shift+tab to cycle)\n❯ ';
+
+function tmpdir(prefix) {
+  return fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+}
+function styleFile(dir, name, body) {
+  fs.writeFileSync(path.join(dir, name), body);
+}
+function outputStyleCommand() {
+  return claude.commands().find((c) => c.name === '/output-style');
+}
+
+test('the built-ins are the ones the binary actually ships, not the ones everybody remembers', () => {
+  // Pinned against the claude 2.1.239 style table (name + description lifted
+  // from the binary). The list that "everybody knows" — default/Explanatory/
+  // Learning — is missing two, which is exactly why this assertion is here.
+  assert.deepStrictEqual(
+    claude.BUILTIN_OUTPUT_STYLES.map((s) => s.value),
+    ['default', 'Proactive', 'Concise', 'Explanatory', 'Learning']);
+  for (const s of claude.BUILTIN_OUTPUT_STYLES) {
+    assert.ok(s.description && s.description.length > 10, s.value + ' carries its description');
+  }
+});
+
+test('outputStyles: built-ins, plus a *.md per custom style named by its front matter', () => {
+  const dir = tmpdir('bc-styles-');
+  try {
+    styleFile(dir, 'eli5.md', '---\nname: ELI5\ndescription: keep it simple pls\n---\ntalk to me like I am 5\n');
+    styleFile(dir, 'quoted.md', '---\nname: "Quoted Name"\ndescription: \'single quoted\'\n---\nbody\n');
+    const styles = claude.outputStyles({ stylesDir: dir });
+
+    // the built-ins come first and are untouched
+    assert.deepStrictEqual(styles.slice(0, 5).map((s) => s.value),
+      claude.BUILTIN_OUTPUT_STYLES.map((s) => s.value));
+
+    const eli5 = styles.find((s) => s.value === 'ELI5');
+    assert.ok(eli5, 'the front-matter name is the value, not the basename');
+    assert.strictEqual(eli5.description, 'keep it simple pls');
+
+    // quotes around a front-matter scalar are syntax, not part of the name —
+    // and a name with a SPACE has to survive, since the command takes the whole
+    // remainder of the line as one argument.
+    const quoted = styles.find((s) => s.value === 'Quoted Name');
+    assert.ok(quoted, 'quotes stripped, spaces kept');
+    assert.strictEqual(quoted.description, 'single quoted');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('outputStyles: a style file with no usable front matter falls back to its basename', () => {
+  const dir = tmpdir('bc-styles-');
+  try {
+    styleFile(dir, 'unnamed.md', '---\ndescription: has a description but no name\n---\nbody\n');
+    styleFile(dir, 'bare.md', 'no front matter at all, just prose\n');
+    const styles = claude.outputStyles({ stylesDir: dir });
+
+    const unnamed = styles.find((s) => s.value === 'unnamed');
+    assert.ok(unnamed, 'no name: → the basename');
+    assert.strictEqual(unnamed.description, 'has a description but no name');
+
+    const bare = styles.find((s) => s.value === 'bare');
+    assert.ok(bare, 'no front matter at all is still a usable style');
+    assert.match(bare.description, /bare\.md/, 'and gets a description naming the file');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('outputStyles: junk in the directory is ignored, and a name never collides with a built-in', () => {
+  const dir = tmpdir('bc-styles-');
+  try {
+    styleFile(dir, 'notes.txt', 'not a style file');       // wrong extension
+    fs.mkdirSync(path.join(dir, 'subdir.md'));              // a DIRECTORY named *.md
+    styleFile(dir, 'shadow.md', '---\nname: Learning\n---\nshadowing a built-in\n');
+    const styles = claude.outputStyles({ stylesDir: dir });
+
+    assert.ok(!styles.some((s) => s.value === 'notes'), 'a .txt is not a style');
+    assert.ok(!styles.some((s) => s.value === 'subdir'), 'an unreadable *.md entry is skipped, not thrown on');
+    assert.strictEqual(styles.filter((s) => s.value === 'Learning').length, 1,
+      'a custom file cannot shadow a built-in into the list twice');
+    assert.strictEqual(styles.find((s) => s.value === 'Learning').description,
+      claude.BUILTIN_OUTPUT_STYLES.find((s) => s.value === 'Learning').description,
+      'and the built-in is the one that survives');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('outputStyles: an unreadable directory is the built-ins alone, never a throw', () => {
+  const styles = claude.outputStyles({ stylesDir: '/nonexistent/bc-not-a-real-dir' });
+  assert.deepStrictEqual(styles.map((s) => s.value), claude.BUILTIN_OUTPUT_STYLES.map((s) => s.value));
+});
+
+test('commands(): /output-style rides with its styles as args; the others carry none', () => {
+  const dir = tmpdir('bc-styles-');
+  const prev = process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+  process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = dir;
+  try {
+    styleFile(dir, 'eli5.md', '---\nname: ELI5\ndescription: keep it simple pls\n---\nbody\n');
+    const cmds = claude.commands();
+    assert.deepStrictEqual(cmds.map((c) => c.name),
+      ['/status', '/compact', '/help', '/autocompact', '/output-style']);
+
+    const os_ = cmds.find((c) => c.name === '/output-style');
+    assert.ok(Array.isArray(os_.args) && os_.args.length, 'the command reports its own options');
+    assert.ok(os_.args.some((a) => a.value === 'ELI5'), 'including the ones on disk');
+    for (const a of os_.args) {
+      assert.strictEqual(typeof a.value, 'string');
+      assert.strictEqual(typeof a.description, 'string');
+    }
+    // args is OPTIONAL metadata — a command that takes nothing must not grow one
+    for (const c of cmds.filter((c) => c.name !== '/output-style')) {
+      assert.strictEqual(c.args, undefined, c.name + ' takes no argument');
+    }
+  } finally {
+    if (prev === undefined) delete process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+    else process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = prev;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('the BARE form is refused with the list, and nothing is written or restarted', async () => {
+  const cwd = tmpdir('bc-osc-');
+  const styles = tmpdir('bc-styles-');
+  const prev = process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+  process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = styles;
+  const mock = mockTmux({ readyTail: READY });
+  try {
+    styleFile(styles, 'eli5.md', '---\nname: ELI5\ndescription: keep it simple pls\n---\nbody\n');
+    const ref = { harness: 'claude', session: 'bc-os1', cwd, resumeId: 'uuid-os1' };
+    // The whole reason this command exists: bare /output-style must never reach
+    // the session, because claude's answer to it is an interactive dialog.
+    await assert.rejects(
+      claude.runCommand(ref, '/output-style', { stateDir: cwd }),
+      (e) => {
+        assert.match(e.message, /needs a style name/);
+        assert.match(e.message, /default/, 'the message carries the list');
+        assert.match(e.message, /ELI5/, 'including the custom ones');
+        return true;
+      });
+    assert.ok(!fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), 'nothing written');
+    assert.deepStrictEqual(mock.calls.filter((c) => c.fn === 'submit'), [], 'nothing typed into the session');
+  } finally {
+    mock.restore();
+    if (prev === undefined) delete process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+    else process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = prev;
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(styles, { recursive: true, force: true });
+  }
+});
+
+test('an unknown style name is refused BEFORE anything is written — a typo must not cost a restart', async () => {
+  const cwd = tmpdir('bc-osc-');
+  const mock = mockTmux({ readyTail: READY });
+  try {
+    const ref = { harness: 'claude', session: 'bc-os2', cwd, resumeId: 'uuid-os2' };
+    await assert.rejects(
+      claude.runCommand(ref, '/output-style Nonsense', { stateDir: cwd }),
+      (e) => {
+        assert.match(e.message, /unknown output style "Nonsense"/);
+        assert.match(e.message, /available: default/);
+        return true;
+      });
+    assert.ok(!fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), 'no settings file');
+    assert.ok(!mock.calls.some((c) => c.fn === 'tmux' && String(c.args[0]).includes('kill')),
+      'and the session was never cycled');
+  } finally {
+    mock.restore();
+    fs.rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test('a good name writes outputStyle into the SESSION cwd and cycles the session onto --resume', async () => {
+  const cwd = tmpdir('bc-osc-');
+  const styles = tmpdir('bc-styles-');
+  const state = tmpdir('bc-state-');
+  const prev = process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+  process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = styles;
+  const mock = mockTmux({ readyTail: READY });
+  try {
+    styleFile(styles, 'eli5.md', '---\nname: ELI5\ndescription: keep it simple pls\n---\nbody\n');
+    // a settings file that already carries the Stop hook: the write must MERGE,
+    // because installHooks owns this very file.
+    fs.mkdirSync(path.join(cwd, '.claude'), { recursive: true });
+    fs.writeFileSync(path.join(cwd, '.claude', 'settings.local.json'),
+      JSON.stringify({ hooks: { Stop: [{ hooks: [{ type: 'command', command: 'node hook.js' }] }] } }, null, 2));
+
+    const ref = { harness: 'claude', session: 'bc-os3', cwd, resumeId: 'uuid-os3' };
+    const reply = await claude.runCommand(ref, '/output-style eli5', { stateDir: state });
+
+    const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
+    assert.strictEqual(settings.outputStyle, 'ELI5', 'canonical casing, not what was typed');
+    assert.ok(settings.hooks && settings.hooks.Stop.length === 1, 'the Stop hook survived the write');
+
+    // The reply says the session restarted — no silent restarts.
+    assert.match(reply, /output style now ELI5/);
+    assert.match(reply, /resumed/);
+
+    // and the session really was cycled back in on its own resume id
+    const launched = mock.calls.filter((c) => c.fn === 'sendLiteral').map((c) => c.args[1]).join('\n');
+    assert.match(launched, /claude --dangerously-skip-permissions --resume uuid-os3/,
+      'brought back with --resume, so the conversation comes back with it');
+  } finally {
+    mock.restore();
+    if (prev === undefined) delete process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+    else process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = prev;
+    for (const d of [cwd, styles, state]) fs.rmSync(d, { recursive: true, force: true });
+  }
+});
+
+test('a style name containing spaces round-trips as ONE argument', async () => {
+  const cwd = tmpdir('bc-osc-');
+  const styles = tmpdir('bc-styles-');
+  const prev = process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+  process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = styles;
+  const mock = mockTmux({ readyTail: READY });
+  try {
+    styleFile(styles, 'two-words.md', '---\nname: Two Words\ndescription: spaced\n---\nbody\n');
+    const ref = { harness: 'claude', session: 'bc-os4', cwd, resumeId: 'uuid-os4' };
+    const reply = await claude.runCommand(ref, '/output-style Two Words', { stateDir: cwd });
+    assert.match(reply, /output style now Two Words/);
+    assert.strictEqual(
+      JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).outputStyle,
+      'Two Words', 'the argument was never tokenized');
+  } finally {
+    mock.restore();
+    if (prev === undefined) delete process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
+    else process.env.BC_CLAUDE_OUTPUT_STYLES_DIR = prev;
+    fs.rmSync(cwd, { recursive: true, force: true });
+    fs.rmSync(styles, { recursive: true, force: true });
+  }
+});
+
+test('codex is left alone: no /output-style, no args, and its list stays the shared one', async () => {
+  // codex has no output styles at all — the picker must never offer it there.
+  const cmds = codex.commands();
+  assert.deepStrictEqual(cmds.map((c) => c.name), ['/status', '/compact', '/help']);
+  for (const c of cmds) assert.strictEqual(c.args, undefined, c.name + ' carries no args');
+  await assert.rejects(
+    codex.runCommand({ harness: 'codex', session: 'bc-cx', cwd: '/tmp' }, '/output-style ELI5'),
+    /unknown command \/output-style/);
+});

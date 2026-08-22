@@ -72,6 +72,56 @@ test('GET /api/commands: target harness list; no session / no worker → empty; 
   }
 });
 
+test('/api/commands passes a command\'s `args` through untouched (the composer\'s second stage)', async () => {
+  // `args` is optional metadata a harness may attach to a command (port.js);
+  // the server must not strip a field it does not itself understand. claude's
+  // /output-style is the one that carries it, so this asks the REAL harness —
+  // pointed at a temp styles dir so the answer does not depend on this machine.
+  const styles = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-styles-'));
+  fs.writeFileSync(path.join(styles, 'eli5.md'),
+    '---\nname: ELI5\ndescription: keep it simple pls\n---\nbody\n');
+  const { s, teardown } = await bootWithFakeLt({ BC_CLAUDE_OUTPUT_STYLES_DIR: styles });
+  try {
+    const ref = { harness: 'claude', session: 'bc-cl1', cwd: '/tmp', resumeId: 'uuid-cl1' };
+    assert.strictEqual((await s.api('POST', '/api/lieutenants', { name: 'Claudia', id: 'cl1', ref })).status, 200);
+
+    const r = await s.api('GET', '/api/commands?target=lieutenant:cl1');
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.harness, 'claude');
+    const os_ = r.body.commands.find((c) => c.name === '/output-style');
+    assert.ok(os_, 'claude offers /output-style');
+    assert.ok(Array.isArray(os_.args), 'and its args survived the trip');
+    assert.ok(os_.args.some((a) => a.value === 'ELI5' && a.description === 'keep it simple pls'),
+      'value AND description, verbatim');
+    assert.ok(os_.args.some((a) => a.value === 'default'), 'built-ins too');
+
+    // the commands that take nothing must not sprout the field on the way out
+    for (const c of r.body.commands.filter((c) => c.name !== '/output-style')) {
+      assert.strictEqual(c.args, undefined, c.name);
+    }
+
+    // ...and the fake, which reports no args at all, is unchanged
+    const fake = await s.api('GET', '/api/commands?target=lieutenant:fk1');
+    for (const c of fake.body.commands) assert.strictEqual(c.args, undefined, 'fake ' + c.name);
+  } finally {
+    await teardown();
+    fs.rmSync(styles, { recursive: true, force: true });
+  }
+});
+
+test('a codex target never offers /output-style — codex has no output styles', async () => {
+  const { s, teardown } = await bootWithFakeLt();
+  try {
+    const ref = { harness: 'codex', session: 'bc-cx1', cwd: '/tmp' };
+    assert.strictEqual((await s.api('POST', '/api/lieutenants', { name: 'Cody', id: 'cx1', ref })).status, 200);
+    const r = await s.api('GET', '/api/commands?target=lieutenant:cx1');
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(r.body.commands.map((c) => c.name), ['/status', '/compact', '/help', '/reset']);
+  } finally {
+    await teardown();
+  }
+});
+
 test('a harness without the capability (BC_FAKE_NO_COMMANDS) degrades to the board list + an in-thread notice', async () => {
   const { s, teardown } = await bootWithFakeLt({ BC_FAKE_NO_COMMANDS: '1' });
   try {

@@ -12,6 +12,7 @@ import { avatarHtml } from './avatars.js';
 import { isEchoOf, addPending, pendingFor } from './pending.js';
 import { fileContextBlock } from './filectx.js';
 import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
+import { slashOptions } from './slash.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -738,19 +739,26 @@ function renderQuote() {
 }
 
 // ---------- slash-command autocomplete ----------
-// A composer holding a single leading-"/" token opens the picker, fed by
-// /api/commands for the CURRENT target (lieutenant chat → its own session;
-// card thread → the card's worker session). Arrows move, Tab/Enter pick, Esc
-// closes; sending is unchanged (the server routes "/..." to runCommand and
-// both the command and its reply land in the thread). Commands are refetched
-// on every open — cheap, and the set changes when a worker starts.
+// A composer holding a leading-"/" opens the picker, fed by /api/commands for
+// the CURRENT target (lieutenant chat → its own session; card thread → the
+// card's worker session). Arrows move, Tab/Enter pick, Esc closes; sending is
+// unchanged (the server routes "/..." to runCommand and both the command and its
+// reply land in the thread). Commands are refetched on every open — cheap, and
+// the set changes when a worker starts.
+//
+// TWO STAGES: the command name, and then — for a command that reports `args` —
+// its values, so "/output-style " keeps completing instead of closing. Which
+// stage the text is in, and what each row inserts, is slash.js's job; everything
+// here is DOM. The fetch gate is deliberately just "starts with /": stage two
+// contains a space, so the old one-token test would have closed the picker on
+// the very keystroke that opens the value list.
 const slashEl = document.getElementById('chat-slash');
 const slash = { open: false, items: [], sel: 0, target: null };
 
+const SLASH_OPEN_RE = /^\/[^\n]*$/; // one line, starts with "/" — slash.js decides the rest
+
 function slashMatches() {
-  const v = inputEl.value;
-  if (!/^\/\S*$/.test(v)) return [];
-  return slash.items.filter((c) => c && typeof c.name === 'string' && c.name.startsWith(v));
+  return slashOptions(inputEl.value, slash.items).matches;
 }
 function closeSlash() {
   slash.open = false;
@@ -762,20 +770,27 @@ function renderSlash() {
   if (!matches.length) { slashEl.hidden = true; return; }
   slash.sel = Math.max(0, Math.min(slash.sel, matches.length - 1));
   slashEl.hidden = false;
+  // Same two-column row for both stages — a style name reads like a command
+  // name, and a captain scanning the list should not have to change gears.
   slashEl.innerHTML = matches.map((c, i) =>
-    '<button type="button" class="slash-it' + (i === slash.sel ? ' on' : '') + '" data-name="' + esc(c.name) + '">' +
+    '<button type="button" class="slash-it' + (i === slash.sel ? ' on' : '') + '" data-insert="' + esc(c.insert) + '">' +
     '<span class="sn">' + esc(c.name) + '</span>' +
     '<span class="sd">' + esc(c.description || '') + '</span></button>').join('');
 }
-function pickSlash(name) {
-  inputEl.value = name;
-  closeSlash();
+// pickSlash(insert) — insert is the WHOLE composer value the pick produces
+// ("/status", "/output-style ", "/output-style ELI5"). One that ends in a space
+// is a command still waiting for its argument, so the picker stays open on its
+// value list rather than closing on a half-typed line.
+function pickSlash(insert) {
+  inputEl.value = insert;
   inputEl.focus();
   autoGrow(inputEl);
+  if (/ $/.test(insert)) { slash.sel = 0; renderSlash(); return; }
+  closeSlash();
 }
 function updateSlash() {
   const target = currentTarget();
-  if (!target || !/^\/\S*$/.test(inputEl.value)) { closeSlash(); return; }
+  if (!target || !SLASH_OPEN_RE.test(inputEl.value)) { closeSlash(); return; }
   if (!slash.open || slash.target !== target) { // opening: (re)fetch the target's commands
     slash.open = true;
     slash.target = target;
@@ -790,7 +805,7 @@ function updateSlash() {
 slashEl.addEventListener('mousedown', (e) => e.preventDefault()); // picking must not blur the composer
 slashEl.addEventListener('click', (e) => {
   const it = e.target.closest('.slash-it');
-  if (it) pickSlash(it.dataset.name);
+  if (it) pickSlash(it.dataset.insert);
 });
 document.addEventListener('click', (e) => {
   if (slash.open && !composerEl.contains(e.target)) closeSlash();
@@ -905,7 +920,7 @@ inputEl.onkeydown = (e) => {
     }
     if (matches.length && (e.key === 'Tab' || e.key === 'Enter')) {
       e.preventDefault();
-      pickSlash(matches[slash.sel].name);
+      pickSlash(matches[slash.sel].insert);
       return;
     }
     if (e.key === 'Escape') { e.preventDefault(); closeSlash(); return; }
