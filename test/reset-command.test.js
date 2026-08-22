@@ -71,7 +71,7 @@ test('the command and its reply both land in the thread', async () => {
 // supervision's rule for a lieutenant that is down is to respawn it — which
 // here means a second spawn racing this one for the same pane, and a captain
 // told his lieutenant "died" while he was the one who restarted it. The window
-// is longer than /output-style's cycle, because a spawn also delivers a brief.
+// is a whole spawn, brief delivery included.
 //
 // BC_FAKE_SPAWN_MS holds the fake's spawn open so ticks land inside it, the way
 // they would against a real launch-settle.
