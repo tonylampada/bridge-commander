@@ -144,8 +144,10 @@ focus, so an agent with siblings must always carry its window.
   across any number of death/resume cycles. The Stop hook also records the live
   session id to `<stateDir>/<session>.session-id`, which resume prefers over the
   ref (ground truth wins). Without any id: fresh session, memory lost. The
-  spawn's extra flags are REPLAYED from `<session>.spawn-args`, not rebuilt
-  (`opts.extraArgs` wins when the caller passes them).
+  spawn's launch facts are REPLAYED from `<session>.spawn-args`, not rebuilt:
+  its extra flags (`opts.extraArgs` wins when the caller passes them) and its
+  `allowRoot` consent, without which a resume as uid 0 comes back missing the
+  `IS_SANDBOX=1` prefix and claude refuses to start.
 - **onTurnEnd** — spawn merges a `Stop` hook into the worktree's
   `.claude/settings.local.json` (kept out of git via `info/exclude`) running
   `turnend-hook.js`, which appends one JSON line per turn boundary to
@@ -174,10 +176,11 @@ State lives in `opts.stateDir` — the server and CLI always pass the
 workspace's `.bridge-commander/harness/` (`BC_HARNESS_STATE` overrides; the
 global `~/.bridge-commander/harness/` is a last-resort for bare embedders only):
 `<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`,
-`<session>.spawn-args` (the `opts.extraArgs` a spawn was given, recorded by the
-shared `tmux-session.js` so a RESUME replays them — a worker pinned to a
-`--model` by its playbook must not come back on the default one; a missing or
-corrupt record reads as "no extra flags" and never throws).
+`<session>.spawn-args` (the launch facts a spawn was given — `opts.extraArgs`
+and `opts.allowRoot` — recorded by the shared `tmux-session.js` so a RESUME
+replays them: a worker pinned to a `--model` by its playbook must not come back
+on the default one. A missing or corrupt record reads as "nothing extra" and
+never throws — a resume that cannot read a hint must still resume).
 
 ## The codex implementation
 
