@@ -130,6 +130,29 @@ function mergeLocalSettings(cwd, mutate) {
   return file;
 }
 
+// excludeLocalSettings(cwd) — hide .claude/settings.local.json from git
+// (info/exclude) when cwd is a repo, so a file we wrote never dirties someone's
+// worktree. Sits next to mergeLocalSettings for the same reason: every writer of
+// that file has to make the same decisions about it, and a writer that skipped
+// this step left the untracked file this step exists to prevent. Best-effort —
+// not a repo, no permission, nothing to exclude, and the write still stands.
+async function excludeLocalSettings(cwd) {
+  try {
+    const gitDir = (await new Promise((resolve, reject) => {
+      execFile('git', ['-C', cwd, 'rev-parse', '--git-path', 'info/exclude'],
+        { encoding: 'utf8' }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+    })).trim();
+    const excl = path.isAbsolute(gitDir) ? gitDir : path.join(cwd, gitDir);
+    fs.mkdirSync(path.dirname(excl), { recursive: true });
+    const cur = fs.existsSync(excl) ? fs.readFileSync(excl, 'utf8') : '';
+    if (!cur.split('\n').includes('.claude/settings.local.json')) {
+      fs.appendFileSync(excl, '.claude/settings.local.json\n');
+    }
+  } catch {
+    // not a git repo — nothing to exclude
+  }
+}
+
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from
 // git (info/exclude) when cwd is a repo, so it never dirties a worktree.
@@ -150,20 +173,18 @@ async function installHooks(cwd, session, stateDir, callbackUrl) {
       settings.hooks.Stop.push({ hooks: [{ type: 'command', command }] });
     }
   });
-  try {
-    const gitDir = (await new Promise((resolve, reject) => {
-      execFile('git', ['-C', cwd, 'rev-parse', '--git-path', 'info/exclude'],
-        { encoding: 'utf8' }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
-    })).trim();
-    const excl = path.isAbsolute(gitDir) ? gitDir : path.join(cwd, gitDir);
-    fs.mkdirSync(path.dirname(excl), { recursive: true });
-    const cur = fs.existsSync(excl) ? fs.readFileSync(excl, 'utf8') : '';
-    if (!cur.split('\n').includes('.claude/settings.local.json')) {
-      fs.appendFileSync(excl, '.claude/settings.local.json\n');
-    }
-  } catch {
-    // not a git repo — nothing to exclude
-  }
+  await excludeLocalSettings(cwd);
+}
+
+// sandboxPrefix(allowRoot) — claude refuses --dangerously-skip-permissions as
+// uid 0 and exits, so as root there is no session to have unless the caller has
+// said, in as many words, that this box is a throwaway. IS_SANDBOX=1 is the
+// escape claude itself checks; it is never set on our own initiative. Off root
+// the consent is inert, so spawn and resume both ask here rather than each
+// deciding for themselves.
+function sandboxPrefix(allowRoot) {
+  const asRoot = allowRoot && typeof process.getuid === 'function' && process.getuid() === 0;
+  return asRoot ? 'IS_SANDBOX=1 ' : '';
 }
 
 // spawn(cwd, prompt, opts?) -> HarnessRef
@@ -190,17 +211,12 @@ async function spawn(cwd, prompt, opts = {}) {
   fs.writeFileSync(promptFile, prompt);
   // Recorded so resume() can replay them — a worker pinned to a model by its
   // playbook must not come back on the default one (tmux-session.js).
-  s.recordSpawnArgs(stateDir, key, opts.extraArgs);
+  s.recordSpawnArgs(stateDir, key, opts);
 
   await s.createPane(session, window, cwdAbs);
   try {
     const extra = (opts.extraArgs || []).map(s.shellQuote).join(' ');
-    // allowRoot — claude refuses --dangerously-skip-permissions as uid 0 and
-    // exits, so as root there is no session to have unless the caller has said,
-    // in as many words, that this box is a throwaway. IS_SANDBOX=1 is the escape
-    // claude itself checks; it is never set on our own initiative.
-    const asRoot = opts.allowRoot && typeof process.getuid === 'function' && process.getuid() === 0;
-    const launchCmd = (asRoot ? 'IS_SANDBOX=1 ' : '')
+    const launchCmd = sandboxPrefix(opts.allowRoot)
       + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
       + `claude --dangerously-skip-permissions --session-id ${resumeId}`
       + (extra ? ' ' + extra : '');
@@ -309,14 +325,18 @@ async function resume(ref, opts = {}) {
   }
   await s.createPane(ref.session, ref.window, ref.cwd);
   try {
-    // The spawn's extra flags are replayed, not rebuilt: --model/--effort came
+    // The spawn's launch facts are replayed, not rebuilt: --model/--effort came
     // from the card's playbook and a resume that drops them is a worker quietly
-    // moved to another model. opts.extraArgs, when given, wins over the record.
-    const extra = (opts.extraArgs || s.recordedSpawnArgs(stateDir, key)).map(String);
+    // moved to another model, and a root session that comes back without
+    // IS_SANDBOX=1 does not come back at all. opts, when given, wins over the
+    // record. A missing or corrupt record is no flags and no prefix, never a throw.
+    const rec = s.recordedSpawnArgs(stateDir, key);
+    const extra = (opts.extraArgs || rec.args).map(String);
     const parts = ['claude', '--dangerously-skip-permissions'];
     if (resumeId) parts.push('--resume', resumeId);
     for (const a of extra) parts.push(s.shellQuote(a));
-    const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false ' + parts.join(' ');
+    const launchCmd = sandboxPrefix(opts.allowRoot || rec.allowRoot)
+      + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false ' + parts.join(' ');
     await s.launchAndSettle(s.paneTarget(ref.session, ref.window), launchCmd, SETTLE);
   } catch (err) {
     await s.killPane(ref.session, ref.window);
@@ -447,8 +467,9 @@ function outputStyles(opts = {}) {
 
 // writeOutputStyle — one key, through the shared merge, because installHooks
 // writes its Stop hook into this very file and must survive the write.
-function writeOutputStyle(cwd, style) {
+async function writeOutputStyle(cwd, style) {
   mergeLocalSettings(cwd, (settings) => { settings.outputStyle = style; });
+  await excludeLocalSettings(cwd);
 }
 
 // commands(ref?) — the ref is what makes the style list this SESSION's list: a
@@ -491,7 +512,7 @@ async function runCommand(ref, command, opts = {}) {
     // Refused before anything is written: a bad name must not silently sit in
     // the settings file waiting to surprise the next conversation.
     if (!hit) throw new Error('unknown output style "' + want + '" — available: ' + available);
-    writeOutputStyle(ref.cwd, hit.value);
+    await writeOutputStyle(ref.cwd, hit.value);
     return 'output style set to ' + hit.value
       + " — it takes effect on this session's next conversation (/reset to start one now)";
   }

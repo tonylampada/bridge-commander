@@ -52,23 +52,39 @@ function stateDirOf(opts = {}) {
 function spawnArgsFile(stateDir, key) {
   return path.join(stateDir, `${key}.spawn-args`);
 }
-function recordSpawnArgs(stateDir, key, extraArgs) {
+// The launch facts a resume has to replay, taken straight off the spawn's opts:
+// the extra flags (--model/--effort, pinned by the card's playbook) and the
+// caller's allowRoot consent (the IS_SANDBOX=1 prefix without which claude
+// refuses to come back as uid 0). Written as an object; a bare array is the
+// older record's shape and still reads as flags-only.
+function recordSpawnArgs(stateDir, key, opts = {}) {
   const file = spawnArgsFile(stateDir, key);
   try {
-    const args = (extraArgs || []).map(String);
-    if (args.length) fs.writeFileSync(file, JSON.stringify(args) + '\n');
+    const rec = { args: (opts.extraArgs || []).map(String) };
+    if (opts.allowRoot) rec.allowRoot = true;
+    if (rec.args.length || rec.allowRoot) fs.writeFileSync(file, JSON.stringify(rec) + '\n');
     else fs.rmSync(file, { force: true });
   } catch {
     // best-effort: the record is an optimisation, never a precondition
   }
 }
+// -> { args: string[], allowRoot: boolean }. Missing, unreadable or corrupt
+// reads as "nothing extra" and never throws: a resume that cannot read a hint
+// must still resume.
 function recordedSpawnArgs(stateDir, key) {
   try {
     const v = JSON.parse(fs.readFileSync(spawnArgsFile(stateDir, key), 'utf8'));
-    return Array.isArray(v) ? v.filter((a) => typeof a === 'string') : [];
+    if (Array.isArray(v)) return { args: v.filter((a) => typeof a === 'string'), allowRoot: false };
+    if (v && typeof v === 'object') {
+      return {
+        args: Array.isArray(v.args) ? v.args.filter((a) => typeof a === 'string') : [],
+        allowRoot: !!v.allowRoot,
+      };
+    }
   } catch {
-    return [];
+    // fall through to the empty record
   }
+  return { args: [], allowRoot: false };
 }
 
 function shellQuote(s) {

@@ -3027,6 +3027,10 @@ async function superviseTick() {
         if (pendingItems(lt.id).length) scheduleWake(lt.id);
         continue;
       }
+      // Asked again on the way out: the kill can land DURING the alive()
+      // round-trip, so a tick that passed the check above still gets down=true
+      // from a lieutenant /reset is legitimately restarting.
+      if (cyclingLieutenants.has(lt.id)) continue;
       const n = (respawnAttempts.get(lt.id) || 0) + 1;
       if (n > 3) continue; // already flagged needs-captain; a manual revival resets via alive
       respawnAttempts.set(lt.id, n);
