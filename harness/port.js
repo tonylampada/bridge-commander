@@ -68,6 +68,8 @@
 //       the slash commands this harness answers (/status /compact /help
 //       where applicable; claude adds /autocompact and /output-style — verified
 //       against the binary, the public docs lag behind).
+//       `ref`, when given, scopes the answer to that session — claude's style
+//       list includes the ones installed in the session's own cwd.
 //       `args` is OPTIONAL metadata: [{ value, description }], the values this
 //       command accepts as its single argument, for a composer that wants to
 //       keep completing AFTER the command name (ui/js/slash.js). A harness that
@@ -87,7 +89,11 @@
 //       renders commands(). Unknown names throw — and so does a command whose
 //       argument is missing or unrecognised, BEFORE it does anything: claude's
 //       /output-style restarts the session to apply a style, and a typo must
-//       not cost a restart.
+//       not cost a restart. A command that restarts its session may also refuse
+//       while that session is MID-TURN — a resume comes back on an idle
+//       composer, so the interrupted turn is lost, not continued. The server
+//       marks the target for the duration of the call (runChatCommand), so a
+//       restart a command performs deliberately is never read as a crash.
 //   status(ref, opts?) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
 //       model + context usage read from the files the harness already
 //       writes (transcript / rollout log); null — never a throw — when

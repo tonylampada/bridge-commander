@@ -31,6 +31,46 @@ function stateDirOf(opts = {}) {
   return dir;
 }
 
+// The extra launch flags a spawn was given, kept next to the other per-agent
+// state files (<key>.prompt, <key>.session-id, <key>.turnend.jsonl) so a RESUME
+// can replay them.
+//
+// Those flags are not decoration. The server pins a worker's --model/--effort
+// from its playbook at spawn, and every resume path built its own launch line
+// without them — so a worker pinned to a model came back on the default one,
+// silently, with nobody told. The oldest of those paths is `card start --resume`
+// after a death, which is exactly the moment the pinning matters most.
+//
+// Recorded here rather than in each adapter because both tmux adapters take the
+// same `extraArgs` and both rebuild a launch line on resume; one copy of the
+// decision is one place for it to stay true.
+//
+// A missing, unreadable or corrupt record reads as "no extra flags" — today's
+// behaviour — and never throws: a resume that cannot read a hint must still
+// resume. A spawn with no extra flags REMOVES any stale record, so a card
+// restarted onto a different model does not inherit the last run's.
+function spawnArgsFile(stateDir, key) {
+  return path.join(stateDir, `${key}.spawn-args`);
+}
+function recordSpawnArgs(stateDir, key, extraArgs) {
+  const file = spawnArgsFile(stateDir, key);
+  try {
+    const args = (extraArgs || []).map(String);
+    if (args.length) fs.writeFileSync(file, JSON.stringify(args) + '\n');
+    else fs.rmSync(file, { force: true });
+  } catch {
+    // best-effort: the record is an optimisation, never a precondition
+  }
+}
+function recordedSpawnArgs(stateDir, key) {
+  try {
+    const v = JSON.parse(fs.readFileSync(spawnArgsFile(stateDir, key), 'utf8'));
+    return Array.isArray(v) ? v.filter((a) => typeof a === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
 function shellQuote(s) {
   return `'` + String(s).replace(/'/g, `'\\''`) + `'`;
 }
@@ -457,6 +497,8 @@ function openFeedCount() { return feeds.size; }
 module.exports = {
   SHELLS,
   stateDirOf,
+  recordSpawnArgs,
+  recordedSpawnArgs,
   shellQuote,
   newSessionName,
   stateKey,
@@ -470,6 +512,8 @@ module.exports = {
   killPane,
   adoptWindow,
   launchAndSettle,
+  paneTail,
+  SETTLE_TAIL_LINES,
   verifyLive,
   onTurnEnd,
   openPane,

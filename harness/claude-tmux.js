@@ -100,34 +100,117 @@ const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude|Bypass Permissions mode|Yes, I accept/;
 const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, fatalRe: FATAL_RE, label: 'claude' };
 
+// ---------- BUSY: is this session mid-turn? ----------
+// Asked before anything deliberately restarts a session. `claude --resume`
+// brings the conversation back but comes back with an IDLE composer: an
+// interrupted turn is not continued, it is gone. A worker killed mid-turn stops
+// with no turn-end and no wake, and its card sits untouched until the 30-minute
+// stale watchdog notices.
+//
+// The signatures below are pinned against REAL captures from live 2.1.239 panes
+// (output-style.test.js holds them verbatim), not reasoned out of the docs:
+//
+//   busy   `✻ Working… (12s · still thinking with high effort)`
+//          `✽ Accomplishing… (0s · ↓ 1.7k tokens)`   `· Churning…`
+//   idle   `✻ Baked for 1s`, `✻ Sautéed for 1s`, or no spinner line at all
+//
+// What holds across every frame sampled is the SHAPE, and only the shape: one
+// glyph, one space, one gerund, then U+2026 — against " for <N>s" once the turn
+// is done. Three things it is deliberately NOT built on:
+//   - not the glyph. It rotates over at least ✻ ✶ ✳ ✽ ·, and a matcher built
+//     from the glyphs that had been SEEN missed ✽ the first time out.
+//   - not the word. It is randomised (Working, Churning, Tinkering,
+//     Prestidigitating, Accomplishing, …); there is no list to hold.
+//   - NOT "esc to interrupt". UI_READY_RE still names it, but this build never
+//     renders it — ~100 frames across several turns, not once.
+//
+// The anchoring is load-bearing, and here is what it is for: the startup
+// welcome box truncates its "What's new" entries with the same U+2026, inside
+// rows that begin with `│ `. A bare /…/ therefore reads a freshly launched,
+// perfectly idle session as busy — refusing the command exactly when it is most
+// likely to be run. So: column zero, one glyph that is not box-drawing, one
+// space, and the ellipsis on the FIRST word.
+const BUSY_SPINNER_RE = /^[^\s│─╭╮╰╯]\x20\S*…/m;
+
+// The third state, and the one a cycle would destroy quietest of all: messages
+// typed while the session was busy sit in a queue that lives in the process.
+// The composer says so in as many words, and the queue dies with the pane.
+//
+// `\s*` and not a literal space: the composer separates its `❯` from what
+// follows with U+00A0, a NO-BREAK space (checked in the capture, byte by byte).
+// The spinner above uses a plain \x20 — which is the other half of why
+// BUSY_SPINNER_RE names \x20 explicitly rather than \s. A composer line can
+// therefore never be read as a spinner, whatever the captain typed into it.
+const BUSY_QUEUED_RE = /^❯\s*Press up to edit queued messages/m;
+const BUSY = { spinnerRe: BUSY_SPINNER_RE, queuedRe: BUSY_QUEUED_RE, label: 'claude' };
+
+// paneBusy(ref) — is the session mid-turn, or holding queued messages?
+// Read off the same pane TAIL the settle signatures use: the current
+// interaction is always at the bottom, and matching the whole capture would hit
+// a spinner left in scrollback by a turn that ended long ago.
+// An unreadable pane answers false. A pane nobody can read is not evidence of a
+// turn in flight, and refusing on it would make the command unusable on exactly
+// the day tmux is having trouble.
+async function paneBusy(ref) {
+  let tail = '';
+  try {
+    tail = s.paneTail((await t.capture(s.paneTarget(ref.session, ref.window), 40)) || '');
+  } catch {
+    return false;
+  }
+  return BUSY.spinnerRe.test(tail) || BUSY.queuedRe.test(tail);
+}
+
+// mergeLocalSettings(cwd, mutate) — the read-modify-write of
+// <cwd>/.claude/settings.local.json, in ONE place.
+//
+// Two writers own this file: installHooks (the Stop hook every turn boundary on
+// the board rides on) and writeOutputStyle. Neither may clobber the other, so
+// both read first and write the whole object back — and every decision about
+// HOW that is done has to be the same on both sides. Kept apart, the second
+// copy is free to drift: a different indent, or a corrupt file that one hand
+// recovers from and the other throws on, and the drift shows up as a lieutenant
+// that stopped reporting turn ends.
+//
+// A file that is missing, unparseable, or not a JSON object is replaced by {}:
+// there is nothing to preserve in bytes nothing can read, and refusing to write
+// would leave the caller with no hook and no style either.
+function mergeLocalSettings(cwd, mutate) {
+  const dir = path.join(cwd, '.claude');
+  const file = path.join(dir, 'settings.local.json');
+  fs.mkdirSync(dir, { recursive: true });
+  let settings;
+  try {
+    settings = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    settings = null;
+  }
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) settings = {};
+  mutate(settings);
+  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  return file;
+}
+
 // installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
 // Idempotent; preserves any existing settings/hooks. Also hides the file from
 // git (info/exclude) when cwd is a repo, so it never dirties a worktree.
 async function installHooks(cwd, session, stateDir, callbackUrl) {
-  const dir = path.join(cwd, '.claude');
-  const file = path.join(dir, 'settings.local.json');
-  fs.mkdirSync(dir, { recursive: true });
-  let settings = {};
-  try {
-    settings = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    settings = {};
-  }
   const command = ['node', s.shellQuote(HOOK_SCRIPT), s.shellQuote(stateDir), s.shellQuote(session)]
     .concat(callbackUrl ? [s.shellQuote(callbackUrl)] : [])
     .join(' ');
-  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
-  if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
-  const ours = settings.hooks.Stop.some((m) =>
-    Array.isArray(m.hooks) && m.hooks.some((h) => h.command === command));
-  if (!ours) {
-    // Drop stale bc hook entries (e.g. a previous session in this cwd) first.
-    settings.hooks.Stop = settings.hooks.Stop.filter((m) =>
-      !(Array.isArray(m.hooks) && m.hooks.some((h) =>
-        typeof h.command === 'string' && h.command.includes(HOOK_SCRIPT))));
-    settings.hooks.Stop.push({ hooks: [{ type: 'command', command }] });
-  }
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  mergeLocalSettings(cwd, (settings) => {
+    if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
+    if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
+    const ours = settings.hooks.Stop.some((m) =>
+      Array.isArray(m.hooks) && m.hooks.some((h) => h.command === command));
+    if (!ours) {
+      // Drop stale bc hook entries (e.g. a previous session in this cwd) first.
+      settings.hooks.Stop = settings.hooks.Stop.filter((m) =>
+        !(Array.isArray(m.hooks) && m.hooks.some((h) =>
+          typeof h.command === 'string' && h.command.includes(HOOK_SCRIPT))));
+      settings.hooks.Stop.push({ hooks: [{ type: 'command', command }] });
+    }
+  });
   try {
     const gitDir = (await new Promise((resolve, reject) => {
       execFile('git', ['-C', cwd, 'rev-parse', '--git-path', 'info/exclude'],
@@ -166,6 +249,9 @@ async function spawn(cwd, prompt, opts = {}) {
 
   const promptFile = path.join(stateDir, `${key}.prompt`);
   fs.writeFileSync(promptFile, prompt);
+  // Recorded so resume() can replay them — a worker pinned to a model by its
+  // playbook must not come back on the default one (tmux-session.js).
+  s.recordSpawnArgs(stateDir, key, opts.extraArgs);
 
   await s.createPane(session, window, cwdAbs);
   try {
@@ -284,10 +370,15 @@ async function resume(ref, opts = {}) {
   }
   await s.createPane(ref.session, ref.window, ref.cwd);
   try {
-    const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
-      + 'claude --dangerously-skip-permissions '
-      + (resumeId ? `--resume ${resumeId}` : '');
-    await s.launchAndSettle(s.paneTarget(ref.session, ref.window), launchCmd.trim(), SETTLE);
+    // The spawn's extra flags are replayed, not rebuilt: --model/--effort came
+    // from the card's playbook and a resume that drops them is a worker quietly
+    // moved to another model. opts.extraArgs, when given, wins over the record.
+    const extra = (opts.extraArgs || s.recordedSpawnArgs(stateDir, key)).map(String);
+    const parts = ['claude', '--dangerously-skip-permissions'];
+    if (resumeId) parts.push('--resume', resumeId);
+    for (const a of extra) parts.push(s.shellQuote(a));
+    const launchCmd = 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false ' + parts.join(' ');
+    await s.launchAndSettle(s.paneTarget(ref.session, ref.window), launchCmd, SETTLE);
   } catch (err) {
     await s.killPane(ref.session, ref.window);
     throw err;
@@ -376,61 +467,73 @@ function frontMatter(text) {
 }
 
 // outputStyles(opts?) -> [{ value, description }] — what `/output-style` accepts
-// HERE: the built-ins plus every *.md under ~/.claude/output-styles/. A style is
-// named by its front-matter `name:` (the string the setting takes), and falls
-// back to its basename when the file has none. An unreadable directory or file
-// is not an error — it just means there are no custom styles to offer, and the
-// command still works for the built-ins.
+// HERE: the built-ins, plus every *.md under the SESSION's own
+// <cwd>/.claude/output-styles/ (opts.cwd), plus every *.md under the user's
+// ~/.claude/output-styles/. A style is named by its front-matter `name:` (the
+// string the setting takes), and falls back to its basename when the file has
+// none. An unreadable directory or file is not an error — it just means there
+// are fewer custom styles to offer, and the command still works for the rest.
+//
+// The project directory is scanned because we WRITE the setting into that very
+// .claude/ — a style file sitting next to the settings file we are editing, and
+// being told it is unknown, was our own inconsistency and not a missing feature.
+// Verified in a live pane: a style present only in <cwd>/.claude/output-styles/
+// is honoured by the binary (the session reported `# Output Style: ProjOnly`).
+//
+// PRECEDENCE, also verified against the binary rather than inferred — the same
+// `name:` in both directories with different bodies, and the session emitted the
+// PROJECT one. So the project entry shadows the user entry, and the project
+// directory is scanned first (first name in wins). Built-ins are seeded into
+// `taken` before either, so no custom file can shadow a built-in name — the
+// existing rule, unchanged.
 function outputStyles(opts = {}) {
   const out = BUILTIN_OUTPUT_STYLES.map((st) => ({ ...st }));
-  const dir = opts.stylesDir || process.env.BC_CLAUDE_OUTPUT_STYLES_DIR
+  const userDir = opts.stylesDir || process.env.BC_CLAUDE_OUTPUT_STYLES_DIR
     || path.join(os.homedir(), '.claude', 'output-styles');
-  let files;
-  try {
-    files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
-  } catch {
-    return out; // no directory, no permission — the built-ins alone, never a throw
-  }
+  const dirs = [];
+  if (opts.cwd) dirs.push(path.join(opts.cwd, '.claude', 'output-styles'));
+  dirs.push(userDir);
   const taken = new Set(out.map((st) => st.value.toLowerCase()));
-  for (const f of files) {
-    let fm;
+  for (const dir of dirs) {
+    let files;
     try {
-      fm = frontMatter(fs.readFileSync(path.join(dir, f), 'utf8'));
+      files = fs.readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
     } catch {
-      continue; // unreadable file — skip it, the rest of the list still stands
+      continue; // no directory, no permission — never a throw, just fewer styles
     }
-    const value = fm.name || path.basename(f, '.md');
-    if (!value || taken.has(value.toLowerCase())) continue;
-    taken.add(value.toLowerCase());
-    out.push({ value, description: fm.description || 'custom output style (' + f + ')' });
+    for (const f of files) {
+      let fm;
+      try {
+        fm = frontMatter(fs.readFileSync(path.join(dir, f), 'utf8'));
+      } catch {
+        continue; // unreadable file — skip it, the rest of the list still stands
+      }
+      const value = fm.name || path.basename(f, '.md');
+      if (!value || taken.has(value.toLowerCase())) continue;
+      taken.add(value.toLowerCase());
+      out.push({ value, description: fm.description || 'custom output style (' + f + ')' });
+    }
   }
   return out;
 }
 
-// writeOutputStyle — merge-in-place, because installHooks writes its Stop hook
-// into this very file: read, set the one key, write back.
+// writeOutputStyle — one key, through the shared merge, because installHooks
+// writes its Stop hook into this very file and must survive the write.
 function writeOutputStyle(cwd, style) {
-  const dir = path.join(cwd, '.claude');
-  const file = path.join(dir, 'settings.local.json');
-  fs.mkdirSync(dir, { recursive: true });
-  let settings;
-  try {
-    settings = JSON.parse(fs.readFileSync(file, 'utf8'));
-  } catch {
-    settings = null;
-  }
-  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) settings = {};
-  settings.outputStyle = style;
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + '\n');
+  mergeLocalSettings(cwd, (settings) => { settings.outputStyle = style; });
 }
 
-function commands() {
+// commands(ref?) — the ref is what makes the style list this SESSION's list: a
+// style installed in the worker's own worktree is offered to that worker and to
+// nobody else. Without a ref (a bare /help, a caller with no session in hand)
+// only the user-level directory is scanned, as before.
+function commands(ref) {
   return SLASH_COMMANDS.map((c) => ({ ...c })).concat([
     { name: '/autocompact', description: 'set how full the context gets before auto-compaction' },
     {
       name: OUTPUT_STYLE,
       description: 'switch this session\'s output style (resumes the session to apply it)',
-      args: outputStyles(),
+      args: outputStyles({ cwd: ref && ref.cwd }),
     },
   ]);
 }
@@ -441,7 +544,7 @@ async function runCommand(ref, command, opts = {}) {
   const line = String(command || '').trim();
   const name = line.split(/\s+/)[0];
   const key = s.stateKey(ref.session, ref.window);
-  if (name === '/help') return helpText(commands());
+  if (name === '/help') return helpText(commands(ref));
   if (name === '/status') {
     const st = await status(ref);
     if (!st) throw new Error('no status for ' + key + ' — session transcript not found');
@@ -451,7 +554,7 @@ async function runCommand(ref, command, opts = {}) {
     // Everything after the command name is ONE style name — a style file may
     // carry spaces in its `name:`, so the argument is not tokenized.
     const want = line.slice(name.length).trim();
-    const styles = outputStyles();
+    const styles = outputStyles({ stylesDir: opts.stylesDir, cwd: ref.cwd });
     const available = styles.map((st) => st.value).join(', ');
     // The bare form is refused rather than typed: claude has no /output-style
     // to answer it, and the whole point is that nobody has to remember the list.
@@ -459,9 +562,34 @@ async function runCommand(ref, command, opts = {}) {
     const hit = styles.find((st) => st.value.toLowerCase() === want.toLowerCase());
     // Refused BEFORE anything is written: a bad name must not cost a restart.
     if (!hit) throw new Error('unknown output style "' + want + '" — available: ' + available);
+    // And refused before the write for the same reason, one step further on: a
+    // mid-turn session cannot be cycled without losing the turn, and refusing
+    // AFTER the write would leave the setting applied with no cycle behind it —
+    // the style would then appear at some unrelated later restart. Refusing is
+    // deliberately all this does: re-running the command when the session is
+    // idle costs five seconds, whereas re-prompting from here would invent a
+    // second way for a turn to begin, and that is the worse thing to own.
+    if (await paneBusy(ref)) {
+      throw new Error(OUTPUT_STYLE + ' ' + hit.value + ' — the session is mid-turn; run it again when it is idle');
+    }
     writeOutputStyle(ref.cwd, hit.value);
     await kill(ref);
-    await resume(ref, Object.assign({}, opts, { installHooks: false }));
+    // kill() routes through tryTmux, which SWALLOWS tmux failures, and resume()
+    // returns the ref untouched when the pane is still alive — so a kill that
+    // did not take turns the whole cycle into a no-op while the reply below
+    // still says the session restarted. Reporting a restart nobody checked is
+    // the one line nobody re-reads, so it is checked.
+    if (await alive(ref)) {
+      throw new Error('could not cycle ' + key + ' — its pane is still running after kill; '
+        + hit.value + ' is written and will apply the next time the session starts');
+    }
+    const back = await resume(ref, Object.assign({}, opts, { installHooks: false }));
+    // resume() prefers the hook-recorded session id over ref.resumeId (ground
+    // truth), so the cycle can CORRECT it. Dropped, status() and the context bar
+    // keep reading the stale one. The ref cannot be handed back through this
+    // verb's string return, so the correction is written onto the ref the caller
+    // holds — the same in-place refresh the server does from Stop-hook payloads.
+    if (back && back.resumeId && back.resumeId !== ref.resumeId) ref.resumeId = back.resumeId;
     return 'output style now ' + hit.value + ' — session resumed to pick it up';
   }
   if (PASSTHROUGH.has(name)) {
@@ -487,7 +615,8 @@ module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, insta
   // Exported for the tests that pin the style list against a temp directory and
   // the built-ins against the binary.
   outputStyles, BUILTIN_OUTPUT_STYLES,
-  // Exported for the test that pins them against REAL captured screens. These
-  // regexes decide whether an unattended revival works or sits on a menu until
-  // it is given up on, and that is not a judgement to make by reading them.
-  SETTLE };
+  // Exported for the tests that pin them against REAL captured screens. SETTLE
+  // decides whether an unattended revival works or sits on a menu until it is
+  // given up on; BUSY decides whether a deliberate restart lands on a session
+  // mid-turn. Neither is a judgement to make by reading the regex.
+  SETTLE, BUSY };

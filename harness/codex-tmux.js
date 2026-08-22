@@ -87,6 +87,9 @@ async function spawn(cwd, prompt, opts = {}) {
 
   const promptFile = path.join(stateDir, `${key}.prompt`);
   fs.writeFileSync(promptFile, prompt);
+  // Recorded so resume() can replay them — a worker pinned to a model by its
+  // playbook must not come back on the default one (tmux-session.js).
+  s.recordSpawnArgs(stateDir, key, opts.extraArgs);
 
   await s.createPane(session, window, cwdAbs);
   try {
@@ -197,8 +200,14 @@ async function resume(ref, opts = {}) {
 
   await s.createPane(ref.session, ref.window, ref.cwd);
   try {
+    // The spawn's extra flags are replayed, not rebuilt: --model and friends
+    // came from the card's playbook and a resume that drops them is a worker
+    // quietly moved to another model. opts.extraArgs, when given, wins.
+    const extra = (opts.extraArgs || s.recordedSpawnArgs(stateDir, key))
+      .map(s.shellQuote).join(' ');
     const launchCmd = (resumeId ? `codex resume ${resumeId} ` : 'codex ')
-      + launchFlags(stateDir, key, opts.callbackUrl || process.env.BC_TURNEND_URL || '');
+      + launchFlags(stateDir, key, opts.callbackUrl || process.env.BC_TURNEND_URL || '')
+      + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(ref.session, ref.window), launchCmd, SETTLE);
   } catch (err) {
     await s.killPane(ref.session, ref.window);
