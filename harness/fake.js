@@ -333,23 +333,8 @@ async function paneInput(ref, input = {}) {
 //                         commands" (capability-absent degradation under test)
 const FAKE_STATUS = { model: 'fake-model', contextUsed: 50000, contextWindow: 200000 };
 
-// BC_FAKE_CYCLE adds /cycle: the fake's stand-in for a command that
-// deliberately RESTARTS the session it runs against. claude's /output-style is
-// the real one — the style is read at process start, so applying it means
-// kill + resume, and for the length of that call the session is genuinely dead.
-// Supervision reads a session that is down and unmarked as a CRASH, so the
-// server marks the target around the call; without a command that actually
-// stops its session there is no way to exercise that guard without tmux.
-// Env-gated so the canned list every other test pins stays the shared trio.
-const CYCLE_MS = parseInt(process.env.BC_FAKE_CYCLE_MS, 10) > 0
-  ? parseInt(process.env.BC_FAKE_CYCLE_MS, 10) : 400;
-
 function commands() {
-  const out = SLASH_COMMANDS.map((c) => ({ ...c }));
-  if (process.env.BC_FAKE_CYCLE) {
-    out.push({ name: '/cycle', description: 'restart this session (the fake\'s write-then-cycle stand-in)' });
-  }
-  return out;
+  return SLASH_COMMANDS.map((c) => ({ ...c }));
 }
 
 async function status(ref) {
@@ -371,14 +356,6 @@ async function runCommand(ref, command) {
   if (name === '/compact') {
     await send(ref, line); // same path a real adapter uses: the send machinery
     return '"' + line + '" submitted to ' + refKey(ref) + ' — the session runs it in-place';
-  }
-  if (name === '/cycle' && process.env.BC_FAKE_CYCLE) {
-    await kill(ref);
-    // The window supervision would otherwise call a crash: dead, unmarked, and
-    // long enough for a tick to land in it.
-    await new Promise((r) => setTimeout(r, CYCLE_MS));
-    await resume(ref);
-    return 'session ' + refKey(ref) + ' cycled';
   }
   throw new Error('fake: unknown command ' + name + ' (see /help)');
 }

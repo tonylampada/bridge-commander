@@ -512,8 +512,6 @@ module.exports = {
   killPane,
   adoptWindow,
   launchAndSettle,
-  paneTail,
-  SETTLE_TAIL_LINES,
   verifyLive,
   onTurnEnd,
   openPane,

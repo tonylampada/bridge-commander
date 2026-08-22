@@ -1513,39 +1513,26 @@ async function resetLieutenant(id) {
   if (pendingItems(id).length) scheduleWake(id);
   return { ok: true, session: lt.ref.session };
 }
-// A slash command may deliberately RESTART the session it runs against —
-// claude's /output-style cycles it through kill+resume, because the style is
-// read at process start and a live session cannot be repainted, and /reset
-// kills a lieutenant and spawns it fresh on its launch prompt (a longer window
-// still: a whole spawn with a brief to deliver). Supervision has one rule about
-// a session that is down: it died. pauseWorker sets w.paused
-// BEFORE its own kill for exactly this reason ("the death must never look like
-// a crash"), and the lieutenant half of superviseTick respawns anything it
-// finds down — which mid-cycle means a second resume racing the first for the
-// same pane.
+// /reset kills a lieutenant's session and spawns it fresh on its launch prompt
+// — a whole spawn, with a brief to deliver. Supervision has one rule about a
+// lieutenant that is down: it died, so respawn it, which mid-reset means a
+// second spawn racing this one for the same pane and a captain told his
+// lieutenant crashed when he is the one who restarted it.
 //
-// The harness cannot mark either one: `paused` is board state and respawn is
-// board policy, and neither is anything the harness knows about. So the mark
-// lives here, wrapped around the call, for the whole of it — the window is
-// kill → createPane → launchAndSettle, seconds against a 30s tick.
+// pauseWorker sets w.paused before its own kill for exactly this reason ("the
+// death must never look like a crash"); a lieutenant has no such field, so the
+// mark lives here, wrapped around the call for the whole of it.
 //
-// Cleared in a `finally`, including when the command throws: a marker left
-// behind would silence supervision for that worker permanently, which is a
-// worse failure than the one this is preventing. A worker already paused keeps
-// its own mark — this restores what it found, it does not own it.
-const cyclingLieutenants = new Set(); // ids whose session a command is restarting right now
-async function withCycleGuard(target, fn) {
-  const lt = /^lieutenant:(.+)$/.exec(target || '');
-  const card = /^card:(.+)$/.exec(target || '');
-  const w = card ? findWorker(card[1]) : null;
-  const mark = !!(w && !w.paused);
-  if (lt) cyclingLieutenants.add(lt[1]);
-  if (mark) w.paused = now();
+// Cleared in a `finally`, including when the reset throws: a marker left behind
+// would silence supervision for that lieutenant permanently, which is a worse
+// failure than the one this is preventing.
+const cyclingLieutenants = new Set(); // ids being restarted by /reset right now
+async function withCycleGuard(id, fn) {
+  cyclingLieutenants.add(id);
   try {
     return await fn();
   } finally {
-    if (lt) cyclingLieutenants.delete(lt[1]);
-    if (mark) delete w.paused;
+    cyclingLieutenants.delete(id);
   }
 }
 
@@ -1578,7 +1565,7 @@ async function runChatCommand(target, text) {
   // on one whose session has died — bringing it back is the whole point.
   if (boardCommands(target).some((c) => c.name === name)) {
     const id = /^lieutenant:(.+)$/.exec(target)[1];
-    const out = await withCycleGuard(target, () => resetLieutenant(id));
+    const out = await withCycleGuard(id, () => resetLieutenant(id));
     if (out.error) reply('bridge', '⚠ ' + name + ' — ' + out.error);
     else reply('bridge', 'reset — ' + id + ' is a new session on the launch prompt (doctrine, charter, and what it owns). The conversation before this one is gone.');
     return { ok: true, command: name };
@@ -1600,8 +1587,7 @@ async function runChatCommand(target, text) {
     // the FULL line goes to the harness — pass-through commands (/compact,
     // claude's /autocompact) may carry arguments; `name` only did the match
     const impl = getHarness(r.ref.harness);
-    const result = await withCycleGuard(target,
-      () => impl.runCommand(r.ref, text, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL }));
+    const result = await impl.runCommand(r.ref, text, { stateDir: HARNESS_STATE_DIR });
     // /status also fetches the structured status (a cheap transcript read) so the
     // reply carries both the formatted text (fallback) and the payload the UI
     // renders as model + context bar + rate lines — never parsing the prose.
@@ -3026,10 +3012,9 @@ async function superviseTick() {
           if (ref) { lt.ref = ref; changed = true; }
         } catch (e) { /* keep the old ref; the next tick tries again */ }
       }
-      // A slash command may be deliberately cycling this session right now
-      // (claude's /output-style kills it and resumes it to apply the style).
-      // Between those two halves it is legitimately down, and respawning here
-      // would race the resume for the same pane.
+      // /reset is restarting this lieutenant right now: between its kill and
+      // its spawn it is legitimately down, and respawning here would race that
+      // spawn for the same pane.
       if (cyclingLieutenants.has(lt.id)) continue;
       let up = false;
       try { up = impl ? await impl.alive(lt.ref) : false; } catch (e) { up = false; }

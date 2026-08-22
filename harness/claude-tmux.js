@@ -100,92 +100,6 @@ const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude|Bypass Permissions mode|Yes, I accept/;
 const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, fatalRe: FATAL_RE, label: 'claude' };
 
-// ---------- BUSY: is this session mid-turn? ----------
-// Asked before anything deliberately restarts a session. `claude --resume`
-// brings the conversation back but comes back with an IDLE composer: an
-// interrupted turn is not continued, it is gone. A worker killed mid-turn stops
-// with no turn-end and no wake, and its card sits untouched until the 30-minute
-// stale watchdog notices.
-//
-// The signatures below are pinned against REAL captures from live 2.1.239 panes
-// (output-style.test.js holds them verbatim), not reasoned out of the docs:
-//
-//   busy   `✻ Working… (12s · still thinking with high effort)`
-//          `✽ Accomplishing… (0s · ↓ 1.7k tokens)`   `· Churning…`
-//   idle   `✻ Baked for 1s`, `✻ Sautéed for 1s`, or no spinner line at all
-//
-// What holds across every frame sampled is the SHAPE, and only the shape: the
-// rotating spinner glyph, one space, the label, U+2026, and then either the end
-// of the line or a ` (` progress note — against `<PastTense> for <N>s` once the
-// turn is done. Four things it is deliberately NOT built on:
-//   - not the glyph itself. It rotates over at least ✻ ✶ ✳ ✽ · *, and a matcher
-//     built from the glyphs that had been SEEN missed ✽ the first time out. So
-//     the class EXCLUDES the markers that do have a fixed meaning — ● assistant,
-//     ❯ user echo and composer, ⎿ tool detail and tips, ⚠ warning, and the box
-//     drawing — and accepts anything else. A glyph nobody has seen yet still
-//     reads as a spinner; a marker with a job never does.
-//   - not the word. It is randomised (Working, Churning, Tinkering,
-//     Prestidigitating, Accomplishing, …); there is no list to hold.
-//   - not the NUMBER of words either, and that one cost a real screen: the
-//     label was pinned to a single word because every sampled frame happened to
-//     have one, and `* Compacting conversation…` — a frame already sitting in
-//     this repo's own settle fixtures — read as idle. /compact is a
-//     pass-through this same command list offers, so "compact, then restyle" is
-//     an ordinary sequence, and calling that screen idle kills the compaction
-//     this check exists to protect. The label may carry spaces.
-//   - NOT "esc to interrupt". UI_READY_RE still names it, but this build never
-//     renders it — ~100 frames across several turns, not once.
-//
-// Where the shape is ambiguous it resolves to BUSY. This guards a destructive
-// act, and the two errors do not cost the same: a refusal is retried in five
-// seconds, a killed turn is not retried at all.
-//
-// Every part of the anchor is there because something real walked through a
-// looser one, and both of these refuse an IDLE session, which is the direction
-// that costs the captain a command that will never work again until the pane
-// scrolls:
-//   - the startup welcome box truncates its "What's new" entries with the same
-//     U+2026, inside rows that begin with `│ `. A bare /…/ reads a freshly
-//     launched session as busy.
-//   - an ordinary reply containing an ellipsis does the same. `● Loading… done`
-//     was captured on a fully idle pane: column zero, plain space, U+2026 in
-//     the first word. It is turned away twice over — by its ● marker, and by
-//     the text that follows the ellipsis where a progress note or a line end
-//     has to be. Ellipses are common prose, so this is not a corner, and it is
-//     the negative the multi-word label has to keep rejecting.
-//   - the status footer truncates itself the same way (`… | 7d…`) but is
-//     INDENTED, which the column-zero anchor turns away.
-const BUSY_SPINNER_RE = /^[^\s●❯⎿⚠│─╭╮╰╯]\x20\p{L}+(?:\x20\p{L}+)*…(?:\x20\(|[\x20\t]*$)/mu;
-
-// The third state, and the one a cycle would destroy quietest of all: messages
-// typed while the session was busy sit in a queue that lives in the process.
-// The composer says so in as many words, and the queue dies with the pane.
-//
-// `\s*` and not a literal space: the composer separates its `❯` from what
-// follows with U+00A0, a NO-BREAK space (checked in the capture, byte by byte).
-// The spinner above uses a plain \x20 — which is the other half of why
-// BUSY_SPINNER_RE names \x20 explicitly rather than \s. A composer line can
-// therefore never be read as a spinner, whatever the captain typed into it.
-const BUSY_QUEUED_RE = /^❯\s*Press up to edit queued messages/m;
-const BUSY = { spinnerRe: BUSY_SPINNER_RE, queuedRe: BUSY_QUEUED_RE, label: 'claude' };
-
-// paneBusy(ref) — is the session mid-turn, or holding queued messages?
-// Read off the same pane TAIL the settle signatures use: the current
-// interaction is always at the bottom, and matching the whole capture would hit
-// a spinner left in scrollback by a turn that ended long ago.
-// An unreadable pane answers false. A pane nobody can read is not evidence of a
-// turn in flight, and refusing on it would make the command unusable on exactly
-// the day tmux is having trouble.
-async function paneBusy(ref) {
-  let tail = '';
-  try {
-    tail = s.paneTail((await t.capture(s.paneTarget(ref.session, ref.window), 40)) || '');
-  } catch {
-    return false;
-  }
-  return BUSY.spinnerRe.test(tail) || BUSY.queuedRe.test(tail);
-}
-
 // mergeLocalSettings(cwd, mutate) — the read-modify-write of
 // <cwd>/.claude/settings.local.json, in ONE place.
 //
@@ -443,26 +357,15 @@ const PASSTHROUGH = new Set(['/compact', '/autocompact']);
 // a pass-through here would park a worker on exactly the menu this command
 // exists to keep it off.
 //
-// So the board sets the style the only way that works from outside a session:
-// WRITE, THEN CYCLE.
-//   write  — outputStyle into <ref.cwd>/.claude/settings.local.json, the
-//            session's OWN cwd (a worker's worktree, a lieutenant's workspace).
-//            Never ~/.claude/settings.json: that repaints every claude on the
-//            machine, and this command speaks for one session.
-//   cycle  — kill(), then the harness's own resume(): a new process, so it
-//            reads the setting at startup, and `claude --resume` brings the
-//            conversation back with it.
-// Both halves verified live on 2.1.239: after the cycle the session still
-// answered a codeword given BEFORE it and reported the new style in its system
-// prompt. A live session cannot be repainted in place — the setting is read at
-// startup only — so the restart is the mechanism, not an implementation detail;
-// runCommand's reply says so in as many words.
+// So the board does what claude itself does with the setting: it WRITES it, and
+// says when it lands. outputStyle goes into <ref.cwd>/.claude/settings.local.json
+// — the session's OWN cwd (a worker's worktree, a lieutenant's workspace), never
+// ~/.claude/settings.json, which would repaint every claude on the machine.
 //
-// resume() prefers the hook-recorded session-id over ref.resumeId, and spawn
-// pins both to the same uuid (`--session-id`, and --resume does not fork), so
-// the cycled session keeps the ref it had — nothing for the caller to re-record.
-// installHooks: false on the way back in: the session already carries whatever
-// Stop hook it was born with, and the cycle changes ONE thing, the style.
+// The setting is read when a session STARTS, so the running conversation keeps
+// the style it was born with and the reply says so: the next conversation wears
+// the new one, and /reset starts one now. The board does not restart a session
+// on the captain's behalf — a kill takes that session's background work with it.
 const OUTPUT_STYLE = '/output-style';
 
 // The built-ins, pinned against the 2.1.239 binary's own style table (name and
@@ -557,7 +460,7 @@ function commands(ref) {
     { name: '/autocompact', description: 'set how full the context gets before auto-compaction' },
     {
       name: OUTPUT_STYLE,
-      description: 'switch this session\'s output style (resumes the session to apply it)',
+      description: 'set this session\'s output style (applies on its next conversation)',
       args: outputStyles({ cwd: ref && ref.cwd }),
     },
   ]);
@@ -585,37 +488,12 @@ async function runCommand(ref, command, opts = {}) {
     // to answer it, and the whole point is that nobody has to remember the list.
     if (!want) throw new Error(OUTPUT_STYLE + ' needs a style name — available: ' + available);
     const hit = styles.find((st) => st.value.toLowerCase() === want.toLowerCase());
-    // Refused BEFORE anything is written: a bad name must not cost a restart.
+    // Refused before anything is written: a bad name must not silently sit in
+    // the settings file waiting to surprise the next conversation.
     if (!hit) throw new Error('unknown output style "' + want + '" — available: ' + available);
-    // And refused before the write for the same reason, one step further on: a
-    // mid-turn session cannot be cycled without losing the turn, and refusing
-    // AFTER the write would leave the setting applied with no cycle behind it —
-    // the style would then appear at some unrelated later restart. Refusing is
-    // deliberately all this does: re-running the command when the session is
-    // idle costs five seconds, whereas re-prompting from here would invent a
-    // second way for a turn to begin, and that is the worse thing to own.
-    if (await paneBusy(ref)) {
-      throw new Error(OUTPUT_STYLE + ' ' + hit.value + ' — the session is mid-turn; run it again when it is idle');
-    }
     writeOutputStyle(ref.cwd, hit.value);
-    await kill(ref);
-    // kill() routes through tryTmux, which SWALLOWS tmux failures, and resume()
-    // returns the ref untouched when the pane is still alive — so a kill that
-    // did not take turns the whole cycle into a no-op while the reply below
-    // still says the session restarted. Reporting a restart nobody checked is
-    // the one line nobody re-reads, so it is checked.
-    if (await alive(ref)) {
-      throw new Error('could not cycle ' + key + ' — its pane is still running after kill; '
-        + hit.value + ' is written and will apply the next time the session starts');
-    }
-    const back = await resume(ref, Object.assign({}, opts, { installHooks: false }));
-    // resume() prefers the hook-recorded session id over ref.resumeId (ground
-    // truth), so the cycle can CORRECT it. Dropped, status() and the context bar
-    // keep reading the stale one. The ref cannot be handed back through this
-    // verb's string return, so the correction is written onto the ref the caller
-    // holds — the same in-place refresh the server does from Stop-hook payloads.
-    if (back && back.resumeId && back.resumeId !== ref.resumeId) ref.resumeId = back.resumeId;
-    return 'output style now ' + hit.value + ' — session resumed to pick it up';
+    return 'output style set to ' + hit.value
+      + " — it takes effect on this session's next conversation (/reset to start one now)";
   }
   if (PASSTHROUGH.has(name)) {
     await send(ref, line); // verified submit; claude's own command runs in-session
@@ -640,8 +518,7 @@ module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, insta
   // Exported for the tests that pin the style list against a temp directory and
   // the built-ins against the binary.
   outputStyles, BUILTIN_OUTPUT_STYLES,
-  // Exported for the tests that pin them against REAL captured screens. SETTLE
-  // decides whether an unattended revival works or sits on a menu until it is
-  // given up on; BUSY decides whether a deliberate restart lands on a session
-  // mid-turn. Neither is a judgement to make by reading the regex.
-  SETTLE, BUSY };
+  // Exported for the test that pins them against REAL captured screens. These
+  // regexes decide whether an unattended revival works or sits on a menu until
+  // it is given up on, and that is not a judgement to make by reading them.
+  SETTLE };

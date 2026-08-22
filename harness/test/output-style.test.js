@@ -1,17 +1,16 @@
 'use strict';
-// claude's /output-style: the style list it offers as `args`, and the
-// write-then-cycle that applies one.
+// claude's /output-style: the style list it offers as `args`, and the write
+// that applies one.
 //
 // Why this command is not a pass-through at all is in claude-tmux.js's own
 // comment: claude 2.1.239 answers "Unknown command: /output-style" — the
 // dedicated command was removed and styles moved into the interactive /config
 // dialog, which is precisely the menu a worker must never be parked on. So the
-// board writes the setting into the session's OWN cwd and cycles the session
-// through kill+resume to pick it up.
+// board writes the setting into the session's OWN cwd and says when it lands:
+// the setting is read when a session starts, so the next conversation wears it.
 //
-// tmux is mocked (tmux-mock.js), so the cycle runs end-to-end here with no real
-// tmux and no real claude: what is pinned is the settings file that gets written
-// and the fact that the session comes back on --resume.
+// tmux is mocked (tmux-mock.js) so the tests can assert the session was NOT
+// touched — no kill, no relaunch, nothing typed into the pane.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -37,10 +36,6 @@ function projectStyle(cwd, name, body) {
   fs.writeFileSync(path.join(dir, name), body);
   return dir;
 }
-function outputStyleCommand() {
-  return claude.commands().find((c) => c.name === '/output-style');
-}
-
 test('the built-ins are the ones the binary actually ships, not the ones everybody remembers', () => {
   // Pinned against the claude 2.1.239 style table (name + description lifted
   // from the binary). The list that "everybody knows" — default/Explanatory/
@@ -151,7 +146,7 @@ test('commands(): /output-style rides with its styles as args; the others carry 
   }
 });
 
-test('the BARE form is refused with the list, and nothing is written or restarted', async () => {
+test('the BARE form is refused with the list, and nothing is written', async () => {
   const cwd = tmpdir('bc-osc-');
   const styles = tmpdir('bc-styles-');
   const prev = process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
@@ -181,7 +176,7 @@ test('the BARE form is refused with the list, and nothing is written or restarte
   }
 });
 
-test('an unknown style name is refused BEFORE anything is written — a typo must not cost a restart', async () => {
+test('an unknown style name is refused BEFORE anything is written', async () => {
   const cwd = tmpdir('bc-osc-');
   const mock = mockTmux({ readyTail: READY });
   try {
@@ -195,14 +190,14 @@ test('an unknown style name is refused BEFORE anything is written — a typo mus
       });
     assert.ok(!fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), 'no settings file');
     assert.ok(!mock.calls.some((c) => c.fn === 'tmux' && String(c.args[0]).includes('kill')),
-      'and the session was never cycled');
+      'and the session was never touched');
   } finally {
     mock.restore();
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
 
-test('a good name writes outputStyle into the SESSION cwd and cycles the session onto --resume', async () => {
+test('a good name writes outputStyle into the SESSION cwd and leaves the session alone', async () => {
   const cwd = tmpdir('bc-osc-');
   const styles = tmpdir('bc-styles-');
   const state = tmpdir('bc-state-');
@@ -224,14 +219,17 @@ test('a good name writes outputStyle into the SESSION cwd and cycles the session
     assert.strictEqual(settings.outputStyle, 'ELI5', 'canonical casing, not what was typed');
     assert.ok(settings.hooks && settings.hooks.Stop.length === 1, 'the Stop hook survived the write');
 
-    // The reply says the session restarted — no silent restarts.
-    assert.match(reply, /output style now ELI5/);
-    assert.match(reply, /resumed/);
+    // The reply says WHEN it lands, and how to have it now — the setting is
+    // read at session start, so the running conversation keeps its own style.
+    assert.match(reply, /output style set to ELI5/);
+    assert.match(reply, /next conversation/);
+    assert.match(reply, /\/reset/);
 
-    // and the session really was cycled back in on its own resume id
-    const launched = mock.calls.filter((c) => c.fn === 'sendLiteral').map((c) => c.args[1]).join('\n');
-    assert.match(launched, /claude --dangerously-skip-permissions --resume uuid-os3/,
-      'brought back with --resume, so the conversation comes back with it');
+    // and the session itself was not touched: nothing killed, nothing relaunched
+    assert.ok(!mock.calls.some((c) => c.fn === 'tmux' && String(c.args[0]).includes('kill')),
+      'no kill');
+    assert.deepStrictEqual(mock.calls.filter((c) => c.fn === 'sendLiteral'), [], 'no relaunch');
+    assert.deepStrictEqual(mock.calls.filter((c) => c.fn === 'submit'), [], 'nothing typed at it');
   } finally {
     mock.restore();
     if (prev === undefined) delete process.env.BC_CLAUDE_OUTPUT_STYLES_DIR;
@@ -250,7 +248,7 @@ test('a style name containing spaces round-trips as ONE argument', async () => {
     styleFile(styles, 'two-words.md', '---\nname: Two Words\ndescription: spaced\n---\nbody\n');
     const ref = { harness: 'claude', session: 'bc-os4', cwd, resumeId: 'uuid-os4' };
     const reply = await claude.runCommand(ref, '/output-style Two Words', { stateDir: cwd });
-    assert.match(reply, /output style now Two Words/);
+    assert.match(reply, /output style set to Two Words/);
     assert.strictEqual(
       JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).outputStyle,
       'Two Words', 'the argument was never tokenized');
@@ -335,7 +333,7 @@ test('a project style can be APPLIED, not merely listed', async () => {
     const ref = { harness: 'claude', session: 'bc-os5', cwd, resumeId: 'uuid-os5' };
     const reply = await claude.runCommand(ref, '/output-style projonly',
       { stateDir: state, stylesDir: '/nonexistent/bc-not-a-real-dir' });
-    assert.match(reply, /output style now ProjOnly/);
+    assert.match(reply, /output style set to ProjOnly/);
     assert.strictEqual(
       JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).outputStyle,
       'ProjOnly');
@@ -345,87 +343,11 @@ test('a project style can be APPLIED, not merely listed', async () => {
   }
 });
 
-test('a MID-TURN session is refused, and nothing is written — the cycle would lose the turn', async () => {
-  // `claude --resume` restores the conversation but comes back on an idle
-  // composer: an interrupted turn is not continued, it is gone, and a worker
-  // stopped that way reports no turn-end and wakes nobody. The refusal is
-  // checked BEFORE the write on purpose — refusing after it would leave the
-  // setting applied with no cycle, to surface at some unrelated later restart.
-  // (What "busy" looks like is pinned in busy-screens.test.js, against real
-  // captured panes.)
-  const cwd = tmpdir('bc-osc-');
-  const styles = tmpdir('bc-styles-');
-  const state = tmpdir('bc-state-');
-  const BUSY = '\n✻ Working… (12s · still thinking with high effort)\n\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n';
-  const mock = mockTmux({ readyTail: BUSY });
-  try {
-    styleFile(styles, 'eli5.md', '---\nname: ELI5\ndescription: keep it simple pls\n---\nbody\n');
-    const ref = { harness: 'claude', session: 'bc-os6', cwd, resumeId: 'uuid-os6' };
-    await assert.rejects(
-      claude.runCommand(ref, '/output-style ELI5', { stateDir: state, stylesDir: styles }),
-      (e) => {
-        assert.match(e.message, /mid-turn/);
-        assert.match(e.message, /run it again when it is idle/);
-        return true;
-      });
-    assert.ok(!fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')),
-      'the setting must NOT be left applied by a refused command');
-    assert.ok(!mock.calls.some((c) => c.fn === 'tmux' && String(c.args[0]).includes('kill')),
-      'and the session was never touched');
-  } finally {
-    mock.restore();
-    for (const d of [cwd, styles, state]) fs.rmSync(d, { recursive: true, force: true });
-  }
-});
-
-test('a typo is still refused as a typo, even mid-turn — the name is checked first', async () => {
-  const cwd = tmpdir('bc-osc-');
-  const BUSY = '\n· Churning…\n\n❯ \n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n';
-  const mock = mockTmux({ readyTail: BUSY });
-  try {
-    const ref = { harness: 'claude', session: 'bc-os7', cwd, resumeId: 'uuid-os7' };
-    await assert.rejects(
-      claude.runCommand(ref, '/output-style Nonsense', { stateDir: cwd, stylesDir: '/nonexistent/bc-nope' }),
-      /unknown output style "Nonsense"/);
-  } finally {
-    mock.restore();
-    fs.rmSync(cwd, { recursive: true, force: true });
-  }
-});
-
-test('the cycle keeps the session on its PINNED MODEL — a restart is not a demotion', async () => {
-  // The server pins --model/--effort from the card's playbook at spawn. Every
-  // resume path used to rebuild the launch line without them, so a worker on a
-  // pinned model came back on the default one with nobody told — quietly, and
-  // for every resume, not just this command's.
-  const cwd = tmpdir('bc-osc-');
-  const styles = tmpdir('bc-styles-');
-  const state = tmpdir('bc-state-');
-  const mock = mockTmux({ readyTail: READY });
-  try {
-    styleFile(styles, 'eli5.md', '---\nname: ELI5\ndescription: keep it simple pls\n---\nbody\n');
-    const ref = await claude.spawn(cwd, 'go', {
-      session: 'bc-os8', stateDir: state, installHooks: false,
-      extraArgs: ['--model', 'opus', '--effort', 'high'],
-    });
-    const before = mock.calls.filter((c) => c.fn === 'sendLiteral').length;
-
-    await claude.runCommand(ref, '/output-style ELI5', { stateDir: state, stylesDir: styles });
-
-    const relaunch = mock.calls.filter((c) => c.fn === 'sendLiteral').slice(before).map((c) => c.args[1]).join('\n');
-    assert.match(relaunch, /--resume /, 'it came back on its own conversation');
-    // quoted arg by arg, exactly the way spawn built the same flags
-    assert.match(relaunch, /'--model' 'opus'/, 'and still on the model it was pinned to');
-    assert.match(relaunch, /'--effort' 'high'/);
-  } finally {
-    mock.restore();
-    for (const d of [cwd, styles, state]) fs.rmSync(d, { recursive: true, force: true });
-  }
-});
-
-test('resume replays the pinned flags for EVERY caller, not just the cycle', async () => {
-  // The older half of the same bug: `card start --resume` after a worker death,
-  // and lieutenant supervision's respawn, both go through resume() too.
+test('resume replays the flags a spawn was pinned to — a revival is not a demotion', async () => {
+  // The server pins --model/--effort from the card's playbook at spawn, and
+  // every resume path rebuilt its launch line without them: `card start
+  // --resume` after a worker death, and lieutenant supervision's respawn, both
+  // brought the agent back on the default model, silently, with nobody told.
   const cwd = tmpdir('bc-osc-');
   const state = tmpdir('bc-state-');
   const mock = mockTmux({ readyTail: READY });

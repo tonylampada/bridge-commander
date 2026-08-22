@@ -97,7 +97,7 @@ test('slash commands: the shared trio plus claude-only /autocompact and /output-
   const ref = { harness: 'claude', session: 'bc-cmd', cwd: '/tmp' };
   const help = await claude.runCommand(ref, '/help');
   assert.match(help, /\/autocompact — set how full/);
-  assert.match(help, /\/output-style — switch this session's output style/);
+  assert.match(help, /\/output-style — set this session's output style/);
   // unknown commands throw without ever touching tmux
   await assert.rejects(() => claude.runCommand(ref, '/nope'), /unknown command \/nope/);
 });

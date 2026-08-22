@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
-const { startServer, startServerWithLieutenant, withOwner, sleep, LT } = require('./helper');
+const { startServer, startServerWithLieutenant, withOwner, LT } = require('./helper');
 const { lieutenantSession, workerWindow } = require('../server/names.js');
 
 function fakeSession(dir, session) {
@@ -244,68 +244,6 @@ test('card-thread commands address the WORKER session; worker turn-end refreshes
     const w = (await s.api('GET', '/api/board')).body.workers.find((x) => x.card === 'task');
     assert.strictEqual(w.agentStatus.model, 'fake-model');
     assert.strictEqual(w.agentStatus.contextUsed, 50000);
-  } finally {
-    await s.stop();
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-// A command may deliberately restart the session it runs against — claude's
-// /output-style writes a style and cycles the session, because the setting is
-// read at process start and a live session cannot be repainted. That leaves the
-// session down for seconds, and supervision's rule for a session that is down
-// is that it DIED. Every other intentional kill on this board marks the target
-// first (pauseWorker: "the death must never look like a crash"); the harness
-// cannot, because `paused` is board state, so runChatCommand marks it instead.
-// The fake's /cycle (BC_FAKE_CYCLE) is a command that really does stop and
-// restart its session, so the guard is testable with no tmux in sight.
-test('a command that RESTARTS its session is not reported as a crash', async () => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-cmd-cycle-'));
-  const repo = path.join(root, 'srcrepo');
-  fs.mkdirSync(repo);
-  execFileSync('git', ['init', '-q', '-b', 'main', repo], { stdio: ['ignore', 'pipe', 'pipe'] });
-  fs.writeFileSync(path.join(repo, 'README.md'), 'hello\n');
-  execFileSync('git', ['-C', repo, 'add', '.'], { stdio: ['ignore', 'pipe', 'pipe'] });
-  execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'init'],
-    { stdio: ['ignore', 'pipe', 'pipe'] });
-  const fdir = path.join(root, 'fake');
-  const s = await startServerWithLieutenant({
-    env: {
-      BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
-      BC_SUPERVISE_INTERVAL_MS: '60', BC_PRWATCH_INTERVAL_MS: '0',
-      BC_FAKE_CYCLE: '1', BC_FAKE_CYCLE_MS: '500',
-    },
-  });
-  try {
-    assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj' })).status, 200);
-    await s.api('POST', '/api/cards', withOwner({ title: 'Cycle', id: 'cyc', attributes: { repo: 'proj' } }));
-    assert.strictEqual((await s.api('POST', '/api/cards/cyc/start', { harness: 'fake' })).status, 200);
-    // supervision ticks every 60ms; the cycle holds the session dead for 500ms,
-    // so several ticks land squarely inside the window.
-    const r = await s.api('POST', '/api/feedback', { target: 'card:cyc', text: '/cycle' });
-    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
-
-    const card = (await s.api('GET', '/api/cards/cyc')).body;
-    assert.match(card.thread[1].text, /cycled/, 'the command ran');
-    assert.ok(!card.events.some((e) => e.kind === 'worker-died'),
-      'a deliberate restart is not a death: ' + JSON.stringify(card.events.map((e) => e.kind)));
-    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items;
-    assert.ok(!items.some((i) => i.kind === 'worker-died'), 'and the owner was not woken about one');
-
-    // the marker is cleared afterwards — a guard left on would silence
-    // supervision for this worker for good, which is the worse failure.
-    const w = (await s.api('GET', '/api/board')).body.workers.find((x) => x.card === 'cyc');
-    assert.ok(!w.paused, 'the guard released the worker back to supervision');
-    assert.ok(!w.flagged, 'and nothing flagged it on the way through');
-
-    // …and released onto a session that is really back: several more ticks now
-    // run unguarded, and a worker that had NOT come back would be flagged by
-    // them. That is the check the marker file only approximates.
-    await sleep(400);
-    const after = (await s.api('GET', '/api/cards/cyc')).body;
-    assert.ok(!after.events.some((e) => e.kind === 'worker-died'),
-      'unguarded ticks over the resumed session stay quiet');
-    assert.ok(!(await s.api('GET', '/api/board')).body.workers.find((x) => x.card === 'cyc').flagged);
   } finally {
     await s.stop();
     fs.rmSync(root, { recursive: true, force: true });

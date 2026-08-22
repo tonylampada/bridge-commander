@@ -88,12 +88,11 @@
 //       own implementation runs in-session; /status formats status(); /help
 //       renders commands(). Unknown names throw — and so does a command whose
 //       argument is missing or unrecognised, BEFORE it does anything: claude's
-//       /output-style restarts the session to apply a style, and a typo must
-//       not cost a restart. A command that restarts its session may also refuse
-//       while that session is MID-TURN — a resume comes back on an idle
-//       composer, so the interrupted turn is lost, not continued. The server
-//       marks the target for the duration of the call (runChatCommand), so a
-//       restart a command performs deliberately is never read as a crash.
+//       /output-style writes a setting to disk, and a typo must not sit there
+//       waiting to surprise the next conversation. A command that changes
+//       something the session only reads at STARTUP says so in its reply
+//       (/output-style: next conversation, /reset to start one now) — no verb
+//       here restarts a session on the caller's behalf.
 //   status(ref, opts?) -> Promise<{ model, contextUsed, contextWindow, rateLimits? } | null>
 //       model + context usage read from the files the harness already
 //       writes (transcript / rollout log); null — never a throw — when
