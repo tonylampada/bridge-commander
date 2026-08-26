@@ -203,6 +203,7 @@ session status, window adoption):
 | captain drags Your review → Backlog | rework-order QueueItem carrying the captain's thread comment; same `pendingOrder` marker |
 | captain creates / moves a card | `card-created` / `card-moved` QueueItem to the owner (awareness, not an order) |
 | `card.start` | worker spawned (worktree + window), card → Working, level-2 event, brief auto-attached as an artifact |
+| `card.start` on a base it could not refresh | `stale-base` level-1 event on the card, naming what failed — the start still proceeds on the last-known tip. A worktree that cannot be put ON the fetched tip is the other half: the start is REFUSED (502) naming the sha it got and the sha it wanted, since a worker on an unknown base is worse than no worker |
 | `chat.say` by captain | QueueItem (write-ahead, attachments riding along) + `harness.send` wake to the owning lieutenant |
 | `chat.say` starting with `/` | routed to `harness.runCommand`, reply lands in-thread — NO QueueItem, no wake, no owed. On a card target the command addresses the WORKER session (unlike say, which always talks to the owner). The board's own `/reset` respawns a lieutenant outright, and is marked for the duration of the call so supervision reads neither the gap as a crash nor races the restart with a respawn of its own |
 | `chat.say` on a card thread by anyone but the owning lieutenant (its worker, a peer, unidentified tooling) | `worker-said` QueueItem waking the owner — the thread alone notifies nobody |

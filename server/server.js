@@ -454,6 +454,10 @@ const BUILTIN_KINDS = {
   'schedule-failed': { emoji: '🔔', level: 1 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
   'worker-stalled': { emoji: '🐢', level: 1 },
+  // A start that could not put the worker on the tip it just fetched. It still
+  // started — that is exactly why this is level 1: the work is running, on a
+  // base nobody chose.
+  'stale-base': { emoji: '🧊', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
@@ -2699,6 +2703,12 @@ async function doStartCard(card, body) {
   let wt;
   try { wt = await createWorktree(project.path, card.id, WORKSPACE); }
   catch (e) { return { error: 'worktree provisioning failed: ' + String((e && e.message) || e), code: 502 }; }
+  // A base that could not be refreshed is the card's business, not the server
+  // log's: the worker is about to run on it either way.
+  for (const w of (wt.warnings || [])) {
+    card.events.push(mkEvent({ text: 'worktree base: ' + w, actor: 'server' }, { kind: 'stale-base' }));
+  }
+  delete wt.warnings; // said on the card; the persisted record is the checkout itself
 
   const session = ownerSession(card);
   const window = names.workerWindow(card.id);

@@ -29,6 +29,7 @@ const BUILTINS = {
   'schedule-failed': { emoji: '🔔', level: 1 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
   'worker-stalled': { emoji: '🐢', level: 1 },
+  'stale-base': { emoji: '🧊', level: 1 },
   'worker-paused': { emoji: '💤', level: 2 },
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },

@@ -365,6 +365,127 @@ test('a worktree is cut from origin\'s tip, not from wherever the clone happens 
   } finally { await teardown(); }
 });
 
+// The fetch was real and landed in the clone the board registered; the
+// checkout read a DIFFERENT clone's `origin/<branch>`. treehouse keeps one pool
+// per repository per machine, so which clone backs it is decided by whoever
+// asked for it first — often a checkout in another workspace entirely. When the
+// two agreed the start looked fine, which is why this was intermittent.
+//
+// The fake pool below is exactly that shape: worktrees cut from a SECOND clone
+// that is behind and never fetches.
+function writeFakeTreehouse(root, poolClone) {
+  const bin = path.join(root, 'fakebin');
+  fs.mkdirSync(bin, { recursive: true });
+  const pool = path.join(root, 'pool');
+  fs.mkdirSync(pool, { recursive: true });
+  const sh = [
+    '#!/bin/sh',
+    'set -e',
+    'POOL=' + JSON.stringify(pool),
+    'CLONE=' + JSON.stringify(poolClone),
+    'case "$1" in',
+    '  --version) echo "fake-treehouse 0.0.0" ;;',
+    '  get)',
+    '    slot="$POOL/1"',
+    '    if [ ! -d "$slot" ]; then',
+    // the pool leaves a worktree on ITS clone's stale tip — never the board's
+    '      git -C "$CLONE" worktree add -q -d "$slot" origin/main >&2',
+    '    fi',
+    '    echo "$slot" ;;',
+    '  return) : ;;',
+    '  *) exit 1 ;;',
+    'esac',
+    '',
+  ].join('\n');
+  fs.writeFileSync(path.join(bin, 'treehouse'), sh, { mode: 0o755 });
+  return bin;
+}
+
+test('a pooled worktree lands on the tip the board fetched, not on the pool clone\'s stale one', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-pool-'));
+  try {
+    const repo = makeRepo(root);
+    // the pool's clone is taken NOW and never fetches again — a June checkout
+    // in somebody else's workspace, which is what backs the real pool here
+    const poolClone = path.join(root, 'poolclone');
+    execFileSync('git', ['clone', '-q', repo, poolClone], { stdio: ['ignore', 'pipe', 'pipe'] });
+    const stale = git(poolClone, 'rev-parse', 'origin/main');
+
+    const bin = writeFakeTreehouse(root, poolClone);
+    const s = await startServerWithLieutenant({
+      env: {
+        BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'treehouse',
+        PATH: bin + path.delimiter + process.env.PATH,
+        BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+      },
+    });
+    try {
+      assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj' })).status, 200);
+      // origin moves on after both clones exist — the pool clone never learns
+      fs.writeFileSync(path.join(repo, 'NEW.md'), 'pushed between starts\n');
+      git(repo, 'add', '.');
+      git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'moved on');
+      const tip = git(repo, 'rev-parse', 'HEAD');
+      assert.notStrictEqual(tip, stale, 'the pool clone really is behind');
+
+      await s.api('POST', '/api/cards', withOwner({
+        title: 'Pooled', id: 'pooled', attributes: { repo: 'proj' },
+      }));
+      const r = await s.api('POST', '/api/cards/pooled/start', { harness: 'fake' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      const w = r.body.worker;
+      assert.strictEqual(w.worktree.tool, 'treehouse');
+      // the pooled worktree hangs off the OTHER clone — the bug's precondition
+      assert.match(git(w.worktree.path, 'rev-parse', '--git-common-dir'), rx(fs.realpathSync(poolClone)));
+      assert.strictEqual(git(w.worktree.path, 'rev-parse', 'HEAD'), tip,
+        'the worker stands on the sha the board fetched, not the pool clone\'s origin/main');
+      assert.strictEqual(w.worktree.baseSha, tip);
+      assert.ok(fs.existsSync(path.join(w.worktree.path, 'NEW.md')));
+      // nothing to say: the base was refreshed
+      assert.deepStrictEqual((await cardEvents(s, 'pooled')).filter((e) => e.kind === 'stale-base'), []);
+    } finally { await s.stop(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('a second start after a push to origin gets the new commit — the actual sha, plain git', async () => {
+  const { s, repo, teardown } = await boot();
+  try {
+    const commit = (msg, file) => {
+      fs.writeFileSync(path.join(repo, file), msg + '\n');
+      git(repo, 'add', '.');
+      git(repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', msg);
+      return git(repo, 'rev-parse', 'HEAD');
+    };
+    const first = commit('before', 'ONE.md');
+    await s.api('POST', '/api/cards', withOwner({ title: 'One', id: 'one', attributes: { repo: 'proj' } }));
+    const r1 = await s.api('POST', '/api/cards/one/start', { harness: 'fake' });
+    assert.strictEqual(git(r1.body.worker.worktree.path, 'rev-parse', 'HEAD'), first);
+
+    const second = commit('after', 'TWO.md');
+    await s.api('POST', '/api/cards', withOwner({ title: 'Two', id: 'two', attributes: { repo: 'proj' } }));
+    const r2 = await s.api('POST', '/api/cards/two/start', { harness: 'fake' });
+    assert.strictEqual(git(r2.body.worker.worktree.path, 'rev-parse', 'HEAD'), second,
+      'the second worker starts on the commit pushed between the two starts');
+    assert.strictEqual(r2.body.worker.worktree.baseSha, second);
+  } finally { await teardown(); }
+});
+
+test('a fetch that fails says so on the card, at level 1 — not on a stderr nobody reads', async () => {
+  const { s, teardown } = await boot();
+  try {
+    const clone = path.join(s.dir, 'projects', 'proj');
+    git(clone, 'remote', 'set-url', 'origin', path.join(s.dir, 'gone-forever.git'));
+    await s.api('POST', '/api/cards', withOwner({ title: 'Stale', id: 'stale', attributes: { repo: 'proj' } }));
+    const r = await s.api('POST', '/api/cards/stale/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, 'a failed fetch never blocks the board');
+    const ev = (await cardEvents(s, 'stale')).find((e) => e.kind === 'stale-base');
+    assert.ok(ev, 'the timeline carries the stale base');
+    assert.strictEqual(ev.level, 1);
+    assert.match(ev.text, /fetch failed/);
+    assert.match(ev.text, rx(clone));
+  } finally { await teardown(); }
+});
+
 test('card start --resume reincarnates a dead recorded worker in the same worktree', async () => {
   const { s, teardown } = await boot();
   try {
