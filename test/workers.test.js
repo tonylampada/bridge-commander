@@ -450,6 +450,12 @@ test('a pooled worktree lands on the tip the board fetched, not on the pool clon
       assert.strictEqual(
         git(w.worktree.path, 'rev-list', '--max-count=1', 'HEAD', '--not', '--branches', '--tags', '--remotes'),
         '', 'the base is reachable from a ref, so the release is not refused');
+      // and that ref is named for the CARD: refs/remotes/* is shared by every
+      // worktree of the pool clone, so a per-branch name is one ref that two
+      // boards on the same repo race to force-update under each other.
+      assert.strictEqual(git(w.worktree.path, 'rev-parse', 'refs/remotes/bc-base/pooled'), tip);
+      assert.throws(() => git(w.worktree.path, 'rev-parse', '--verify', 'refs/remotes/bc-base/main'),
+        'the destination is scoped to the card, never to the branch');
       const { releaseWorktree } = require('../server/worktrees.js');
       const realPath = process.env.PATH;
       process.env.PATH = bin + path.delimiter + realPath; // the fake pool, as the server sees it
