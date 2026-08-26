@@ -2707,6 +2707,7 @@ async function doStartCard(card, body) {
   // log's: the worker is about to run on it either way.
   for (const w of (wt.warnings || [])) {
     card.events.push(mkEvent({ text: 'worktree base: ' + w, actor: 'server' }, { kind: 'stale-base' }));
+    card.updated = now(); // a start that fails after this still flushes the event
   }
   delete wt.warnings; // said on the card; the persisted record is the checkout itself
 

@@ -443,6 +443,20 @@ test('a pooled worktree lands on the tip the board fetched, not on the pool clon
       assert.ok(fs.existsSync(path.join(w.worktree.path, 'NEW.md')));
       // nothing to say: the base was refreshed
       assert.deepStrictEqual((await cardEvents(s, 'pooled')).filter((e) => e.kind === 'stale-base'), []);
+      // The carried tip is held by a REAL ref in the lease's own ref store, not
+      // by FETCH_HEAD alone: releaseWorktree reads `--branches --tags --remotes`
+      // to decide whether HEAD carries work nothing else holds, and a worker
+      // that committed nothing must never look like one that did.
+      assert.strictEqual(
+        git(w.worktree.path, 'rev-list', '--max-count=1', 'HEAD', '--not', '--branches', '--tags', '--remotes'),
+        '', 'the base is reachable from a ref, so the release is not refused');
+      const { releaseWorktree } = require('../server/worktrees.js');
+      const realPath = process.env.PATH;
+      process.env.PATH = bin + path.delimiter + realPath; // the fake pool, as the server sees it
+      let rel;
+      try { rel = await releaseWorktree(w.worktree, path.join(s.dir, 'projects', 'proj')); }
+      finally { process.env.PATH = realPath; }
+      assert.strictEqual(rel.released, true, JSON.stringify(rel));
     } finally { await s.stop(); }
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });

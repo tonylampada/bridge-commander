@@ -137,11 +137,24 @@ async function freshBase(proj) {
 // Fetching the fetched clone's own ref, BY PATH, into the lease puts the exact
 // tip in the ref store the checkout will read. No treehouse internals: it is
 // git, run inside the leased path.
+//
+// The fetch carries a DESTINATION refspec because a tip reachable only through
+// FETCH_HEAD is held by no ref at all, and releaseWorktree reads exactly that:
+// its dangling probe (`rev-list HEAD --not --branches --tags --remotes`) would
+// return HEAD itself and refuse to release a worker that committed nothing —
+// leaking the lease forever. The destination is a bc-owned
+// refs/remotes/bc-base/* namespace, never refs/remotes/origin/*: the pool clone
+// belongs to another workspace and moving ITS remote-tracking refs is not ours
+// to do, while `--remotes` still matches ours.
+function baseDest(base) {
+  return 'refs/remotes/bc-base/' + base.ref.replace(/^[^/]+\//, '');
+}
 async function applyBase(wt, proj, base) {
   const warnings = [];
+  const dest = baseDest(base);
   try {
-    await git(wt, 'fetch', '--quiet', '--no-tags', proj, base.fullRef);
-    await git(wt, 'checkout', '--detach', 'FETCH_HEAD');
+    await git(wt, 'fetch', '--quiet', '--no-tags', proj, '+' + base.fullRef + ':' + dest);
+    await git(wt, 'checkout', '--detach', dest);
     return warnings;
   } catch (e) {
     warnings.push('could not carry ' + base.ref + ' from ' + proj + ' into the leased worktree ('
@@ -203,8 +216,8 @@ function createWorktree(projectPath, cardId, workspace) {
       if (fs.existsSync(wt)) throw new Error('worktree path already exists: ' + wt);
       await git(proj, 'worktree', 'add', '-d', wt, ...(base.ref ? [base.ref] : []));
     }
-    await assertIsolated(wt, proj);
     try {
+      await assertIsolated(wt, proj);
       await assertOnBase(wt, base);
     } catch (e) {
       // Nothing half-provisioned survives a refusal: a leaked lease starves the
@@ -212,6 +225,10 @@ function createWorktree(projectPath, cardId, workspace) {
       // would be handed on its next start.
       if (tool === 'treehouse') await run('treehouse', ['return', wt], { cwd: proj }).catch(() => {});
       else await git(proj, 'worktree', 'remove', '--force', wt).catch(() => {});
+      // The refusal is the only thing the caller sees, so it carries WHY the
+      // base was stale too — the warnings are returned, not logged, and this
+      // path never reaches the success return that hands them to the card.
+      if (warnings.length) e.message += ' (' + warnings.join('; ') + ')';
       throw e;
     }
     return { path: fs.realpathSync(wt), tool, base: base.ref || null, baseSha: base.sha || null, warnings };
