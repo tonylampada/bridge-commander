@@ -241,7 +241,9 @@ test('a firing goes through hook run and nowhere else — the trace names the SC
     schedules: [overdue('watcher', 3)],
   }) });
   try {
-    for (let i = 0; i < 60 && counted(dir, 'fired') < 1; i++) await sleep(50);
+    // poll on the TRACE, not the hook's own side effect: the server appends the
+    // trace line only after the hook exits, so `fired` lands first
+    for (let i = 0; i < 60 && runsOf(dir, 'watcher').length < 1; i++) await sleep(50);
     assert.strictEqual(counted(dir, 'fired'), 1);
     const runs = runsOf(dir, 'watcher');
     assert.strictEqual(runs.length, 1);
