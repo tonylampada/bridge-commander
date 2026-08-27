@@ -401,6 +401,7 @@ test('a live worker silent for 2× BC_WORKER_STALE_SECS stalls twice: level 2, t
     assert.strictEqual(evs.length, 2);
     assert.strictEqual(evs[1].level, 1, 'the second consecutive stall rings the captain');
     assert.match(evs[1].text, /silent for \d+min/);
+    assert.match(evs[1].text, /still silent, alert #2/);
     assert.match(evs[1].text, /last said: "need a ruling: keep the old flag\?"/);
     // the drain carries both
     const cli = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
@@ -420,6 +421,15 @@ test('a live worker silent for 2× BC_WORKER_STALE_SECS stalls twice: level 2, t
     b = boardOnDisk(s).workers.find((x) => x.card === 'mute');
     assert.ok(!b.staleNotified && !b.staleNotifiedAt, 'turn-end cleared staleNotified');
     assert.strictEqual(b.lastTurnEndText, 'done with the gate, waiting');
+
+    // a signal newer than the turn-end is the last word the level-1 alert quotes
+    await sleep(5);
+    await s.api('POST', '/api/cards/mute/worker/signal', { text: 'need a ruling: keep flag X?' });
+    await untilItems(s, 'mute', 'worker-stalled', 5);
+    evs = await stalls();
+    assert.strictEqual(evs[4].level, 1);
+    assert.match(evs[4].text, /last said: "need a ruling: keep flag X\?"/);
+    assert.doesNotMatch(evs[4].text, /done with the gate/);
   } finally { await teardown(); }
 });
 

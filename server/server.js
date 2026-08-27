@@ -2565,6 +2565,8 @@ async function doStartCard(card, body) {
     delete existing.flagged;
     delete existing.stopNotified;
     clearStale(existing);
+    delete existing.lastTurnEndText;
+    delete existing.lastSignalText;
     delete existing.paused; // a revived worker is watched again
     attachBriefArtifact(card, ref);
     enterWorking(card, 'worker ' + workerName(ref) + ' resumed in ' + existing.worktree.path);
@@ -2771,6 +2773,15 @@ function clearStale(w) {
   delete w.staleNotified;
   delete w.staleNotifiedAt;
   delete w.staleHits;
+}
+
+// The worker's most recent words: whichever of the turn-end text and the
+// signal text carries the newer stamp, falling back to the one that exists.
+function lastWordOf(w) {
+  const turn = w.lastTurnEndText ? Date.parse(w.lastTurnEnd) : NaN;
+  const sig = w.lastSignalText ? Date.parse(w.lastSignalAt) : NaN;
+  if (!Number.isNaN(turn) && !Number.isNaN(sig)) return sig > turn ? w.lastSignalText : w.lastTurnEndText;
+  return w.lastTurnEndText || w.lastSignalText || '';
 }
 
 // worker.signal — a real milestone from the worker: level-2 event on the card
@@ -3129,11 +3140,11 @@ async function superviseTick() {
             w.staleNotifiedAt = now();
             w.staleHits = (w.staleHits || 0) + 1;
             const mins = Math.round((Date.now() - lastActivity) / 60000);
-            const lastWord = w.lastTurnEndText || w.lastSignalText || '';
+            const lastWord = lastWordOf(w);
             let text = 'worker ' + workerName(w.ref) + ' alive but silent for '
               + mins + 'min (no signal/turn-end) — may be hung';
             if (w.staleHits >= 2) {
-              text += ' — still silent after ' + w.staleHits + ' alerts'
+              text += ' — still silent, alert #' + w.staleHits
                 + (lastWord ? '; last said: ' + JSON.stringify(lastWord.slice(0, 300)) : '');
             }
             const level = w.staleHits >= 2 ? 1 : 2;
