@@ -71,6 +71,11 @@ async function main() {
     cwd: payload.cwd || null,
     tmux_session: tmuxSession(),
   };
+  // What the agent last said, when the harness hands it over — the stall
+  // alert quotes it so the board knows what a silent worker was waiting on.
+  if (typeof payload.last_assistant_message === 'string' && payload.last_assistant_message.trim()) {
+    event.text = payload.last_assistant_message.trim().slice(0, 300);
+  }
 
   try {
     fs.mkdirSync(stateDir, { recursive: true });

@@ -300,7 +300,7 @@ test('turn-end resolves worker refs (before lieutenant adoption), hook payload i
   } finally { await teardown(); }
 });
 
-test('worker turn-end without done on a Working card wakes the owner (worker-stopped), coalesced per stop-state', async () => {
+test('worker turn-end without done on a Working card wakes the owner (worker-stopped), once per stop', async () => {
   const { s, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({ title: 'Wedged', id: 'wedged', attributes: { repo: 'proj' } }));
@@ -320,14 +320,17 @@ test('worker turn-end without done on a Working card wakes the owner (worker-sto
     assert.strictEqual(ev.level, 2);
     assert.match(ev.text, /stopped without reporting done/);
 
-    // repeat turn-ends in the same stop-state coalesce — no stacking
-    await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId });
-    assert.strictEqual((await stopItems()).length, 1);
-
-    // a signal opens a fresh stop-state: the next stop re-notifies
-    await s.api('POST', '/api/cards/wedged/worker/signal', { text: 'steered — back at it' });
+    // every further stop is a stop of its own (CMD-26: re-sent, stopped again
+    // in silence, and the owner never heard) — the second turn-end posts again
     await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId });
     assert.strictEqual((await stopItems()).length, 2);
+    assert.strictEqual(
+      (await s.api('GET', '/api/cards/wedged')).body.events.filter((e) => e.kind === 'worker-stopped').length, 2);
+
+    // a signal in between changes nothing about that: the next stop notifies
+    await s.api('POST', '/api/cards/wedged/worker/signal', { text: 'steered — back at it' });
+    await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId });
+    assert.strictEqual((await stopItems()).length, 3);
 
     // the drain hint names the stop and the session:window to peek
     const cli = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
@@ -338,7 +341,85 @@ test('worker turn-end without done on a Working card wakes the owner (worker-sto
     // after done, turn-ends only bump counters — never a worker-stopped item
     await s.api('POST', '/api/cards/wedged/worker/done', { outcome: 'finished for real' });
     await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId });
-    assert.strictEqual((await stopItems()).length, 2);
+    assert.strictEqual((await stopItems()).length, 3);
+  } finally { await teardown(); }
+});
+
+test('a worker that stops, is re-sent, and stops again with no signal in between rings twice (hook → event → drain)', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Twice', id: 'twice', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/twice/start', { harness: 'fake' })).body.worker;
+    const key = w.ref.session + ':' + w.ref.window;
+    const stopItems = async () => (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items
+      .filter((i) => i.kind === 'worker-stopped' && i.card === 'twice');
+
+    // stop #1: the Stop hook POSTs, the owner gets one item
+    await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId });
+    assert.strictEqual((await stopItems()).length, 1);
+    // the lieutenant re-sends; the worker ends its turn again saying nothing
+    const sent = await s.api('POST', '/api/cards/twice/worker/send', { text: 'finish the gate' });
+    assert.strictEqual(sent.status, 200, JSON.stringify(sent.body));
+    await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId });
+    assert.strictEqual((await stopItems()).length, 2, 'the second stop is a second item');
+    const evs = (await s.api('GET', '/api/cards/twice')).body.events.filter((e) => e.kind === 'worker-stopped');
+    assert.strictEqual(evs.length, 2, 'two worker-stopped events on the card');
+    // the drain carries both stops
+    const cli = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 0, cli.stderr);
+    assert.strictEqual((cli.stdout.match(/WORKER STOPPED — card twice/g) || []).length, 2);
+  } finally { await teardown(); }
+});
+
+async function untilItems(s, cardId, kind, n, ms = 15000) {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    const items = (await s.api('GET', '/api/feed?lieutenant=' + LT)).body.items
+      .filter((i) => i.kind === kind && i.card === cardId);
+    if (items.length >= n) return items;
+    if (Date.now() > deadline) throw new Error('timeout waiting for ' + n + ' ' + kind + ' items (have ' + items.length + ')');
+    await sleep(50);
+  }
+}
+
+test('a live worker silent for 2× BC_WORKER_STALE_SECS stalls twice: level 2, then level 1 naming its last word; a signal resets the ladder; a turn-end clears staleNotified', async () => {
+  const { s, teardown } = await boot({ BC_SUPERVISE_INTERVAL_MS: '100', BC_WORKER_STALE_SECS: '1' });
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Mute', id: 'mute', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/mute/start', { harness: 'fake' })).body.worker;
+    const key = w.ref.session + ':' + w.ref.window;
+    const stalls = async () => (await s.api('GET', '/api/cards/mute')).body.events.filter((e) => e.kind === 'worker-stalled');
+    // the worker says one thing, then goes quiet inside a turn (LEN-25's AskUserQuestion)
+    await s.api('POST', '/api/cards/mute/worker/signal', { text: 'need a ruling: keep the old flag?' });
+
+    await untilItems(s, 'mute', 'worker-stalled', 1);
+    let evs = await stalls();
+    assert.strictEqual(evs.length, 1);
+    assert.strictEqual(evs[0].level, 2, 'the first stall is the owner\'s');
+    await untilItems(s, 'mute', 'worker-stalled', 2);
+    evs = await stalls();
+    assert.strictEqual(evs.length, 2);
+    assert.strictEqual(evs[1].level, 1, 'the second consecutive stall rings the captain');
+    assert.match(evs[1].text, /silent for \d+min/);
+    assert.match(evs[1].text, /last said: "need a ruling: keep the old flag\?"/);
+    // the drain carries both
+    const cli = await runCli(['drain', '--lieutenant', LT, '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(cli.code, 0, cli.stderr);
+    assert.ok(cli.stdout.includes('alive but silent'), cli.stdout);
+
+    // a signal between ticks resets the escalation: the next stall is level 2 again
+    await s.api('POST', '/api/cards/mute/worker/signal', { text: 'back — reading the answer' });
+    let b = boardOnDisk(s).workers.find((x) => x.card === 'mute');
+    assert.ok(!b.staleNotified && !b.staleNotifiedAt && !b.staleHits, 'signal cleared the stale-state');
+    await untilItems(s, 'mute', 'worker-stalled', 3);
+    evs = await stalls();
+    assert.strictEqual(evs[2].level, 2, 'escalation restarted from quiet');
+
+    // the turn-end hook clears staleNotified too, and its last words feed the next alert
+    await s.api('POST', '/api/turn-end', { session: key, session_id: w.ref.resumeId, text: 'done with the gate, waiting' });
+    b = boardOnDisk(s).workers.find((x) => x.card === 'mute');
+    assert.ok(!b.staleNotified && !b.staleNotifiedAt, 'turn-end cleared staleNotified');
+    assert.strictEqual(b.lastTurnEndText, 'done with the gate, waiting');
   } finally { await teardown(); }
 });
 

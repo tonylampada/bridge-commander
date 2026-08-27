@@ -22,7 +22,9 @@
 //                            lastTurnEnd?, turns?}],
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
 //             workers:  [{card, ref, worktree: {path, tool}, branch?, project,
-//                         spawnedAt, done?, outcome?, flagged?, paused?, lastTurnEnd?, lastSignalAt?, turns?}],
+//                         spawnedAt, done?, outcome?, flagged?, paused?, lastTurnEnd?, lastTurnEndText?,
+//                         lastSignalAt?, lastSignalText?, turns?,
+//                         stopNotified?, staleNotified?, staleNotifiedAt?, staleHits?}],
 //             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
 //                        created, updated, threadStart, pendingOrder,
 //                        status: {worker: null|{id, state, expires}},  // lease; only status.set writes it
@@ -1814,7 +1816,7 @@ function moveCard(card, body, actorDefault) {
   card.updated = now();
   if (from === 'working') {
     const w = findWorker(card.id);
-    if (w) { delete w.stopNotified; delete w.staleNotified; } // leaving Working ends the stop/stale-state
+    if (w) { delete w.stopNotified; clearStale(w); } // leaving Working ends the stop/stale-state
   }
   // A move is a deliberate act: it always lands on the timeline. Default kind:
   // a lieutenant move is a handoff (level 1 from the kinds map — rings the
@@ -2562,7 +2564,7 @@ async function doStartCard(card, body) {
     delete existing.outcome;
     delete existing.flagged;
     delete existing.stopNotified;
-    delete existing.staleNotified;
+    clearStale(existing);
     delete existing.paused; // a revived worker is watched again
     attachBriefArtifact(card, ref);
     enterWorking(card, 'worker ' + workerName(ref) + ' resumed in ' + existing.worktree.path);
@@ -2763,6 +2765,14 @@ async function doStartCard(card, body) {
   return { worker };
 }
 
+// The stale-state is over: signal, done, resume, pause, a turn-end or leaving
+// Working all reset the escalation ladder, so the next stall starts quiet again.
+function clearStale(w) {
+  delete w.staleNotified;
+  delete w.staleNotifiedAt;
+  delete w.staleHits;
+}
+
 // worker.signal — a real milestone from the worker: level-2 event on the card
 // + a QueueItem to the owning lieutenant.
 function workerSignal(card, body) {
@@ -2771,8 +2781,9 @@ function workerSignal(card, body) {
   const w = findWorker(card.id);
   if (w) {
     delete w.stopNotified; // a fresh signal starts a fresh stop-state
-    delete w.staleNotified;
+    clearStale(w);
     w.lastSignalAt = now(); // a milestone is real activity: resets the stale clock
+    w.lastSignalText = text.slice(0, 300); // what the stall alert quotes as the worker's last word
   }
   const ev = mkEvent({ text: text.slice(0, 2000), actor: (body && body.actor) || 'worker' }, { kind: 'signal' });
   card.events.push(ev);
@@ -2793,7 +2804,7 @@ function workerDone(card, body) {
   const w = findWorker(card.id);
   if (w) {
     w.done = true; w.outcome = outcome.slice(0, 2000);
-    delete w.flagged; delete w.stopNotified; delete w.staleNotified;
+    delete w.flagged; delete w.stopNotified; clearStale(w);
     delete w.expectExit; delete w.pauseReason; // the gate it stopped at is behind it
   }
   const urls = outcome.match(PR_URL_RE) || [];
@@ -2856,7 +2867,7 @@ async function workerSend(card, body) {
     delete w.outcome;
     delete w.flagged;
     delete w.stopNotified;
-    delete w.staleNotified;
+    clearStale(w);
     delete w.paused;
     delete w.expectExit; // the stop is over; --resume is a legal move again
     delete w.pauseReason;
@@ -2907,7 +2918,7 @@ async function pauseWorker(card, body) {
   }
   w.paused = now(); // BEFORE the kill: the death must never look like a crash
   delete w.stopNotified;
-  delete w.staleNotified;
+  clearStale(w);
   if (!(body && body.expectExit)) {
     try {
       await harnessFor(w.ref).kill(w.ref);
@@ -2966,7 +2977,7 @@ async function parkCard(card, body) {
   card.column = 'backlog';
   card.pendingOrder = null;
   card.updated = now();
-  if (w) { delete w.stopNotified; delete w.staleNotified; } // leaving Working ends the stop/stale-state
+  if (w) { delete w.stopNotified; clearStale(w); } // leaving Working ends the stop/stale-state
   const ev = mkEvent({
     actor: (body && body.actor) || 'agent',
     text: 'parked (worker ' + (w ? workerName(w.ref) + (w.paused ? ', paused' : ', dead') : 'absent') + '): '
@@ -3098,21 +3109,35 @@ async function superviseTick() {
       try { up = await harnessFor(w.ref).alive(w.ref); } catch (e) { up = false; }
       // Staleness watchdog (alive-but-hung): checked BEFORE the alive
       // early-continue, only for a genuinely live, unpaused worker on a
-      // Working card. One item per stall (staleNotified mirrors the
-      // stopNotified lifecycle); any real activity — signal, turn-end,
-      // resume — re-arms it.
-      if (up && !w.paused && BC_WORKER_STALE_SECS > 0 && !w.staleNotified) {
+      // Working card. It RINGS AGAIN: one worker-stalled per
+      // BC_WORKER_STALE_SECS of continued silence, quiet (level 2) the first
+      // time, level 1 from the second hit on — a worker nobody answered for
+      // two windows is the captain's problem, and the text says what it last
+      // said so he can judge from the feed. Any real activity — signal,
+      // turn-end, resume — resets the ladder.
+      if (up && !w.paused && BC_WORKER_STALE_SECS > 0) {
         const card = findCard(w.card);
         if (card && card.column === 'working') {
           const stamps = [w.spawnedAt, w.lastTurnEnd, w.lastSignalAt]
             .map((t) => (t ? Date.parse(t) : NaN)).filter((n) => !Number.isNaN(n));
           const lastActivity = stamps.length ? Math.max(...stamps) : 0;
-          if (lastActivity && Date.now() - lastActivity > BC_WORKER_STALE_SECS * 1000) {
+          const notifiedAt = w.staleNotifiedAt ? Date.parse(w.staleNotifiedAt) : NaN;
+          const sinceNotify = Number.isNaN(notifiedAt) ? Infinity : Date.now() - notifiedAt;
+          const window = BC_WORKER_STALE_SECS * 1000;
+          if (lastActivity && Date.now() - lastActivity > window && sinceNotify > window) {
             w.staleNotified = true;
+            w.staleNotifiedAt = now();
+            w.staleHits = (w.staleHits || 0) + 1;
             const mins = Math.round((Date.now() - lastActivity) / 60000);
-            const text = 'worker ' + workerName(w.ref) + ' alive but silent for '
+            const lastWord = w.lastTurnEndText || w.lastSignalText || '';
+            let text = 'worker ' + workerName(w.ref) + ' alive but silent for '
               + mins + 'min (no signal/turn-end) — may be hung';
-            card.events.push(mkEvent({ text, actor: 'server' }, { kind: 'worker-stalled' }));
+            if (w.staleHits >= 2) {
+              text += ' — still silent after ' + w.staleHits + ' alerts'
+                + (lastWord ? '; last said: ' + JSON.stringify(lastWord.slice(0, 300)) : '');
+            }
+            const level = w.staleHits >= 2 ? 1 : 2;
+            card.events.push(mkEvent({ text, actor: 'server', level }, { kind: 'worker-stalled' }));
             card.updated = now();
             queuePush(card.owner, { kind: 'worker-stalled', card: card.id, text });
             changed = true;
@@ -4266,15 +4291,20 @@ const server = http.createServer(async (req, res) => {
           if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
           w.lastTurnEnd = now();
           w.turns = (w.turns || 0) + 1;
+          if (typeof body.text === 'string' && body.text.trim()) w.lastTurnEndText = body.text.trim().slice(0, 300);
+          clearStale(w); // a turn-end is activity: the stall ladder starts over
           // turn-end is the status refresh point (context bar / /status data)
           const statusChanged = await refreshAgentStatus(w);
           // A worker turn-end IS the stop signal: a Working card whose worker
           // stopped without done would otherwise be invisible to its owner.
-          // One item per stop-state — the flag clears on signal/done or when
-          // the card leaves Working, so repeats never stack.
+          // EVERY such turn-end posts — a worker re-sent after a stop that ends
+          // its turn again with no signal has stopped AGAIN, and an owner who
+          // heard about the first stop only is the 3h silence of CMD-26.
+          // stopNotified marks "this stop was notified" for the drain hint;
+          // signal/done/leaving Working clear it.
           const card = findCard(w.card);
           let stopped = false;
-          if (card && card.column === 'working' && !w.done && !w.stopNotified) {
+          if (card && card.column === 'working' && !w.done) {
             w.stopNotified = true;
             stopped = true;
             const text = 'worker ' + workerName(w.ref) + ' stopped without reporting done';

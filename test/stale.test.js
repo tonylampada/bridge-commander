@@ -4,8 +4,9 @@
 // loop) is alive (no worker-died), never ends its turn (no worker-stopped),
 // and never reaches done. superviseTick notices a live, unpaused worker on a
 // Working card with no activity (spawn / turn-end / signal) for
-// BC_WORKER_STALE_SECS and fires ONE worker-stalled card event + QueueItem;
-// any real activity re-arms it. Uses the file-backed fake harness: a marker
+// BC_WORKER_STALE_SECS and fires a worker-stalled card event + QueueItem once
+// per window of continued silence (level 1 from the second on); any real
+// activity resets the ladder. Uses the file-backed fake harness: a marker
 // file makes the ref alive.
 const test = require('node:test');
 const assert = require('node:assert');
@@ -55,7 +56,7 @@ function stallSeed(cardId, ageMs) {
   };
 }
 
-test('alive worker silent past the threshold: ONE worker-stalled item + level-1 card event, no duplicates on later ticks', async () => {
+test('alive worker silent past the threshold: a worker-stalled item + level-2 card event, no duplicate within the same window', async () => {
   const fdir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-fake-'));
   fakeSession(fdir, 'bc-lt-ada:w-slug'); // ALIVE before the server boots — if the
   // first supervise tick raced ahead of this marker the worker would read DEAD,
@@ -73,10 +74,10 @@ test('alive worker silent past the threshold: ONE worker-stalled item + level-1 
     assert.strictEqual(card.column, 'working', 'the card stays Working — the owner decides');
     const ev = card.events.find((e) => e.kind === 'worker-stalled');
     assert.ok(ev, 'worker-stalled event on the card');
-    assert.strictEqual(ev.level, 1, 'a stall rings the bell — actionable, not ambient');
+    assert.strictEqual(ev.level, 2, 'the first stall is the owner\'s to handle');
     assert.match(ev.text, /alive but silent for \d+min/);
 
-    await sleep(600); // several more ticks: notified once, no item spam
+    await sleep(600); // several more ticks inside the same window: no item spam
     const items = (await s.api('GET', '/api/feed?lieutenant=ada')).body.items;
     assert.strictEqual(items.filter((i) => i.kind === 'worker-stalled').length, 1);
     assert.ok(!items.some((i) => i.kind === 'worker-died'), 'an alive worker is never reported dead');

@@ -37,6 +37,12 @@ anything: what landed, and the PR URL if there is one. Your worktree outlives `d
 exactly as long as your lieutenant takes to read the diff in it — the board takes it back when
 the card leaves Working — so commit and push before you report.
 
+**A ruling or an answer you need is a signal too** — sent *before your turn ends*, with the
+question in the text. `AskUserQuestion` reaches nobody here: the board cannot see it, and a
+turn that ends on it looks like a hung worker. A parked no-mistakes gate is the same thing:
+signal it, then keep the turn alive (Monitor on `no-mistakes axi status`) until the run
+reaches an outcome or the next gate.
+
 That is your whole vocabulary with the board. **Your lieutenant moves the card** once they have
 verified the work, so leave the column alone. You have no channel to the captain; anything for
 them goes in a signal and your lieutenant carries it up.
