@@ -2508,13 +2508,21 @@ async function killCardWorker(card, w, opts = {}) {
 
 // stampWorkerAddress(card, w) — the card's own note of the run: `session` and
 // `resumeId`, so the transcript stays readable long after the window is gone.
-// dropWorkerRecord writes it as the record goes, and archive writes it directly
-// — archiveCard freezes the card into the snapshot synchronously, well before a
-// detached drop could get there, and by then there is no card left to stamp.
+// The ONE writer of that pair, and every path that binds or unbinds a worker
+// goes through it: the spawn, the resume, and dropWorkerRecord as the record
+// goes (archive calls it directly — archiveCard freezes the card into the
+// snapshot synchronously, well before a detached drop could get there, and by
+// then there is no card left to stamp).
+//
+// `resumeId` is SET or DELETED, never left standing: the pair is one address,
+// and a ref born without a resume id (codex) beside a session name from this
+// run would otherwise send forensics to the previous run's conversation. Same
+// shape the `branch` attribute already uses at the spawn, for the same reason.
 function stampWorkerAddress(card, w) {
   if (!card || !card.attributes || !w) return;
   card.attributes.session = workerName(w.ref);
   if (w.ref && w.ref.resumeId) card.attributes.resumeId = w.ref.resumeId;
+  else delete card.attributes.resumeId;
 }
 
 // dropWorkerRecord(card, w) — the registry entry goes, and the address it held
@@ -2702,6 +2710,7 @@ async function doStartCard(card, body) {
       return { error: 'card left the board during resume: ' + card.id, code: 409 };
     }
     existing.ref = ref;
+    stampWorkerAddress(card, existing);
     existing.done = false;
     delete existing.outcome;
     delete existing.flagged;
@@ -2921,7 +2930,6 @@ async function doStartCard(card, body) {
     return { error: 'card left the board during start: ' + card.id, code: 409 };
   }
 
-  card.attributes.session = workerName(ref);
   card.attributes.worktree = wt.path;
   // Cleared when this run cuts none: a card restarted on a no-branch template
   // would otherwise keep the last run's value, and everything downstream —
@@ -2930,6 +2938,7 @@ async function doStartCard(card, body) {
   else delete card.attributes.branch;
   attachBriefArtifact(card, ref);
   const worker = { card: card.id, ref, worktree: wt, project: project.name, spawnedAt: now(), done: false };
+  stampWorkerAddress(card, worker);
   if (branch) worker.branch = branch;
   // Recorded at start because the handoff is where they are read, and the
   // playbook is resolved HERE and only here.
@@ -4640,12 +4649,19 @@ const server = http.createServer(async (req, res) => {
           // Chained so the timeline reads in that order; neither ever throws.
           killCardWorker(card, w, { honorKeep: true, reason: 'the handoff — the card left Working' })
             .then(async (kill) => {
+              // Read BEFORE the release: a landed one deletes the pointer.
+              const ground = !!((w && w.worktree && w.worktree.path)
+                || (card.attributes && card.attributes.worktree));
               const rel = await releaseCardWorktree(card, w, { honorKeep: true });
               // A release that REFUSED leaves work standing on that checkout,
               // and its teardown unspent. Keep the record — archive is the next
-              // release point and reads it there. Everything else: the worker
-              // is gone from the board as well as from tmux.
-              if (kill && kill.killed && (!rel || rel.released)) dropWorkerRecord(card, w);
+              // release point and reads it there. So does a release that could
+              // not RUN (no clone to release against, or it threw): `not
+              // released` means exactly that, and only a positive signal is
+              // proof the ground went. The one drop without that proof is the
+              // worker that had no ground to begin with — there is nothing left
+              // for its record to be the handle for.
+              if (kill && kill.killed && ((rel && rel.released) || !ground)) dropWorkerRecord(card, w);
             })
             .catch((e) => console.error(now() + ' handoff teardown for ' + card.id
               + ' failed: ' + String((e && e.message) || e)));

@@ -1447,6 +1447,85 @@ test('the boot sweep ends every worker whose card is not Working — and the orp
   }
 });
 
+// `not released` has to mean exactly that. releaseCardWorktree answers null both
+// when it REFUSED nothing (no clone to release against) and from its own
+// catch-all — neither is proof the checkout went — so a null must keep the
+// record, which is the only handle left on that unreleased ground.
+test('a handoff whose release could not run keeps the record', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Nowhere to release', id: 'noclone', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/noclone/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/noclone/worker/done', { outcome: 'shipped' });
+
+    // the clone this worktree belongs to is no longer registered: the release
+    // has nothing to release AGAINST, and says so by doing nothing at all
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.workers.find((x) => x.card === 'noclone').project = 'vanished';
+    doc.cards.find((c) => c.id === 'noclone').attributes.repo = 'vanished';
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    assert.strictEqual((await s.api('POST', '/api/cards/noclone/move', { column: 'review', actor: 'agent' })).status, 200);
+    await until('the window is gone all the same',
+      async () => !fs.existsSync(path.join(fdir, workerKey(wsDir, 'noclone') + '.json')));
+    await sleep(400);
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'noclone'),
+      'the record is the only handle left on ground nothing released');
+    assert.ok(fs.existsSync(w.worktree.path), 'and the checkout is still standing');
+    assert.strictEqual((await s.api('GET', '/api/cards/noclone')).body.attributes.worktree, w.worktree.path);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// `session` and `resumeId` are ONE address. A restart binds a new worker, so it
+// rewrites both — a fresh session name beside the previous run's transcript id
+// sends forensics to the wrong conversation, and nothing fails to say so.
+test('a rework restart replaces the address, resumeId included', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Twice run', id: 'twicerun', attributes: { repo: 'proj' },
+    }));
+    const first = (await s.api('POST', '/api/cards/twicerun/start', { harness: 'fake' })).body.worker;
+    assert.strictEqual((await s.api('GET', '/api/cards/twicerun')).body.attributes.resumeId,
+      first.ref.resumeId, 'the address is current from the spawn on');
+
+    await s.api('POST', '/api/cards/twicerun/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/twicerun/move', { column: 'review', actor: 'agent' });
+    await until('the handoff ended the worker and dropped its record',
+      async () => !fs.existsSync(path.join(fdir, workerKey(s.dir, 'twicerun') + '.json'))
+        && ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'twicerun'));
+    assert.strictEqual((await s.api('GET', '/api/cards/twicerun')).body.attributes.resumeId,
+      first.ref.resumeId, 'and left the ended run as the last address');
+
+    const r2 = await s.api('POST', '/api/cards/twicerun/start', { harness: 'fake' });
+    assert.strictEqual(r2.status, 200, JSON.stringify(r2.body));
+    const second = r2.body.worker;
+    assert.notStrictEqual(second.ref.resumeId, first.ref.resumeId);
+    const card = (await s.api('GET', '/api/cards/twicerun')).body;
+    assert.strictEqual(card.attributes.session, workerKey(s.dir, 'twicerun'));
+    assert.strictEqual(card.attributes.resumeId, second.ref.resumeId,
+      'the card advertises THIS run, not the one before it');
+  } finally { await teardown(); }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching
