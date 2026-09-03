@@ -32,4 +32,7 @@ Every commit goes there.
 3. Findings come back with an action. `auto-fix` is yours to fix and re-run. `ask-user` is a
    finding that challenges what the card asked for — signal it and wait for your lieutenant;
    do not answer it yourself and do not fix your way around it.
+   A parked gate is a signal, then a turn kept alive: after signalling, Monitor on
+   `no-mistakes axi status` until the run reaches an outcome or the next gate. A turn that
+   ends on a parked gate looks like a hung worker.
 4. Report the full PR URL in your done outcome.

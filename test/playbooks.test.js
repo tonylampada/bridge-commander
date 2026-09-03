@@ -290,6 +290,7 @@ test('init SYMLINKS the worker-duties skill, repoints a stale link, and leaves a
   assert.ok(fs.lstatSync(skillDst).isSymbolicLink(), 'a symlink, so an upgrade upgrades the duties');
   assert.strictEqual(fs.readlinkSync(skillDst), PACKAGED_SKILL_DIR);
   assert.match(fs.readFileSync(path.join(skillDst, 'SKILL.md'), 'utf8'), /name: bridge-commander-worker/);
+  assert.ok(fs.existsSync(path.join(skillDst, 'images.md')), 'the whole skill dir ships, not one file');
 
   // already ours and pointing right: nothing to do
   assert.strictEqual(seedPlaybooksAndDuties(dir, home).skill, '');
