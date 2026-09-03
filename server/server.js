@@ -2422,12 +2422,16 @@ async function releaseCardWorktree(card, w, opts = {}) {
     if (!wtRec) return null;
     const project = findProject(String((w && w.project) || attrs.repo || ''));
     if (!project) return null; // no clone to release against — leave the directory alone
-    // The record IS the claim on its path; a bare pointer is not, so a path some
-    // OTHER card's live worker stands on is refused before anything touches it
-    // — the teardown included, since stopping what stands on that ground would
-    // stop that worker's stack, not this card's. Refused the way every refusal
-    // here works: the directory stays and the timeline says whose it is.
-    const holder = fromRecord ? null : worktreeHolder(card.id, wtRec.path);
+    // The record IS the claim on its path; a bare pointer is not, and neither is
+    // a record whose worktree is already marked RELEASED — that one gave the
+    // ground back, and a pool hands the slot to whoever asks next. In both
+    // cases a path some OTHER card's live worker stands on is refused before
+    // anything touches it — the teardown included, since stopping what stands
+    // on that ground would stop that worker's stack, not this card's. Refused
+    // the way every refusal here works: the directory stays and the timeline
+    // says whose it is.
+    const claims = fromRecord && !(w.worktree && w.worktree.released);
+    const holder = claims ? null : worktreeHolder(card.id, wtRec.path);
     let rel;
     if (holder) {
       rel = { released: false, reason: 'it belongs to card ' + holder.card + ', whose worker is live on it' };

@@ -1626,6 +1626,59 @@ test('archiving a card whose stale pointer names another card\'s live checkout k
   }
 });
 
+// A record whose worktree is marked RELEASED has already given that ground
+// back, so it has stopped being a claim on it — a pool hands the slot to
+// whoever asks next. The record can outlive its release when the kill could not
+// be verified, and archiving that card must not take the path back a second
+// time, now that somebody else is standing on it.
+test('a kept record whose worktree was already released does not take it back', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Standing on it', id: 'liveone', attributes: { repo: 'proj' } }));
+    const live = (await s.api('POST', '/api/cards/liveone/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards', withOwner({ title: 'Gave it back', id: 'gaveback', attributes: { repo: 'proj' } }));
+    await s.api('POST', '/api/cards/gaveback/start', { harness: 'fake' });
+    await s.api('POST', '/api/cards/gaveback/worker/done', { outcome: 'shipped' });
+
+    // gaveback's release LANDED (worktree marked released, pointer gone) but its
+    // kill could not be verified, so the record was kept — and the ground it
+    // names has since been handed to liveone's live worker
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const w = doc.workers.find((x) => x.card === 'gaveback');
+    w.ref.harness = 'ghost';
+    w.worktree.path = live.worktree.path;
+    w.worktree.released = true;
+    delete doc.cards.find((c) => c.id === 'gaveback').attributes.worktree;
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    assert.strictEqual((await s.api('POST', '/api/cards/gaveback/archive', { reason: 'killed' })).status, 200);
+    const ev = await until('the refusal is on the board stream', async () =>
+      ((await s.api('GET', '/api/board')).body.events || [])
+        .filter((e) => e.card === 'gaveback').find((e) => /worktree kept/.test(e.text)));
+    assert.match(ev.text, /liveone/, 'the refusal names who holds it now');
+    assert.match(ev.text, rx(live.worktree.path));
+    assert.strictEqual(ev.level, 2);
+    assert.ok(fs.existsSync(live.worktree.path), 'the live worker keeps its ground');
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'liveone'));
+    assert.strictEqual((await s.api('GET', '/api/cards/liveone')).body.attributes.worktree, live.worktree.path);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching
