@@ -1668,7 +1668,7 @@ async function cmdDrain() {
       hint = 'the captain ordered this card started: read it (bc-axi card show ' + it.card + '), brief the worker, then: bc-axi card start ' + it.card + ' [--brief-file <f>]';
     } else if (it.kind === 'rework-order') {
       head = 'REWORK ORDER — ' + cardBit(it.card);
-      hint = 'the captain sent this back: steer the live worker (short line into its session) or restart one with an updated brief (bc-axi card start ' + it.card + ' --brief-file <f>); when reworked, rewrite the body and hand off: bc-axi card move ' + it.card + ' review';
+      hint = 'the captain sent this back: the handoff that put it in review ended that worker, so rework is a FRESH one with an updated brief (bc-axi card start ' + it.card + ' --brief-file <f>) — only a keep_worktree playbook still has a live session to steer; when reworked, rewrite the body and hand off: bc-axi card move ' + it.card + ' review';
     } else if (it.kind === 'worker-signal') {
       head = 'worker milestone — ' + cardBit(it.card);
       hint = 'note it; act only if it changes your plan';
@@ -1677,7 +1677,7 @@ async function cmdDrain() {
       hint = 'read the thread (bc-axi thread card:' + it.card + ') and act; steer the worker: bc-axi worker send ' + it.card + ' --text-file <f|->';
     } else if (it.kind === 'worker-done') {
       head = 'WORKER DONE — ' + cardBit(it.card);
-      hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text) — the handoff releases that worktree, so read it first; rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
+      hint = 'verify the work in its worktree (read the diff/branch, not just the outcome text) and ask the worker whatever you still want to ask (bc-axi worker send ' + it.card + ' --text-file <f|->) — the handoff KILLS that session and releases the worktree, so do both first; rewrite the card body to current state (bc-axi card patch ' + it.card + ' --body-file <f|->), then hand off: bc-axi card move ' + it.card + ' review';
     } else if (it.kind === 'worker-stopped') {
       const c = cards.find((x) => x.id === it.card);
       const sess = (c && c.attributes && c.attributes.session) || '<session>';

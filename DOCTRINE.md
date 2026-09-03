@@ -159,8 +159,11 @@ just trust the outcome text; **verified** means the exact end-user path was exer
 proxy (a notification feature checked via typed events but never a real chat message is not
 verified) — require the done report to name the path it exercised — then rewrite the card body
 and hand off (`card move <id> review`) — the card never leaves Working by itself. The handoff
-is what releases the worktree, so read it before you move the card: after the move it is gone
-(a playbook's `keep_worktree: true` is the exception).
+is the worker's death: it kills the session AND releases the worktree, so read the diff and ask
+the worker whatever you still want to ask BEFORE you move the card — after the move both are
+gone and rework is a fresh `card start` (a playbook's `keep_worktree: true` is the exception to
+both). A card in Your review costs nothing while it waits for the captain, which is why it may
+wait.
 The timeline never goes silent: a stalled-but-alive worker isn't just noted — peek its session,
 grasp what it's doing, and POST a level-2 timeline event narrating it, even when the wait is
 legitimate ("waiting on CI, ~15min, normal"). A silent hour on a Working card reads as dead and
@@ -171,8 +174,9 @@ while the worker is absent or dead; the server re-checks). To stop a worker ON P
 (machine pressure, deprioritized work), never kill its session by hand — that reads as a
 crash. Use `bc-axi worker pause <id>` (deliberate stop, no WORKER DIED alarm, record and
 worktree stay resumable), or `worker pause <id> --park` to also shelve the card in one
-step. Steer a live worker with `bc-axi worker send <id> "<line>"`; anything long belongs in a
-rework restart with an updated brief.
+step. Steer a live worker with `bc-axi worker send <id> "<line>"` — while the card is still Working;
+anything long, and anything at all after the handoff, belongs in a rework restart with an
+updated brief.
 
 ### Ruling on an escalated finding
 

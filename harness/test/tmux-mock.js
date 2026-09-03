@@ -12,7 +12,7 @@
 // (the SAME cached module instance) is visible to every adapter.
 const tmuxMod = require('../tmux.js');
 
-const PATCHED = ['tmux', 'tryTmux', 'sleep', 'sendLiteral', 'sendKey', 'capture', 'captureStyled', 'submit'];
+const PATCHED = ['tmux', 'tryTmux', 'tmuxRead', 'sleep', 'sendLiteral', 'sendKey', 'capture', 'captureStyled', 'submit'];
 
 // mockTmux({readyTail}) -> { calls, restore() }
 // readyTail — the string returned by capture()/captureStyled() (the adapter's
@@ -22,7 +22,12 @@ const PATCHED = ['tmux', 'tryTmux', 'sleep', 'sendLiteral', 'sendKey', 'capture'
 // then held on the last. That is how a launch that has to walk THROUGH a dialog
 // is testable: give it [picker, readyUI] and the settle loop must answer the
 // first before it ever sees the second.
-function mockTmux({ readyTail }) {
+//
+// readFails — make every STRICT read (tmuxRead) throw, the way a tmux that
+// cannot be run at all answers: not "the window is gone", but "I could not
+// look". The loose reads (tryTmux) are unaffected, exactly as in the real
+// plumbing.
+function mockTmux({ readyTail, readFails }) {
   const screens = Array.isArray(readyTail) ? readyTail.slice() : null;
   const nextScreen = () => (screens ? (screens.length > 1 ? screens.shift() : screens[0]) : readyTail);
   const calls = [];
@@ -37,6 +42,14 @@ function mockTmux({ readyTail }) {
     // command so launch-settle's poll loop proceeds past the "not up yet" check.
     if (args[0] === 'display-message' && args.includes('#{pane_current_command}')) return 'agent';
     return null; // has-session / list-windows: "not found" — claimPaneNames proceeds
+  };
+  // the strict reader: same answers as tryTmux, except that a read FAILURE is
+  // an error rather than a null
+  tmuxMod.tmuxRead = async (...args) => {
+    calls.push({ fn: 'tmuxRead', args });
+    if (readFails) throw new Error('tmux: no server on socket');
+    if (args[0] === 'display-message' && args.includes('#{pane_current_command}')) return 'agent';
+    return null;
   };
   tmuxMod.sendLiteral = async (target, text) => { calls.push({ fn: 'sendLiteral', args: [target, text] }); };
   tmuxMod.sendKey = async (...args) => { calls.push({ fn: 'sendKey', args }); };

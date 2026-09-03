@@ -16,7 +16,10 @@ a bare "it started" is not proof. Restart deliberately:
 - Verify BOTH: `/api/status` returns 200 AND the listening pid changed. A stale duplicate can
   hold the port and fake a successful restart — same-pid means nothing restarted.
 - Preserve any env-only config the operator set; a bare restart silently drops env vars.
-- Restarting never kills worker/lieutenant tmux sessions — they reattach to the fresh server.
+- Restarting never kills the tmux session of a lieutenant, or of a worker on a Working card —
+  they reattach to the fresh server. It DOES sweep the leftovers: a boot closes worker windows
+  whose card is off the board or no longer in Working, which is the same death the handoff
+  gives them.
 
 ## Deploying a merged PR to the tool
 

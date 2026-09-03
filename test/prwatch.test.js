@@ -11,6 +11,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { startServerWithLieutenant, withOwner, sleep, LT } = require('./helper');
+const { lieutenantSession, workerWindow } = require('../server/names.js');
+
+// A worker's harness key: a WINDOW inside its lieutenant's session.
+function workerKey(dir, cardId) {
+  return lieutenantSession(dir, LT) + ':' + workerWindow(cardId);
+}
 
 function makeRepo(root) {
   const repo = path.join(root, 'srcrepo');
@@ -113,6 +119,117 @@ test('merged PR: worktree released, card archived (landed, level 1), owner queue
     const merged = items.find((i) => i.kind === 'pr-merged');
     assert.strictEqual(merged.card, 'merge-me');
     assert.strictEqual(merged.text, PR);
+  } finally { await teardown(); }
+});
+
+// The merge archive freezes the card into the snapshot, and the run's address
+// normally rides in on dropWorkerRecord — which is skipped when the kill cannot
+// be verified. That is the one case where somebody most needs to go find the
+// transcript, so the address is stamped in its own right, exactly as the
+// archive endpoint does it.
+test('a merged card whose worker kill FAILED still archives with the run\'s address', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-prwatch-'));
+  const repo = makeRepo(root);
+  const gh = makeGhStub(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_GH_CMD: gh.stub,
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env: Object.assign({ BC_PRWATCH_INTERVAL_MS: '0' }, env) });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Merged unreachable', id: 'mergefail', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/mergefail/start', { harness: 'fake' })).body.worker;
+    const spawnId = w.ref.resumeId;
+    assert.ok(spawnId);
+
+    // the relay moves the run onto a new transcript id AFTER the spawn — the
+    // record knows it, the card's own note still says the old one
+    const relayed = 'relay-uuid-after-the-spawn';
+    const te = await s.api('POST', '/api/turn-end', { session: workerKey(wsDir, 'mergefail'), session_id: relayed });
+    assert.strictEqual(te.status, 200, JSON.stringify(te.body));
+    assert.strictEqual((await s.api('GET', '/api/cards/mergefail')).body.attributes.resumeId, spawnId);
+
+    gh.setState(PR, 'OPEN');
+    await s.api('POST', '/api/cards/mergefail/worker/done', { outcome: 'PR open: ' + PR });
+
+    // the board can no longer reach that session: the merge's kill will fail
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const rec = doc.workers.find((x) => x.card === 'mergefail');
+    assert.strictEqual(rec.ref.resumeId, relayed, 'the record carries the relayed id');
+    rec.ref.harness = 'ghost';
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env: Object.assign({ BC_PRWATCH_INTERVAL_MS: '200' }, env) });
+
+    gh.setState(PR, 'MERGED');
+    await until('card archived on merge', async () =>
+      (await s.api('GET', '/api/cards/mergefail')).status === 404);
+
+    const arch = (await s.api('GET', '/api/archive')).body.archive.find((r) => r.card.id === 'mergefail');
+    assert.strictEqual(arch.reason, 'merged');
+    assert.strictEqual(arch.card.attributes.session, workerKey(wsDir, 'mergefail'));
+    assert.strictEqual(arch.card.attributes.resumeId, relayed,
+      'the frozen snapshot names the transcript the run actually ended on');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The merge archive awaits the card-archived hooks and then the release, both
+// on budgets measured in minutes, and the card is still on the board for all of
+// it. A rework restart inside that window binds a NEW worker — so the address
+// the snapshot freezes must be that one's, never the ended run's, or the board
+// sends the lieutenant to a session that is no longer there.
+test('a rework restart during the merge archive keeps the LIVE worker\'s address', async () => {
+  const { s, root, gh, teardown } = await boot();
+  try {
+    const started = path.join(root, 'hook-in');
+    const go = path.join(root, 'hook-go');
+    shHook(s.dir, 'card-archived', 'block.sh',
+      'echo in > ' + JSON.stringify(started) + '\n'
+      + 'while [ ! -f ' + JSON.stringify(go) + ' ]; do sleep 0.05; done');
+
+    await s.api('POST', '/api/cards', withOwner({ title: 'Raced', id: 'raced', attributes: { repo: 'proj' } }));
+    const first = (await s.api('POST', '/api/cards/raced/start', { harness: 'fake' })).body.worker;
+    const url = 'https://github.com/acme/proj/pull/77';
+    gh.setState(url, 'OPEN');
+    // dirty at the handoff: the release REFUSES, so the record survives it —
+    // the population this race is reachable from
+    fs.writeFileSync(path.join(first.worktree.path, 'unsaved.txt'), 'not committed\n');
+    await s.api('POST', '/api/cards/raced/worker/done', { outcome: 'PR: ' + url });
+    await s.api('POST', '/api/cards/raced/move', { column: 'review', actor: 'agent' });
+    await until('the release refused, leaving the record behind', async () =>
+      ((await s.api('GET', '/api/cards/raced')).body.events || []).some((e) => /worktree kept/.test(e.text)));
+    // the human resolves the mess by hand; the checkout is releasable again
+    fs.rmSync(path.join(first.worktree.path, 'unsaved.txt'));
+
+    gh.setState(url, 'MERGED');
+    await until('the merge archive is inside the hooks', async () => fs.existsSync(started));
+
+    // ...and the lieutenant reworks the card while it is still on the board
+    const r = await s.api('POST', '/api/cards/raced/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const second = r.body.worker;
+    assert.notStrictEqual(second.ref.resumeId, first.ref.resumeId, 'a fresh run, a fresh transcript');
+    fs.writeFileSync(go, 'x');
+
+    await until('card archived on merge', async () =>
+      (await s.api('GET', '/api/cards/raced')).status === 404);
+    const arch = (await s.api('GET', '/api/archive')).body.archive.find((rec) => rec.card.id === 'raced');
+    assert.strictEqual(arch.card.attributes.resumeId, second.ref.resumeId,
+      'the snapshot names the run that was actually live when the card left');
+    // an archived card has neither Working nor worker: the raced-in run was
+    // working a card that had already merged, so the archive ends it too
+    assert.ok(!fs.existsSync(path.join(root, 'fake', workerKey(s.dir, 'raced') + '.json')),
+      'the raced-in window is closed');
+    assert.deepStrictEqual((await s.api('GET', '/api/board')).body.workers.filter((x) => x.card === 'raced'), [],
+      'and no orphan record is left behind');
   } finally { await teardown(); }
 });
 

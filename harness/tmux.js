@@ -74,6 +74,28 @@ async function tryTmux(...args) {
   }
 }
 
+// tmuxRead(...args) -> stdout, or null when tmux ANSWERS that the thing asked
+// about is not there. Every OTHER failure throws with the reason.
+//
+// tryTmux above cannot tell those apart: it maps "the window is gone" and "I
+// could not run tmux at all" onto the same null, and a caller that reads that
+// null as absence then acts on a fact it never established. The port's contract
+// is the other way round — a verb a harness cannot honor throws with the reason,
+// never silently succeeds — so anything that has to KNOW reads through here.
+//
+// The absence answers are tmux's own words: a session or window it cannot find,
+// and a socket with no server behind it (nothing is running there either way).
+const TMUX_ABSENT_RE = /can't find (session|window|pane)|(session|window|pane) not found|no server running/i;
+async function tmuxRead(...args) {
+  try {
+    return await tmuxRun(args);
+  } catch (e) {
+    const said = String((e && e.stderr) || '') + ' ' + String((e && e.message) || e);
+    if (TMUX_ABSENT_RE.test(said)) return null;
+    throw e;
+  }
+}
+
 // stripGhost(line) — remove dim/faint (SGR 2) styled runs from one styled
 // capture line, drop all remaining escape sequences, return plain text.
 // A reset (SGR 0) or normal-intensity (SGR 22) ends a dim run; codes are
@@ -237,6 +259,7 @@ async function submit(target, text, opts = {}) {
 module.exports = {
   tmux,
   tryTmux,
+  tmuxRead,
   sleep,
   stripGhost,
   classifyComposerLine,

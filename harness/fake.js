@@ -29,9 +29,13 @@
 //   <session>.json         spawn record { cwd, resumeId, prompt, stateDir }
 //   <session>.sends.jsonl  one JSON line per send { ts, session, text }
 // and a session unknown to THIS process counts as alive (and accepts sends)
-// iff its <session>.json marker exists. That lets a test process watch what a
-// server process sent, and pre-register "live" fake sessions by dropping a
-// marker file. Without BC_FAKE_STATE the fake stays purely in-memory.
+// iff its <session>.json marker exists AND does not say `exited: true` — the
+// window whose agent ended by itself, still standing until something kills it.
+// That lets a test process watch what a server process sent, and pre-register
+// "live" (or exited) fake sessions by dropping a marker file. A marker saying
+// `unreadable: true` is the third state: alive() THROWS, the way a harness
+// answers a question it could not ask. Without BC_FAKE_STATE the fake stays
+// purely in-memory.
 //
 // spawn also writes opts.stateDir/<key>.prompt (the SAME source-of-truth file
 // the real tmux adapters persist) whenever opts.stateDir is given — distinct
@@ -78,11 +82,19 @@ function get(ref) {
 }
 
 // live(key) — known to THIS process, else the file-backed marker.
+//
+// A marker carrying `exited: true` is the state both tmux harnesses read as NOT
+// alive while the WINDOW is still standing: the agent process ended by itself
+// and its pane fell back to a shell. The marker is that window, so only kill()
+// takes it away — which is why alive() answering false never means there is
+// nothing left to kill.
 function live(key) {
   const s = sessions.get(key);
   if (s) return s.alive;
   const marker = markerFile(key);
-  return !!(marker && fs.existsSync(marker));
+  if (!marker || !fs.existsSync(marker)) return false;
+  try { return !JSON.parse(fs.readFileSync(marker, 'utf8')).exited; }
+  catch (e) { return true; } // unreadable marker: the window is there, that is all we know
 }
 
 // siblings(session) — every key living in that tmux session: the session
@@ -137,11 +149,24 @@ function emitTurnEnd(name) {
 const SPAWN_MS = parseInt(process.env.BC_FAKE_SPAWN_MS, 10) > 0
   ? parseInt(process.env.BC_FAKE_SPAWN_MS, 10) : 0;
 
+// BC_FAKE_ALIVE_MS does the same for alive(). A real liveness read is two tmux
+// subprocess round-trips, and what a caller does with the answer can be decided
+// while the registry moves underneath it — invisible against a fake that
+// answers in the same tick.
+const ALIVE_MS = parseInt(process.env.BC_FAKE_ALIVE_MS, 10) > 0
+  ? parseInt(process.env.BC_FAKE_ALIVE_MS, 10) : 0;
+
 async function spawn(cwd, prompt, opts = {}) {
   const session = opts.session || 'bc-' + crypto.randomBytes(3).toString('hex');
   const window = opts.window === undefined || opts.window === null ? undefined : String(opts.window);
   const key = keyOf(session, window);
   if (sessions.has(key) && sessions.get(key).alive) {
+    throw new Error(`fake: session ${key} already exists`);
+  }
+  // tmux refuses a window whose name is already taken, and a window whose agent
+  // EXITED is still a window. The marker is that window in file-backed mode, so
+  // a spawn over one nobody killed fails here exactly as the real harness does.
+  if (markerFile(key) && fs.existsSync(markerFile(key))) {
     throw new Error(`fake: session ${key} already exists`);
   }
   if (SPAWN_MS) await new Promise((r) => setTimeout(r, SPAWN_MS));
@@ -190,9 +215,24 @@ async function send(ref, text) {
 // A session-granular ref is read the way tmux reads `=session:`: off whichever
 // window has FOCUS, so ANY live window in the session makes it read alive —
 // including a busy worker masking a dead lieutenant beside it.
+// A marker carrying `unreadable: true` is the tmux nobody could READ — the verb
+// cannot be honored, so it throws with the reason instead of answering "gone".
+// Absence and an unanswered question are different facts, and the board drops
+// worker records on the difference.
+function assertReadable(key) {
+  const marker = markerFile(key);
+  if (!marker || !fs.existsSync(marker)) return;
+  let doc = null;
+  try { doc = JSON.parse(fs.readFileSync(marker, 'utf8')); } catch (e) { return; }
+  if (doc && doc.unreadable) throw new Error(`fake: cannot read session ${key}`);
+}
+
 async function alive(ref) {
-  if (ref.window) return live(refKey(ref));
-  return siblings(ref.session).some(live);
+  if (ALIVE_MS) await new Promise((r) => setTimeout(r, ALIVE_MS));
+  if (ref.window) { assertReadable(refKey(ref)); return live(refKey(ref)); }
+  const keys = siblings(ref.session);
+  for (const k of keys) assertReadable(k);
+  return keys.some(live);
 }
 
 // resumable — introspection only: memory survives a resume iff this process

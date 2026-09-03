@@ -159,8 +159,10 @@ async function send(ref, text) {
 // sitting back at a bare shell means codex exited (pane_current_command reads
 // 'codex' while it runs, verified 0.144.1).
 async function alive(ref) {
-  if (!(await s.paneExists(ref.session, ref.window))) return false;
-  const cmd = await s.paneCommand(s.paneTarget(ref.session, ref.window));
+  // STRICT: this answer is what the board drops worker records on, so a tmux it
+  // could not read must throw rather than pass for "the pane is gone".
+  if (!(await s.paneExists(ref.session, ref.window, { strict: true }))) return false;
+  const cmd = await s.paneCommand(s.paneTarget(ref.session, ref.window), { strict: true });
   return cmd !== null && !s.SHELLS.has(cmd);
 }
 

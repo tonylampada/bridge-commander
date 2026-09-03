@@ -285,7 +285,12 @@ test('a reading older than the stale window is marked stale on the payload; a fr
       const sd = path.join(dir, '.bridge-commander');
       fs.mkdirSync(sd, { recursive: true });
       fs.writeFileSync(path.join(sd, 'board.json'), JSON.stringify({
-        title: 'seeded', seq: 0, cards: [], events: [], labels: [], reads: {}, kinds: {}, projects: [],
+        title: 'seeded', events: [], labels: [], reads: {}, kinds: {}, projects: [],
+        seq: 0,
+        // RX-1 is Working on purpose: the boot sweep ends every worker whose
+        // card is not, and this test is about a reading, not a lifecycle.
+        cards: [{ id: 'RX-1', title: 'Live work', owner: 'rex', column: 'working', type: 'implementation',
+          created: nowIso, updated: nowIso, events: [], thread: [], attributes: {} }],
         lieutenants: [
           { id: 'rex', name: 'Rex', color: '#58b6ff', chat: [], created: nowIso,
             ref: { harness: 'fake', session: 'bc-rex', window: 'lt', cwd: '/tmp' },

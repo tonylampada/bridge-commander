@@ -255,3 +255,31 @@ test('spawn still returns for a pane that is genuinely a running session', async
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
+
+// alive() is what the board drops worker records on: false means "that pane is
+// gone", and a record dropped on it is a session nothing points at any more. So
+// the answer has to be an ANSWER — a tmux that could not be read at all is a
+// question that went unasked, and the port's rule for a verb it cannot honor is
+// to throw with the reason rather than silently succeed.
+test('alive throws when tmux cannot be read, rather than reporting the pane gone', async () => {
+  const mock = mockTmux({ readyTail: '❯ ', readFails: true });
+  try {
+    await assert.rejects(
+      () => claude.alive({ harness: 'claude-tmux', session: 'bc-lt', window: 'w-card', cwd: '/tmp' }),
+      (e) => {
+        assert.match(e.message, /tmux/, 'the reason rides back');
+        return true;
+      });
+  } finally { mock.restore(); }
+});
+
+// …and tmux ANSWERING that the window is not there is still a plain false: the
+// distinction is between absence and an unread tmux, not a new failure mode.
+test('alive is still false when tmux answers that the window is not there', async () => {
+  const mock = mockTmux({ readyTail: '❯ ' });
+  try {
+    assert.strictEqual(
+      await claude.alive({ harness: 'claude-tmux', session: 'bc-lt', window: 'w-card', cwd: '/tmp' }),
+      false);
+  } finally { mock.restore(); }
+});

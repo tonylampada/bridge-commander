@@ -114,25 +114,34 @@ function paneTarget(session, window) {
   return window ? `=${session}:=${window}` : `=${session}:`;
 }
 
-async function paneCommand(target) {
-  const out = await t.tryTmux('display-message', '-p', '-t', target, '#{pane_current_command}');
+// opts.strict — read through tmuxRead instead of tryTmux, so a tmux that could
+// not be READ throws with the reason rather than answering "not there". Only a
+// caller whose decision turns on knowing asks for it (alive(), whose false is
+// the board's proof that a pane is gone); everything else keeps reading an
+// unreadable tmux as absence, which is what it has always done.
+function reader(opts) {
+  return (opts && opts.strict) ? t.tmuxRead : t.tryTmux;
+}
+
+async function paneCommand(target, opts) {
+  const out = await reader(opts)('display-message', '-p', '-t', target, '#{pane_current_command}');
   return out === null ? null : out.trim();
 }
 
-async function hasSession(session) {
-  return (await t.tryTmux('has-session', '-t', `=${session}:`)) !== null;
+async function hasSession(session, opts) {
+  return (await reader(opts)('has-session', '-t', `=${session}:`)) !== null;
 }
 
 // hasWindow — strict window existence. `display-message -t =ses:=missing`
 // does NOT error — tmux silently falls back to another pane (verified tmux
 // 3.4) — so existence is checked against the session's actual window list.
-async function hasWindow(session, window) {
-  const out = await t.tryTmux('list-windows', '-t', `=${session}:`, '-F', '#{window_name}');
+async function hasWindow(session, window, opts) {
+  const out = await reader(opts)('list-windows', '-t', `=${session}:`, '-F', '#{window_name}');
   return out !== null && out.split('\n').includes(window);
 }
 
-function paneExists(session, window) {
-  return window ? hasWindow(session, window) : hasSession(session);
+function paneExists(session, window, opts) {
+  return window ? hasWindow(session, window, opts) : hasSession(session, opts);
 }
 
 // claimPaneNames — resolve + validate the session/window names for a spawn and
