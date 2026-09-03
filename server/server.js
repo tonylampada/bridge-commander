@@ -2375,6 +2375,18 @@ async function runCardTeardown(card, w, wtPath, timeoutMs) {
   }
 }
 
+// worktreeHolder(cardId, wtPath) — the OTHER card whose live worker record
+// stands on this path, or null. A pointer is not ownership: git paths are
+// per-card and cannot collide, but a treehouse POOL lease goes to whatever card
+// asks next, and a frozen snapshot (archived after a refused release, then
+// `card.restore`) can still name a lease that now belongs to somebody else. A
+// worker RECORD is the ownership claim; the card attribute is only a pointer,
+// so every path that releases against the attribute alone asks this first.
+function worktreeHolder(cardId, wtPath) {
+  return board.workers.find((x) => x.card !== cardId
+    && x.worktree && x.worktree.path === wtPath && !x.worktree.released) || null;
+}
+
 // releaseCardWorktree(card, w, opts) — the worktree goes when the card LEAVES
 // WORKING, not whenever someone tidies up: a finished card held its checkout
 // until archive, so fifteen finished cards held fifteen worktrees on disk.
@@ -2402,24 +2414,37 @@ async function releaseCardWorktree(card, w, opts = {}) {
     const cur = findWorker(card.id);
     if (cur && cur !== w) return null; // a newer worker holds this card (and its path)
     const attrs = (card && card.attributes) || {};
-    const wtRec = (w && w.worktree && w.worktree.path) ? w.worktree
+    const fromRecord = !!(w && w.worktree && w.worktree.path);
+    const wtRec = fromRecord ? w.worktree
       : (attrs.worktree
         ? { path: String(attrs.worktree), tool: worktreeToolFor(String(attrs.worktree), WORKSPACE) }
         : null);
     if (!wtRec) return null;
     const project = findProject(String((w && w.project) || attrs.repo || ''));
     if (!project) return null; // no clone to release against — leave the directory alone
-    // The playbook's teardown gets its turn first: the release is the moment the
-    // ground goes, so stopping what stands on it happens immediately before,
-    // never after. Never throws, and its outcome never steers what follows.
-    await runCardTeardown(card, w, wtRec.path, TEARDOWN_TIMEOUT_MS);
-    // The teardown is an unbounded wait (minutes), so the guard above stopped
-    // being atomic: a rework restart in the meantime re-provisions the SAME
-    // deterministic path, and releasing now would delete a live worker's fresh
-    // checkout. Whoever holds the card holds its path — ask again.
-    const after = findWorker(card.id);
-    if (after && after !== w) return null;
-    const rel = await releaseWorktree(wtRec, project.path);
+    // The record IS the claim on its path; a bare pointer is not, so a path some
+    // OTHER card's live worker stands on is refused before anything touches it
+    // — the teardown included, since stopping what stands on that ground would
+    // stop that worker's stack, not this card's. Refused the way every refusal
+    // here works: the directory stays and the timeline says whose it is.
+    const holder = fromRecord ? null : worktreeHolder(card.id, wtRec.path);
+    let rel;
+    if (holder) {
+      rel = { released: false, reason: 'it belongs to card ' + holder.card + ', whose worker is live on it' };
+    } else {
+      // The playbook's teardown gets its turn first: the release is the moment
+      // the ground goes, so stopping what stands on it happens immediately
+      // before, never after. Never throws, and its outcome never steers what
+      // follows.
+      await runCardTeardown(card, w, wtRec.path, TEARDOWN_TIMEOUT_MS);
+      // The teardown is an unbounded wait (minutes), so the guard above stopped
+      // being atomic: a rework restart in the meantime re-provisions the SAME
+      // deterministic path, and releasing now would delete a live worker's fresh
+      // checkout. Whoever holds the card holds its path — ask again.
+      const after = findWorker(card.id);
+      if (after && after !== w) return null;
+      rel = await releaseWorktree(wtRec, project.path);
+    }
     const live = findCard(card.id); // archived in the meantime → the board stream carries it
     // the attribute is a pointer at a directory: a released one has to stop
     // pointing, or every reader downstream is sent to a path that is gone —
@@ -2907,14 +2932,9 @@ async function doStartCard(card, body) {
     // The previous run's `teardown` is not recoverable here (it lived on the
     // record) — it had its turn at the handoff.
     const stalePath = String(card.attributes.worktree);
-    // A pointer is not ownership. Git paths are per-card and cannot collide,
-    // but a treehouse POOL lease is handed to whatever card asks next — and a
-    // frozen snapshot (archive after a refused release, then `card.restore`)
-    // can name a lease that now belongs to somebody else's LIVE worker.
-    // Releasing it would take that worker's ground out from under it, so the
-    // holder is named and the start refuses instead.
-    const holder = board.workers.find((x) => x.card !== card.id
-      && x.worktree && x.worktree.path === stalePath && !x.worktree.released);
+    // Releasing a lease somebody else's live worker stands on would take that
+    // worker's ground out from under it: name the holder and refuse instead.
+    const holder = worktreeHolder(card.id, stalePath);
     if (holder) {
       return { error: 'the worktree ' + card.id + ' still points at (' + stalePath + ') belongs to card '
         + holder.card + ', whose worker is live on it — this card\'s pointer is stale. Clear it '

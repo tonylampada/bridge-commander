@@ -1580,6 +1580,52 @@ test('a pooled lease whose return is refused is KEPT, not taken back with git', 
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
+// The release points read the same pointer the start does, and the same rule
+// holds there: the worker RECORD is the ownership claim, a card attribute is
+// only a pointer. `card.restore` replays a frozen snapshot verbatim, so a card
+// can come back naming ground that has since been handed to somebody else —
+// and archiving it must not take that ground back.
+test('archiving a card whose stale pointer names another card\'s live checkout keeps it', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Working on it', id: 'onit', attributes: { repo: 'proj' } }));
+    const live = (await s.api('POST', '/api/cards/onit/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards', withOwner({ title: 'Back from the dead', id: 'revived', attributes: { repo: 'proj' } }));
+
+    // what a restored snapshot brings back: a pointer with no record behind it,
+    // at ground another card's worker is standing on
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.cards.find((c) => c.id === 'revived').attributes.worktree = live.worktree.path;
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    assert.strictEqual((await s.api('POST', '/api/cards/revived/archive', { reason: 'killed' })).status, 200);
+    const ev = await until('the refusal is on the board stream', async () =>
+      ((await s.api('GET', '/api/board')).body.events || [])
+        .filter((e) => e.card === 'revived').find((e) => /worktree kept/.test(e.text)));
+    assert.match(ev.text, /onit/, 'the refusal names who holds it');
+    assert.match(ev.text, rx(live.worktree.path));
+    assert.strictEqual(ev.level, 2);
+    assert.ok(fs.existsSync(live.worktree.path), 'the live worker keeps its ground');
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'onit'));
+    assert.strictEqual((await s.api('GET', '/api/cards/onit')).body.attributes.worktree, live.worktree.path);
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching
