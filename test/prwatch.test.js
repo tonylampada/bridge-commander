@@ -181,6 +181,52 @@ test('a merged card whose worker kill FAILED still archives with the run\'s addr
   }
 });
 
+// The merge archive awaits the card-archived hooks and then the release, both
+// on budgets measured in minutes, and the card is still on the board for all of
+// it. A rework restart inside that window binds a NEW worker — so the address
+// the snapshot freezes must be that one's, never the ended run's, or the board
+// sends the lieutenant to a session that is no longer there.
+test('a rework restart during the merge archive keeps the LIVE worker\'s address', async () => {
+  const { s, root, gh, teardown } = await boot();
+  try {
+    const started = path.join(root, 'hook-in');
+    const go = path.join(root, 'hook-go');
+    shHook(s.dir, 'card-archived', 'block.sh',
+      'echo in > ' + JSON.stringify(started) + '\n'
+      + 'while [ ! -f ' + JSON.stringify(go) + ' ]; do sleep 0.05; done');
+
+    await s.api('POST', '/api/cards', withOwner({ title: 'Raced', id: 'raced', attributes: { repo: 'proj' } }));
+    const first = (await s.api('POST', '/api/cards/raced/start', { harness: 'fake' })).body.worker;
+    const url = 'https://github.com/acme/proj/pull/77';
+    gh.setState(url, 'OPEN');
+    // dirty at the handoff: the release REFUSES, so the record survives it —
+    // the population this race is reachable from
+    fs.writeFileSync(path.join(first.worktree.path, 'unsaved.txt'), 'not committed\n');
+    await s.api('POST', '/api/cards/raced/worker/done', { outcome: 'PR: ' + url });
+    await s.api('POST', '/api/cards/raced/move', { column: 'review', actor: 'agent' });
+    await until('the release refused, leaving the record behind', async () =>
+      ((await s.api('GET', '/api/cards/raced')).body.events || []).some((e) => /worktree kept/.test(e.text)));
+    // the human resolves the mess by hand; the checkout is releasable again
+    fs.rmSync(path.join(first.worktree.path, 'unsaved.txt'));
+
+    gh.setState(url, 'MERGED');
+    await until('the merge archive is inside the hooks', async () => fs.existsSync(started));
+
+    // ...and the lieutenant reworks the card while it is still on the board
+    const r = await s.api('POST', '/api/cards/raced/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    const second = r.body.worker;
+    assert.notStrictEqual(second.ref.resumeId, first.ref.resumeId, 'a fresh run, a fresh transcript');
+    fs.writeFileSync(go, 'x');
+
+    await until('card archived on merge', async () =>
+      (await s.api('GET', '/api/cards/raced')).status === 404);
+    const arch = (await s.api('GET', '/api/archive')).body.archive.find((rec) => rec.card.id === 'raced');
+    assert.strictEqual(arch.card.attributes.resumeId, second.ref.resumeId,
+      'the snapshot names the run that was actually live when the card left');
+  } finally { await teardown(); }
+});
+
 test('closed-unmerged PR: state recorded, owner told, card stays', async () => {
   const { s, gh, teardown } = await boot();
   try {

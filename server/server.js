@@ -2514,10 +2514,15 @@ async function killCardWorker(card, w, opts = {}) {
     const name = workerName(w.ref);
     let alive = true;
     let err = null;
+    let already = false;
     try {
       const impl = harnessFor(w.ref);
-      await impl.kill(w.ref);
-      alive = await impl.alive(w.ref);
+      already = !(await impl.alive(w.ref));
+      if (already) alive = false;
+      else {
+        await impl.kill(w.ref);
+        alive = await impl.alive(w.ref);
+      }
     } catch (e) { err = e; }
     if (alive || err) {
       const why = err ? String((err && err.message) || err) : 'the pane answered alive() after the kill';
@@ -2532,7 +2537,17 @@ async function killCardWorker(card, w, opts = {}) {
       saveBoard(); broadcast();
       return { killed: false, reason: why };
     }
+    const rang = !!w.killFailed;
     delete w.killFailed; // the harness came back — the next failure is news again
+    // A pane that was already gone is killed by definition, and nothing
+    // happened to say so — the same rule the release applies to ground that is
+    // already given back. Only a kill that actually closed a live session earns
+    // the line, or the sweep would re-announce the same closure at every boot
+    // of the board for as long as the record it spares survives.
+    if (already) {
+      if (rang) { saveBoard(); broadcast(); }
+      return { killed: true };
+    }
     landCardEvent(card, mkEvent({
       text: 'worker ' + name + ' closed (' + (opts.reason || 'the card left Working') + ')',
       actor: 'server', level: 2,
@@ -3508,7 +3523,12 @@ async function prWatchTick() {
         // the archive endpoint does it: the drop above is what usually stamps
         // it, and the drop is skipped whenever the kill could not be verified —
         // the one case where somebody most needs to go find that transcript.
-        stampWorkerAddress(card, w);
+        // Only ever this run's own address, though: the hooks and the release
+        // above are awaited on budgets measured in minutes, and a rework
+        // restart inside that window binds a NEW worker to a card still on the
+        // board. Writing the dead run's session over the live one's would send
+        // the lieutenant to a session that no longer exists.
+        if (findWorker(card.id) === w) stampWorkerAddress(card, w);
         archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
       }
       saveBoard(); broadcast();
