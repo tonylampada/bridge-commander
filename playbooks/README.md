@@ -54,13 +54,14 @@ silently starts the wrong worker. A playbook that wants a conditional wants to b
 literal on purpose, so a `codereview` brief with no `pr_url` would otherwise launch a worker to
 discover that for itself.
 
-`keep_worktree` is the exception, not the habit: a worktree is a full checkout, and fifteen
-finished cards used to hold fifteen of them. Everything else gets its worktree back **at the
-handoff** — the move out of Working, once the lieutenant has read the diff in it — with
-archive as the backstop. Reach for the key when the card is expected to be **reworked in
-place** — `worker send` for another turn, `card start --resume` — where throwing the checkout
-away costs a re-clone; both of those refuse once the worktree is gone, and point at a fresh
-`card start`.
+`keep_worktree` is the exception, not the habit: a worktree is a full checkout and a worker is
+a live agent process, and fifteen finished cards used to hold fifteen of each. Everything else
+ends **at the handoff** — the move out of Working, once the lieutenant has read the diff — which
+kills the worker and releases its worktree, with archive as the backstop. Reach for the key when
+the card is expected to be **reworked in place** — `worker send` for another turn, `card start
+--resume` — where throwing the checkout away costs a re-clone; the key keeps the worker alive
+too, since a conversation reworked in place is the other half of that checkout. Without it, both
+of those moves refuse after a handoff and point at a fresh `card start`.
 
 A worktree still holding work is never released, kept or not — uncommitted changes, or commits
 on a HEAD no branch, tag or remote ref reaches (a worktree is created detached, so a run that
