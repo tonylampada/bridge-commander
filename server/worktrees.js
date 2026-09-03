@@ -247,6 +247,23 @@ function createWorktree(projectPath, cardId, workspace) {
   });
 }
 
+// worktreeToolFor(wtPath, workspace) -> 'git' | 'treehouse'
+// The tool a checkout was provisioned with, recovered from its PATH alone —
+// for the release points where the worker RECORD that carried `tool` is gone
+// and the card's `worktree` attribute is the only handle left. The git branch
+// of createWorktree owns exactly one directory, <workspace>/.bridge-commander/
+// worktrees/, so a path under it is git's and anything else came from the
+// treehouse pool. Realpaths on both sides: the recorded path is realpath'd at
+// provisioning, and /tmp -> /private/tmp would otherwise read as a pool lease.
+function worktreeToolFor(wtPath, workspace) {
+  try {
+    const dir = fs.realpathSync(path.join(workspace, '.bridge-commander', 'worktrees'));
+    const real = fs.realpathSync(wtPath);
+    if (real === dir || real.startsWith(dir + path.sep)) return 'git';
+  } catch (e) { /* no git worktrees dir, or the path is gone — nothing is under it */ }
+  return 'treehouse';
+}
+
 // releaseWorktree({ path, tool }, projectPath) -> { released, reason? }
 // Releases ONLY a worktree whose work is safely elsewhere; a worktree that is
 // not, or that cannot be read, is left in place with the reason reported.
@@ -279,9 +296,20 @@ function releaseWorktree(rec, projectPath) {
       return { released: false,
         reason: 'HEAD carries commits no branch or tag holds (' + dangling.slice(0, 8) + ')' };
     }
+    // The work is provably elsewhere by here, so what is left is which command
+    // takes the ground back. `treehouse` gets the other one as a fallback: the
+    // tool may have been DERIVED from the path (worktreeToolFor, for a release
+    // point whose record is gone) and a derivation that guessed wrong must not
+    // strand a checkout nothing can ever release. The first error is the one
+    // reported — it belongs to the tool this record actually named.
     try {
-      if (rec.tool === 'treehouse') await run('treehouse', ['return', wt], { cwd: projectPath });
-      else await git(projectPath, 'worktree', 'remove', wt);
+      if (rec.tool === 'treehouse') {
+        try { await run('treehouse', ['return', wt], { cwd: projectPath }); }
+        catch (e) {
+          try { await git(projectPath, 'worktree', 'remove', wt); }
+          catch (e2) { throw e; }
+        }
+      } else await git(projectPath, 'worktree', 'remove', wt);
       return { released: true };
     } catch (e) {
       return { released: false, reason: String(e.message || e) };
@@ -289,4 +317,4 @@ function releaseWorktree(rec, projectPath) {
   });
 }
 
-module.exports = { createWorktree, releaseWorktree, assertIsolated };
+module.exports = { createWorktree, releaseWorktree, worktreeToolFor, assertIsolated };

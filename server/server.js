@@ -65,7 +65,7 @@ const crypto = require('crypto');
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
-const { createWorktree, releaseWorktree } = require(path.join(__dirname, 'worktrees.js'));
+const { createWorktree, releaseWorktree, worktreeToolFor } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
   hooksDir, namedHookFile, cancelNamedHook, traceSkip, lastRunsFor,
   TEARDOWN_TIMEOUT_MS: TEARDOWN_DEFAULT_MS, HOOK_NAME_RE, LIFECYCLE_EVENTS } = require(path.join(__dirname, 'hooks.js'));
@@ -2403,7 +2403,9 @@ async function releaseCardWorktree(card, w, opts = {}) {
     if (cur && cur !== w) return null; // a newer worker holds this card (and its path)
     const attrs = (card && card.attributes) || {};
     const wtRec = (w && w.worktree && w.worktree.path) ? w.worktree
-      : (attrs.worktree ? { path: String(attrs.worktree), tool: 'git' } : null);
+      : (attrs.worktree
+        ? { path: String(attrs.worktree), tool: worktreeToolFor(String(attrs.worktree), WORKSPACE) }
+        : null);
     if (!wtRec) return null;
     const project = findProject(String((w && w.project) || attrs.repo || ''));
     if (!project) return null; // no clone to release against — leave the directory alone
@@ -2545,9 +2547,18 @@ function dropWorkerRecord(card, w) {
 //
 // A worker outlives neither its card's Working state nor a restart that forgot
 // to notice. Off the board entirely (archived, killed) → it goes, no exceptions,
-// exactly as archive would have done. Still on the board but out of Working →
-// the handoff's own rule, exceptions included, since a `keep_worktree` card
-// parked in review is deliberately waiting for its worker.
+// exactly as archive would have done: no card will ever come back for it, so a
+// record spared there is a leak with nothing on the other end. Still on the
+// board but out of Working → the handoff's own rule, exceptions included, since
+// a `keep_worktree` card parked in review is deliberately waiting for its
+// worker.
+//
+// One more exception on the board, and it is the same one the handoff makes: a
+// record whose worktree is STILL UNRELEASED is the last handle on the work
+// standing there — `card.park` shelves a card to be resumed in that very
+// checkout, and a release that REFUSED left an unspent `teardown` archive is
+// contracted to retry. The window is dead either way; the entry is what the
+// next release point reads. A record with no worktree at all holds nothing.
 //
 // Runs once, after the listen: nothing here is on the critical path of a boot.
 async function sweepStaleWorkers() {
@@ -2558,6 +2569,7 @@ async function sweepStaleWorkers() {
     let kill;
     if (card) {
       if (w.keepWorktree || !w.done) continue;
+      if (w.worktree && w.worktree.path && !w.worktree.released) continue;
       kill = await killCardWorker(stand, w,
         { reason: 'boot sweep: the card is in ' + columnTitle(card.column) + ', not Working' });
     } else {
@@ -2799,7 +2811,8 @@ async function doStartCard(card, body) {
   // discarded.
   if (existing) {
     let up = false;
-    try { up = await harnessFor(existing.ref).alive(existing.ref); } catch (e) { up = false; }
+    let upErr = null;
+    try { up = await harnessFor(existing.ref).alive(existing.ref); } catch (e) { upErr = e; }
     // The one live session that IS spawned over: done, and its worktree already
     // released at the handoff. There is nothing left to steer (a reopened turn
     // has nowhere to write) and nothing to resume, so refusing here would leave
@@ -2811,8 +2824,20 @@ async function doStartCard(card, body) {
       const reopenHint = existing.done ? ' (or, since it reported done, reopen it in place with worker send)' : '';
       return { error: 'previous worker session ' + workerName(existing.ref) + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it' + reopenHint, code: 409 };
     }
-    if (up) {
-      try { await harnessFor(existing.ref).kill(existing.ref); } catch (e) { /* best-effort: it has no ground left either way */ }
+    // The same verify-then-drop invariant the handoff obeys: this path DROPS
+    // the record at the end, so it may only do so having watched the pane go.
+    // alive() answering false is that proof; alive() THROWING is not, so an
+    // unreachable harness goes through the kill too and is refused on it.
+    // Spawning a second worker over a live zombie nothing points at is worse
+    // than a start that says no and names the session to end by hand.
+    if (up || upErr) {
+      const kill = await killCardWorker(card, existing, { reason: 'the card was restarted' });
+      if (!kill || !kill.killed) {
+        const why = (kill && kill.reason) || String((upErr && upErr.message) || upErr || 'unknown');
+        return { error: 'previous worker session ' + workerName(existing.ref) + ' could not be ended ('
+          + why + ') — end it by hand (tmux kill-window -t ' + workerName(existing.ref)
+          + ') and start the card again', code: 409 };
+      }
     }
     const prevProject = findProject(existing.project) || project;
     // A restart is not a handoff: it is the moment that checkout is actually
@@ -2830,8 +2855,7 @@ async function doStartCard(card, body) {
     if (!rel.released) {
       return { error: 'previous worker worktree not releasable (' + rel.reason + '): ' + existing.worktree.path, code: 409 };
     }
-    const idx = board.workers.indexOf(existing);
-    if (idx !== -1) board.workers.splice(idx, 1);
+    dropWorkerRecord(card, existing);
   } else if (card.attributes && card.attributes.worktree) {
     // No record, but the card still points at a checkout. That is what a
     // handoff leaves behind when its release did not finish — refused (a
@@ -2842,7 +2866,8 @@ async function doStartCard(card, body) {
     // silent `git worktree add` onto a path that already exists.
     // The previous run's `teardown` is not recoverable here (it lived on the
     // record) — it had its turn at the handoff.
-    const stale = { path: String(card.attributes.worktree), tool: 'git' };
+    const stalePath = String(card.attributes.worktree);
+    const stale = { path: stalePath, tool: worktreeToolFor(stalePath, WORKSPACE) };
     if (fs.existsSync(stale.path)) {
       const rel = await releaseWorktree(stale, project.path);
       if (!rel.released) {
