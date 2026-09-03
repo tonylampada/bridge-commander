@@ -11,6 +11,12 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { startServerWithLieutenant, withOwner, sleep, LT } = require('./helper');
+const { lieutenantSession, workerWindow } = require('../server/names.js');
+
+// A worker's harness key: a WINDOW inside its lieutenant's session.
+function workerKey(dir, cardId) {
+  return lieutenantSession(dir, LT) + ':' + workerWindow(cardId);
+}
 
 function makeRepo(root) {
   const repo = path.join(root, 'srcrepo');
@@ -114,6 +120,65 @@ test('merged PR: worktree released, card archived (landed, level 1), owner queue
     assert.strictEqual(merged.card, 'merge-me');
     assert.strictEqual(merged.text, PR);
   } finally { await teardown(); }
+});
+
+// The merge archive freezes the card into the snapshot, and the run's address
+// normally rides in on dropWorkerRecord — which is skipped when the kill cannot
+// be verified. That is the one case where somebody most needs to go find the
+// transcript, so the address is stamped in its own right, exactly as the
+// archive endpoint does it.
+test('a merged card whose worker kill FAILED still archives with the run\'s address', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-prwatch-'));
+  const repo = makeRepo(root);
+  const gh = makeGhStub(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_GH_CMD: gh.stub,
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env: Object.assign({ BC_PRWATCH_INTERVAL_MS: '0' }, env) });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Merged unreachable', id: 'mergefail', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/mergefail/start', { harness: 'fake' })).body.worker;
+    const spawnId = w.ref.resumeId;
+    assert.ok(spawnId);
+
+    // the relay moves the run onto a new transcript id AFTER the spawn — the
+    // record knows it, the card's own note still says the old one
+    const relayed = 'relay-uuid-after-the-spawn';
+    const te = await s.api('POST', '/api/turn-end', { session: workerKey(wsDir, 'mergefail'), session_id: relayed });
+    assert.strictEqual(te.status, 200, JSON.stringify(te.body));
+    assert.strictEqual((await s.api('GET', '/api/cards/mergefail')).body.attributes.resumeId, spawnId);
+
+    gh.setState(PR, 'OPEN');
+    await s.api('POST', '/api/cards/mergefail/worker/done', { outcome: 'PR open: ' + PR });
+
+    // the board can no longer reach that session: the merge's kill will fail
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const rec = doc.workers.find((x) => x.card === 'mergefail');
+    assert.strictEqual(rec.ref.resumeId, relayed, 'the record carries the relayed id');
+    rec.ref.harness = 'ghost';
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env: Object.assign({ BC_PRWATCH_INTERVAL_MS: '200' }, env) });
+
+    gh.setState(PR, 'MERGED');
+    await until('card archived on merge', async () =>
+      (await s.api('GET', '/api/cards/mergefail')).status === 404);
+
+    const arch = (await s.api('GET', '/api/archive')).body.archive.find((r) => r.card.id === 'mergefail');
+    assert.strictEqual(arch.reason, 'merged');
+    assert.strictEqual(arch.card.attributes.session, workerKey(wsDir, 'mergefail'));
+    assert.strictEqual(arch.card.attributes.resumeId, relayed,
+      'the frozen snapshot names the transcript the run actually ended on');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('closed-unmerged PR: state recorded, owner told, card stays', async () => {

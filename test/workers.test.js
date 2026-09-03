@@ -483,7 +483,11 @@ function writeFakeTreehouse(root, poolClone) {
     '      git -C "$CLONE" worktree add -q -d "$slot" origin/main >&2',
     '    fi',
     '    echo "$slot" ;;',
-    '  return) : ;;',
+    // `treehouse return` can refuse — a held pool lockfile, a treehouse that
+    // has dropped off PATH. The marker lets a test ask for that answer.
+    '  return)',
+    '    if [ -f "$POOL/.refuse" ]; then echo "pool lock held by another process" >&2; exit 3; fi',
+    '    : ;;',
     '  *) exit 1 ;;',
     'esac',
     '',
@@ -1524,6 +1528,56 @@ test('a rework restart replaces the address, resumeId included', async () => {
     assert.strictEqual(card.attributes.resumeId, second.ref.resumeId,
       'the card advertises THIS run, not the one before it');
   } finally { await teardown(); }
+});
+
+// A pooled lease `treehouse return` refused is STILL HELD by the pool. Taking
+// the directory back with git behind its back would report a release that never
+// happened: the checkout is gone, the lease is outstanding and unreturnable,
+// and the record that was the board's last handle on it is dropped. Refusing is
+// the same feature a dirty worktree gets — the ground stays and the timeline
+// says why.
+test('a pooled lease whose return is refused is KEPT, not taken back with git', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-pool-refuse-'));
+  try {
+    const repo = makeRepo(root);
+    const wsDir = path.join(root, 'ws');
+    fs.mkdirSync(wsDir);
+    // the pool is backed by the board's OWN clone here, which is the case that
+    // makes a git fallback silently succeed — treehouse keeps one pool per
+    // repository, and it may well be the clone this board registered
+    const bin = writeFakeTreehouse(root, path.join(wsDir, 'projects', 'proj'));
+    const s = await startServerWithLieutenant({
+      dir: wsDir,
+      env: {
+        BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'treehouse',
+        PATH: bin + path.delimiter + process.env.PATH,
+        BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+      },
+    });
+    try {
+      assert.strictEqual((await s.api('POST', '/api/projects', { source: repo, name: 'proj' })).status, 200);
+      await s.api('POST', '/api/cards', withOwner({
+        title: 'Pooled', id: 'leased', attributes: { repo: 'proj' },
+      }));
+      const r = await s.api('POST', '/api/cards/leased/start', { harness: 'fake' });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      const w = r.body.worker;
+      assert.strictEqual(w.worktree.tool, 'treehouse');
+      await s.api('POST', '/api/cards/leased/worker/done', { outcome: 'shipped' });
+
+      fs.writeFileSync(path.join(root, 'pool', '.refuse'), ''); // the pool says no
+      await s.api('POST', '/api/cards/leased/move', { column: 'review', actor: 'agent' });
+
+      const ev = await until('the refusal is on the timeline',
+        async () => (await cardEvents(s, 'leased')).find((e) => /worktree kept/.test(e.text)));
+      assert.match(ev.text, /pool lock held/, 'the reason the pool gave');
+      assert.match(ev.text, rx(w.worktree.path));
+      assert.ok(fs.existsSync(w.worktree.path), 'the lease was NOT taken back behind treehouse\'s back');
+      assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'leased'),
+        'and the record is kept as the last handle on it');
+      assert.strictEqual((await s.api('GET', '/api/cards/leased')).body.attributes.worktree, w.worktree.path);
+    } finally { await s.stop(); }
+  } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
 
 // The pointer-only state — a card still naming a checkout with no worker record

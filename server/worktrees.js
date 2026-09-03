@@ -297,19 +297,15 @@ function releaseWorktree(rec, projectPath) {
         reason: 'HEAD carries commits no branch or tag holds (' + dangling.slice(0, 8) + ')' };
     }
     // The work is provably elsewhere by here, so what is left is which command
-    // takes the ground back. `treehouse` gets the other one as a fallback: the
-    // tool may have been DERIVED from the path (worktreeToolFor, for a release
-    // point whose record is gone) and a derivation that guessed wrong must not
-    // strand a checkout nothing can ever release. The first error is the one
-    // reported — it belongs to the tool this record actually named.
+    // takes the ground back — and ONLY that tool's command. A pooled lease that
+    // `treehouse return` refused is still held by the pool: deleting the
+    // directory with git behind its back would report a release that never
+    // happened, strand the lease forever and take the board's last handle on it
+    // away. A refusal here is the same feature it is above: the directory
+    // stays, the reason is reported, and the record remains its handle.
     try {
-      if (rec.tool === 'treehouse') {
-        try { await run('treehouse', ['return', wt], { cwd: projectPath }); }
-        catch (e) {
-          try { await git(projectPath, 'worktree', 'remove', wt); }
-          catch (e2) { throw e; }
-        }
-      } else await git(projectPath, 'worktree', 'remove', wt);
+      if (rec.tool === 'treehouse') await run('treehouse', ['return', wt], { cwd: projectPath });
+      else await git(projectPath, 'worktree', 'remove', wt);
       return { released: true };
     } catch (e) {
       return { released: false, reason: String(e.message || e) };

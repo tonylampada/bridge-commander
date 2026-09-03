@@ -3473,6 +3473,11 @@ async function prWatchTick() {
         const rel = await releaseCardWorktree(card, w);
         if (rel && !rel.released) note += ' (worktree NOT released: ' + rel.reason + ')';
         if (kill && kill.killed) dropWorkerRecord(card, w);
+        // The address goes on the card BEFORE the snapshot freezes, exactly as
+        // the archive endpoint does it: the drop above is what usually stamps
+        // it, and the drop is skipped whenever the kill could not be verified —
+        // the one case where somebody most needs to go find that transcript.
+        stampWorkerAddress(card, w);
         archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
       }
       saveBoard(); broadcast();
