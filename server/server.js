@@ -2926,12 +2926,15 @@ async function doStartCard(card, body) {
       return { error: 'previous worker session ' + workerName(existing.ref) + ' is still alive — resume it (card start --resume) or steer it instead of spawning over it' + reopenHint, code: 409 };
     }
     // The same verify-then-drop invariant the handoff obeys: this path DROPS
-    // the record at the end, so it may only do so having watched the pane go.
-    // alive() answering false is that proof; alive() THROWING is not, so an
-    // unreachable harness goes through the kill too and is refused on it.
-    // Spawning a second worker over a live zombie nothing points at is worse
-    // than a start that says no and names the session to end by hand.
-    if (up || upErr) {
+    // the record at the end, so it may only do so having watched the pane go —
+    // and alive() answering false is NOT that proof. It goes false the moment
+    // the agent process exits, while the window it ran in is still standing at
+    // a shell; the next spawn would then collide with a window nothing on the
+    // board points at any more, and the card could never start again. So the
+    // kill runs on every path, and a kill that cannot be verified refuses the
+    // start: spawning a second worker over a live zombie is worse than a start
+    // that says no and names the session to end by hand.
+    {
       const kill = await killCardWorker(card, existing, { reason: 'the card was restarted' });
       if (!kill || !kill.killed) {
         const why = (kill && kill.reason) || String((upErr && upErr.message) || upErr || 'unknown');
@@ -3542,16 +3545,25 @@ async function prWatchTick() {
         const rel = await releaseCardWorktree(card, w);
         if (rel && !rel.released) note += ' (worktree NOT released: ' + rel.reason + ')';
         if (kill && kill.killed) dropWorkerRecord(card, w);
+        // An archived card has neither Working nor worker, and the card was on
+        // the board for every await above — the hooks and the release run on
+        // budgets measured in minutes, and a rework restart inside that window
+        // binds a NEW worker to it. That worker is working a card that has
+        // already merged, so ending it is the point, not collateral damage.
+        // Read the registry AGAIN at the moment of the commit and end whatever
+        // is bound now, on the same verified terms as everywhere else.
+        const bound = findWorker(card.id);
+        if (bound && bound !== w) {
+          const late = await killCardWorker(card, bound, { reason: 'the PR merged while it was working' });
+          if (late && late.killed) dropWorkerRecord(card, bound);
+        }
         // The address goes on the card BEFORE the snapshot freezes, exactly as
-        // the archive endpoint does it: the drop above is what usually stamps
-        // it, and the drop is skipped whenever the kill could not be verified —
-        // the one case where somebody most needs to go find that transcript.
-        // Only ever this run's own address, though: the hooks and the release
-        // above are awaited on budgets measured in minutes, and a rework
-        // restart inside that window binds a NEW worker to a card still on the
-        // board. Writing the dead run's session over the live one's would send
-        // the lieutenant to a session that no longer exists.
-        if (findWorker(card.id) === w) stampWorkerAddress(card, w);
+        // the archive endpoint does it: the drop is what usually stamps it, and
+        // it is skipped whenever the kill could not be verified — the one case
+        // where somebody most needs to go find that transcript. Whichever run
+        // was really bound at the end is the one the snapshot names.
+        const last = findWorker(card.id);
+        if (last) stampWorkerAddress(card, last);
         archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
       }
       saveBoard(); broadcast();

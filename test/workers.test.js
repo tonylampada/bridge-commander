@@ -1780,6 +1780,54 @@ test('a restart does not release the path another card\'s live worker now holds'
   }
 });
 
+// The restart is the other path that DROPS a record, so it owes the same proof
+// the handoff does — and alive() answering false is not it. A `keep_worktree`
+// worker whose agent exited by itself leaves its window standing at a shell:
+// nothing on the board would point at it once the record went, and the next
+// spawn would collide with it forever.
+test('a restart over a worker whose agent exited by itself closes the window first', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    // keep_worktree, so the handoff leaves the worker standing — the one way a
+    // record reaches a restart with its window still up
+    writePlaybook(s, 'kept', ['---', 'keep_worktree: true', '---', '{{TASK}}', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Walked out', id: 'walkout', playbook: 'kept', attributes: { repo: 'proj' },
+    }));
+    const first = (await s.api('POST', '/api/cards/walkout/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/walkout/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/walkout/move', { column: 'review', actor: 'agent' });
+
+    // the agent ends by itself; the window it ran in is still there
+    await s.stop();
+    const marker = path.join(fdir, workerKey(wsDir, 'walkout') + '.json');
+    const rec = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    rec.exited = true;
+    fs.writeFileSync(marker, JSON.stringify(rec, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    const r = await s.api('POST', '/api/cards/walkout/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.notStrictEqual(r.body.worker.ref.resumeId, first.ref.resumeId, 'a fresh run took the window');
+    assert.strictEqual((await s.api('GET', '/api/cards/walkout')).body.column, 'working');
+    const ws = (await s.api('GET', '/api/board')).body.workers.filter((x) => x.card === 'walkout');
+    assert.strictEqual(ws.length, 1, 'one record per card');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching
@@ -1810,9 +1858,10 @@ test('a restart against a pointer-only POOLED checkout releases it and starts', 
       assert.strictEqual(w.worktree.tool, 'treehouse');
       await s.api('POST', '/api/cards/poolptr/worker/done', { outcome: 'shipped' });
 
-      // the state a handoff leaves when its release never landed: the record is
-      // gone, the card still points at the lease
+      // the state a handoff leaves when its release never landed: the window is
+      // closed and the record gone, the card still points at the lease
       await s.stop();
+      fs.rmSync(path.join(root, 'fake', workerKey(wsDir, 'poolptr') + '.json'));
       const file = path.join(wsDir, '.bridge-commander', 'board.json');
       const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
       doc.cards.find((c) => c.id === 'poolptr').column = 'review';

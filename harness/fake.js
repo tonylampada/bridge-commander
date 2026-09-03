@@ -154,6 +154,12 @@ async function spawn(cwd, prompt, opts = {}) {
   if (sessions.has(key) && sessions.get(key).alive) {
     throw new Error(`fake: session ${key} already exists`);
   }
+  // tmux refuses a window whose name is already taken, and a window whose agent
+  // EXITED is still a window. The marker is that window in file-backed mode, so
+  // a spawn over one nobody killed fails here exactly as the real harness does.
+  if (markerFile(key) && fs.existsSync(markerFile(key))) {
+    throw new Error(`fake: session ${key} already exists`);
+  }
   if (SPAWN_MS) await new Promise((r) => setTimeout(r, SPAWN_MS));
   const resumeId = crypto.randomUUID();
   sessions.set(key, {

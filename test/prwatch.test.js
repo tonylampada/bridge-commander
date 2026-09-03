@@ -224,6 +224,12 @@ test('a rework restart during the merge archive keeps the LIVE worker\'s address
     const arch = (await s.api('GET', '/api/archive')).body.archive.find((rec) => rec.card.id === 'raced');
     assert.strictEqual(arch.card.attributes.resumeId, second.ref.resumeId,
       'the snapshot names the run that was actually live when the card left');
+    // an archived card has neither Working nor worker: the raced-in run was
+    // working a card that had already merged, so the archive ends it too
+    assert.ok(!fs.existsSync(path.join(root, 'fake', workerKey(s.dir, 'raced') + '.json')),
+      'the raced-in window is closed');
+    assert.deepStrictEqual((await s.api('GET', '/api/board')).body.workers.filter((x) => x.card === 'raced'), [],
+      'and no orphan record is left behind');
   } finally { await teardown(); }
 });
 
