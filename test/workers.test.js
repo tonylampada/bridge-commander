@@ -1837,6 +1837,106 @@ test('the sweep finally abandons an unkillable record whose card left the board'
   }
 });
 
+// The ring-once mark is about a session the board has stopped being able to
+// reach. A worker that has been ALIVE and working since — reopened in place by
+// `worker send` — is a different story: the next kill it refuses is news, and
+// swallowing it would leave the captain with no bell for a live leak.
+test('a worker reopened in place rings again when its kill fails a second time', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  const file = path.join(wsDir, '.bridge-commander', 'board.json');
+  const setHarness = (name) => {
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.workers.find((x) => x.card === 'ringagain').ref.harness = name;
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+  };
+  const bells = async (s) => (await cardEvents(s, 'ringagain')).filter((e) => e.kind === 'worker-kill-failed');
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Rings again', id: 'ringagain', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/ringagain/start', { harness: 'fake' })).body.worker;
+    // dirty, so the handoff's release refuses and the checkout survives — that
+    // is what leaves a send-able worker sitting in review
+    fs.writeFileSync(path.join(w.worktree.path, 'unsaved.txt'), 'not committed\n');
+    await s.api('POST', '/api/cards/ringagain/worker/done', { outcome: 'first pass' });
+
+    // the board loses its grip on the session: the handoff cannot end it
+    await s.stop(); setHarness('ghost');
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await s.api('POST', '/api/cards/ringagain/move', { column: 'review', actor: 'agent' });
+    await until('the first failed kill rings', async () => (await bells(s)).length === 1);
+
+    // the harness answers again, and the lieutenant reopens the turn in place
+    await s.stop(); setHarness('fake');
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    const send = await s.api('POST', '/api/cards/ringagain/worker/send', { text: 'one more pass' });
+    assert.strictEqual(send.status, 200, JSON.stringify(send.body));
+    assert.strictEqual((await s.api('GET', '/api/cards/ringagain')).body.column, 'working');
+    await s.api('POST', '/api/cards/ringagain/worker/done', { outcome: 'second pass' });
+
+    // and it goes unreachable again: a NEW failure on a worker that has been
+    // alive in between, so the captain hears about it
+    await s.stop(); setHarness('ghost');
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await s.api('POST', '/api/cards/ringagain/move', { column: 'review', actor: 'agent' });
+    await until('the second failed kill rings too', async () => (await bells(s)).length === 2);
+    assert.ok((await bells(s)).every((e) => e.level === 1));
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// A pointer is not ownership. A frozen snapshot can name a POOLED lease that
+// has since been handed to another card, and releasing against it would take a
+// live worker's ground out from under it.
+test('a start refuses when the worktree its pointer names belongs to another live worker', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Holder', id: 'holder', attributes: { repo: 'proj' } }));
+    const held = (await s.api('POST', '/api/cards/holder/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards', withOwner({ title: 'Stale pointer', id: 'stale', attributes: { repo: 'proj' } }));
+
+    // what a restored snapshot brings back: a pointer at a checkout that has
+    // since been leased to somebody else
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.cards.find((c) => c.id === 'stale').attributes.worktree = held.worktree.path;
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    const r = await s.api('POST', '/api/cards/stale/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /holder/, 'the refusal names who holds it');
+    assert.match(r.body.error, rx(held.worktree.path));
+    assert.ok(fs.existsSync(held.worktree.path), 'the live worker keeps its ground');
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'holder'));
+    assert.strictEqual((await s.api('GET', '/api/cards/stale')).body.column, 'backlog');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a malformed frontmatter block refuses the start and names the line', async () => {
   const { s, teardown } = await boot();
   try {

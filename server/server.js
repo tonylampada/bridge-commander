@@ -2907,6 +2907,20 @@ async function doStartCard(card, body) {
     // The previous run's `teardown` is not recoverable here (it lived on the
     // record) — it had its turn at the handoff.
     const stalePath = String(card.attributes.worktree);
+    // A pointer is not ownership. Git paths are per-card and cannot collide,
+    // but a treehouse POOL lease is handed to whatever card asks next — and a
+    // frozen snapshot (archive after a refused release, then `card.restore`)
+    // can name a lease that now belongs to somebody else's LIVE worker.
+    // Releasing it would take that worker's ground out from under it, so the
+    // holder is named and the start refuses instead.
+    const holder = board.workers.find((x) => x.card !== card.id
+      && x.worktree && x.worktree.path === stalePath && !x.worktree.released);
+    if (holder) {
+      return { error: 'the worktree ' + card.id + ' still points at (' + stalePath + ') belongs to card '
+        + holder.card + ', whose worker is live on it — this card\'s pointer is stale. Clear it '
+        + '(bc-axi card patch ' + card.id + ' --attr worktree=) once you have looked at '
+        + holder.card + ', then start again', code: 409 };
+    }
     const stale = { path: stalePath, tool: worktreeToolFor(stalePath, WORKSPACE) };
     if (fs.existsSync(stale.path)) {
       const rel = await releaseWorktree(stale, project.path);
@@ -3093,6 +3107,7 @@ async function workerSend(card, body) {
     delete w.stopNotified;
     clearStale(w);
     delete w.paused;
+    delete w.killFailed; // alive and working again: the next failed kill is news
     delete w.expectExit; // the stop is over; --resume is a legal move again
     delete w.pauseReason;
     enterWorking(card, 'worker ' + workerName(w.ref) + ' reopened for a new turn');
