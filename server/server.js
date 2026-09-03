@@ -2758,7 +2758,7 @@ async function doStartCard(card, body) {
       + 'Pick one with: bc-axi card patch ' + card.id + ' --playbook <id>', code: 400 };
   }
 
-  const existing = findWorker(card.id);
+  let existing = findWorker(card.id);
   if (body && body.resume) {
     if (body.brief) {
       return { error: 'resume does not deliver briefs — the reincarnated worker keeps its own context '
@@ -2934,15 +2934,34 @@ async function doStartCard(card, body) {
     // kill runs on every path, and a kill that cannot be verified refuses the
     // start: spawning a second worker over a live zombie is worse than a start
     // that says no and names the session to end by hand.
-    {
-      const kill = await killCardWorker(card, existing, { reason: 'the card was restarted' });
-      if (!kill || !kill.killed) {
-        const why = (kill && kill.reason) || String((upErr && upErr.message) || upErr || 'unknown');
-        return { error: 'previous worker session ' + workerName(existing.ref) + ' could not be ended ('
-          + why + ') — end it by hand (tmux kill-window -t ' + workerName(existing.ref)
-          + ') and start the card again', code: 409 };
-      }
+    const kill = await killCardWorker(card, existing, { reason: 'the card was restarted' });
+    if (kill && !kill.killed) {
+      const why = kill.reason || String((upErr && upErr.message) || upErr
+        || 'the pane could not be verified gone');
+      return { error: 'previous worker session ' + workerName(existing.ref) + ' could not be ended ('
+        + why + ') — end it by hand (tmux kill-window -t ' + workerName(existing.ref)
+        + ') and start the card again', code: 409 };
     }
+    // NULL is not that refusal — it is "there was nothing to do": the record
+    // stopped being this card's while we were looking. The handoff's own
+    // teardown runs detached behind a lock and a five-minute budget, and the
+    // boot sweep retires records just after the listen, so a rework start
+    // issued into either window finds its record retired mid-flight. Reading
+    // that as an unkillable pane sends the lieutenant to close a window that
+    // is already closed. Whoever holds the card now decides: nobody, and this
+    // start carries on exactly as one that never had a record; somebody else,
+    // and it is refused the way any start over a live worker is.
+    if (!kill) {
+      const newer = findWorker(card.id);
+      if (newer) {
+        return { error: 'card already has a worker (' + workerName(newer.ref)
+          + ') — resume it (card start --resume) or archive first', code: 409 };
+      }
+      existing = null;
+    }
+  }
+
+  if (existing) {
     const prevProject = findProject(existing.project) || project;
     // A record that already released its worktree is no longer standing on it,
     // so this start may be looking at a lease the pool has since handed to

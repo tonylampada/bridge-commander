@@ -1885,6 +1885,64 @@ test('a handoff whose liveness read fails keeps the record and rings once', asyn
   }
 });
 
+// killCardWorker answers `null` for "there was nothing to do" — the record
+// stopped being this card's — and `{killed:false}` for "I could not end that
+// pane". Only the second is a reason to refuse a start. The first is routine:
+// the handoff's teardown runs detached on a five-minute budget, so a rework
+// start issued into that window looks up a record that retires mid-flight, and
+// reading that as an unkillable pane sends the lieutenant to close a window
+// that closed minutes ago.
+test('a restart that races its own record retiring starts instead of refusing', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const inFile = path.join(root, 'teardown-in');
+  const goFile = path.join(root, 'teardown-go');
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+    // the liveness read is two tmux round-trips on the real harness; the
+    // registry moves underneath it, which is the whole race
+    BC_FAKE_ALIVE_MS: '1500',
+  };
+  const s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    writePlaybook(s, 'slowdown', ['---',
+      'teardown: touch ' + inFile + '; while [ ! -f ' + goFile + ' ]; do sleep 0.05; done',
+      '---', '{{TASK}}', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Raced retire', id: 'racy', playbook: 'slowdown', attributes: { repo: 'proj' },
+    }));
+    const first = (await s.api('POST', '/api/cards/racy/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/racy/worker/done', { outcome: 'first pass' });
+
+    // the handoff: the window goes at once, the record waits on the teardown
+    await s.api('POST', '/api/cards/racy/move', { column: 'review', actor: 'agent' });
+    await until('the handoff is inside the teardown', async () => fs.existsSync(inFile));
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'racy'),
+      'the record is still there when the restart looks it up');
+
+    // the rework start goes in while the record is still listed…
+    const started = s.api('POST', '/api/cards/racy/start', { harness: 'fake' });
+    await sleep(200);
+    // …and the teardown finishes under it: release lands, record retired
+    fs.writeFileSync(goFile, 'x');
+
+    const r = await started;
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.notStrictEqual(r.body.worker.ref.resumeId, first.ref.resumeId, 'a fresh run');
+    assert.strictEqual((await s.api('GET', '/api/cards/racy')).body.column, 'working');
+    const ws = (await s.api('GET', '/api/board')).body.workers.filter((x) => x.card === 'racy');
+    assert.strictEqual(ws.length, 1, 'one record per card');
+    assert.ok(fs.existsSync(r.body.worker.worktree.path), 'and it has ground of its own');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching

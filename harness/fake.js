@@ -149,6 +149,13 @@ function emitTurnEnd(name) {
 const SPAWN_MS = parseInt(process.env.BC_FAKE_SPAWN_MS, 10) > 0
   ? parseInt(process.env.BC_FAKE_SPAWN_MS, 10) : 0;
 
+// BC_FAKE_ALIVE_MS does the same for alive(). A real liveness read is two tmux
+// subprocess round-trips, and what a caller does with the answer can be decided
+// while the registry moves underneath it — invisible against a fake that
+// answers in the same tick.
+const ALIVE_MS = parseInt(process.env.BC_FAKE_ALIVE_MS, 10) > 0
+  ? parseInt(process.env.BC_FAKE_ALIVE_MS, 10) : 0;
+
 async function spawn(cwd, prompt, opts = {}) {
   const session = opts.session || 'bc-' + crypto.randomBytes(3).toString('hex');
   const window = opts.window === undefined || opts.window === null ? undefined : String(opts.window);
@@ -221,6 +228,7 @@ function assertReadable(key) {
 }
 
 async function alive(ref) {
+  if (ALIVE_MS) await new Promise((r) => setTimeout(r, ALIVE_MS));
   if (ref.window) { assertReadable(refKey(ref)); return live(refKey(ref)); }
   const keys = siblings(ref.session);
   for (const k of keys) assertReadable(k);
