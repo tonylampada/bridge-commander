@@ -259,7 +259,8 @@ const FRONTMATTER = [
   { key: 'requires', desc: 'attributes a card must carry, [a, b]. A card missing one is refused '
     + 'before any worktree exists' },
   { key: 'branch', desc: 'false for a playbook that ships no code: no branch, no PR' },
-  { key: 'keep_worktree', desc: "true keeps the worker's checkout after the card leaves Working" },
+  { key: 'keep_worktree', desc: 'true = neither the worktree nor the worker session is ended '
+    + 'automatically; the board keeps both when the card leaves Working' },
   { key: 'teardown', desc: 'a shell command run in the worktree just before it is released, to stop '
     + 'what the run started (a devcontainer, a compose stack). Best effort: a failure is an event '
     + 'on the card and the release goes ahead' },
