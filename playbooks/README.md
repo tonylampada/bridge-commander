@@ -40,7 +40,7 @@ teardown: .claude/skills/devcontainer/cli.sh down
 | `model` | the model that session starts with |
 | `requires` | card attributes this playbook cannot work without — `card start` refuses before provisioning anything and names the missing one |
 | `branch` | `false` = detached HEAD, no branch cut, nothing to push. Omitted, the card type decides as before (an investigation gets no branch) |
-| `keep_worktree` | `true` = the worktree is never released automatically. Omitted, the board gives it back when the card leaves Working |
+| `keep_worktree` | `true` = neither the worktree nor the worker session is ended automatically. Omitted, the board takes both back when the card leaves Working |
 | `teardown` | a shell command that stops what the run started, run in the worktree just before it is released |
 
 All six are optional. **An explicit CLI flag beats the frontmatter, which beats the config

@@ -39,10 +39,12 @@ them drift.
   `<workspace>/.bridge-commander/playbooks/`, rendered against the card as it stands at start —,
   session/worktree/branch bound to the card, card → Working. Workers report with
   `bc-axi worker signal|done`; the lieutenant verifies and hands off — nothing moves a card
-  out of Working automatically — and the move that takes it out of Working gives the
-  worktree back (a playbook's `keep_worktree: true` holds it for a card reworked in place;
-  a worktree still holding work is never released) — running the playbook's `teardown`
-  command in the checkout first, best effort, so nothing the run started outlives it.
+  out of Working automatically — and the move that takes it out of Working is the worker's
+  death: the session is killed and the worktree given back, so a card waiting on the captain
+  pins neither (a playbook's `keep_worktree: true` holds both for a card reworked in place;
+  a worktree still holding work is never released, though its session dies anyway) — running
+  the playbook's `teardown` command in the checkout first, best effort, so nothing the run
+  started outlives it. A server boot sweeps the leftovers the same way.
 - **The clock is a board object**: schedules live in `board.json` (so they travel with the
   repo, unlike host cron) and fire a NAMED HOOK through the same `hook run` every other caller
   uses. A schedule's cursor is the due time of the last window it handled, so a restart neither

@@ -134,7 +134,11 @@ focus, so an agent with siblings must always carry its window.
   there, Enter is retried (never the text — a retype would duplicate it).
   A positively-confirmed swallow throws.
 - **alive** — tmux session exists AND the pane is not sitting back at a bare
-  shell (claude exiting returns the pane to bash).
+  shell (claude exiting returns the pane to bash). Read STRICTLY: `false` is only
+  ever tmux's own word that the session/window is not there (or that no server is
+  running on the socket); a tmux that could not be READ at all throws with the
+  reason instead of passing for absence, because the board drops worker records
+  on this answer.
 - **kill** — `tmux kill-session` on the ref's session (missing session = no-op).
   Harness state files stay behind on purpose: a later `resume(ref)` can still
   reincarnate the conversation if the kill was premature.

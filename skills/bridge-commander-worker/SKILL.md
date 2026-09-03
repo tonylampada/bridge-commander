@@ -33,9 +33,9 @@ nothing.
 
 **`worker done <CARD> --outcome "<what landed>"`** — terminal, and the only way the card's
 owner learns you finished. The outcome is what your lieutenant acts on without opening
-anything: what landed, and the PR URL if there is one. Your worktree outlives `done` by
-exactly as long as your lieutenant takes to read the diff in it — the board takes it back when
-the card leaves Working — so commit and push before you report.
+anything: what landed, and the PR URL if there is one. You and your worktree outlive `done` by
+exactly as long as your lieutenant takes to read the diff in it — the move out of Working kills
+your session and takes the checkout back — so commit and push before you report.
 
 **A ruling or an answer you need is a signal too** — sent *before your turn ends*, with the
 question in the text. `AskUserQuestion` reaches nobody here: the board cannot see it, and a
