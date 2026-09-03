@@ -32,8 +32,10 @@
 // iff its <session>.json marker exists AND does not say `exited: true` — the
 // window whose agent ended by itself, still standing until something kills it.
 // That lets a test process watch what a server process sent, and pre-register
-// "live" (or exited) fake sessions by dropping a marker file. Without
-// BC_FAKE_STATE the fake stays purely in-memory.
+// "live" (or exited) fake sessions by dropping a marker file. A marker saying
+// `unreadable: true` is the third state: alive() THROWS, the way a harness
+// answers a question it could not ask. Without BC_FAKE_STATE the fake stays
+// purely in-memory.
 //
 // spawn also writes opts.stateDir/<key>.prompt (the SAME source-of-truth file
 // the real tmux adapters persist) whenever opts.stateDir is given — distinct
@@ -206,9 +208,23 @@ async function send(ref, text) {
 // A session-granular ref is read the way tmux reads `=session:`: off whichever
 // window has FOCUS, so ANY live window in the session makes it read alive —
 // including a busy worker masking a dead lieutenant beside it.
+// A marker carrying `unreadable: true` is the tmux nobody could READ — the verb
+// cannot be honored, so it throws with the reason instead of answering "gone".
+// Absence and an unanswered question are different facts, and the board drops
+// worker records on the difference.
+function assertReadable(key) {
+  const marker = markerFile(key);
+  if (!marker || !fs.existsSync(marker)) return;
+  let doc = null;
+  try { doc = JSON.parse(fs.readFileSync(marker, 'utf8')); } catch (e) { return; }
+  if (doc && doc.unreadable) throw new Error(`fake: cannot read session ${key}`);
+}
+
 async function alive(ref) {
-  if (ref.window) return live(refKey(ref));
-  return siblings(ref.session).some(live);
+  if (ref.window) { assertReadable(refKey(ref)); return live(refKey(ref)); }
+  const keys = siblings(ref.session);
+  for (const k of keys) assertReadable(k);
+  return keys.some(live);
 }
 
 // resumable — introspection only: memory survives a resume iff this process

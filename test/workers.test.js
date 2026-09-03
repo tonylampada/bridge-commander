@@ -1828,6 +1828,63 @@ test('a restart over a worker whose agent exited by itself closes the window fir
   }
 });
 
+// The record is dropped only by a path that WATCHED the pane go, and a harness
+// that could not look has not watched anything. An alive() that throws is that
+// answer — the handoff keeps the record and rings, rather than retiring the
+// handle on a session that turns out to still be running.
+test('a handoff whose liveness read fails keeps the record and rings once', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Unread', id: 'unread', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/unread/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/unread/worker/done', { outcome: 'shipped' });
+
+    // the harness goes unreadable — not "the pane is gone", but "I could not look"
+    await s.stop();
+    const marker = path.join(fdir, workerKey(wsDir, 'unread') + '.json');
+    const rec = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    rec.unreadable = true;
+    fs.writeFileSync(marker, JSON.stringify(rec, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    await s.api('POST', '/api/cards/unread/move', { column: 'review', actor: 'agent' });
+    const bells = async () => (await cardEvents(s, 'unread')).filter((e) => e.kind === 'worker-kill-failed');
+    const bell = await until('the unverified kill rings', async () => (await bells())[0]);
+    assert.strictEqual(bell.level, 1);
+    assert.match(bell.text, rx(workerKey(wsDir, 'unread')), 'the session to end by hand is named');
+    assert.ok(fs.existsSync(marker), 'the session nobody could read is still there');
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'unread'),
+      'and the only handle on it survives the handoff');
+    assert.strictEqual((await bells()).length, 1, 'the bell rings once');
+
+    // …and once tmux answers honestly that the window is gone, the record the
+    // unread answer preserved is retired cleanly
+    await until('the release landed even though the kill did not', async () =>
+      (await cardEvents(s, 'unread')).some((e) => /worktree released/.test(e.text)));
+    await s.stop();
+    fs.rmSync(marker);
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await until('the boot sweep retired it now that the answer is an answer', async () =>
+      ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'unread'));
+    assert.strictEqual((await s.api('GET', '/api/cards/unread')).body.attributes.session,
+      workerKey(wsDir, 'unread'), 'the address stays on the card');
+    assert.ok(!fs.existsSync(w.worktree.path), 'and the ground went back');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching
