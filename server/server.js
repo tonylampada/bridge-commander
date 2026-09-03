@@ -2387,6 +2387,15 @@ function worktreeHolder(cardId, wtPath) {
     && x.worktree && x.worktree.path === wtPath && !x.worktree.released) || null;
 }
 
+// recordClaims(w) — whether this record is still the claim on its own path, the
+// other half of the same rule: a record that has RELEASED its worktree gave the
+// ground back, and a pool hands the slot to whoever asks next. So every path
+// releasing on behalf of such a record asks worktreeHolder first, exactly as
+// the ones holding nothing but a pointer do.
+function recordClaims(w) {
+  return !!(w && w.worktree && w.worktree.path && !w.worktree.released);
+}
+
 // releaseCardWorktree(card, w, opts) — the worktree goes when the card LEAVES
 // WORKING, not whenever someone tidies up: a finished card held its checkout
 // until archive, so fifteen finished cards held fifteen worktrees on disk.
@@ -2430,8 +2439,7 @@ async function releaseCardWorktree(card, w, opts = {}) {
     // on that ground would stop that worker's stack, not this card's. Refused
     // the way every refusal here works: the directory stays and the timeline
     // says whose it is.
-    const claims = fromRecord && !(w.worktree && w.worktree.released);
-    const holder = claims ? null : worktreeHolder(card.id, wtRec.path);
+    const holder = (fromRecord && recordClaims(w)) ? null : worktreeHolder(card.id, wtRec.path);
     let rel;
     if (holder) {
       rel = { released: false, reason: 'it belongs to card ' + holder.card + ', whose worker is live on it' };
@@ -2517,12 +2525,14 @@ async function killCardWorker(card, w, opts = {}) {
     let already = false;
     try {
       const impl = harnessFor(w.ref);
+      // Asked BEFORE the kill, and it decides what to SAY, never what to do:
+      // alive() is false the moment the agent process ends, while the window
+      // it ran in is still standing there at a shell — and the kill is the one
+      // thing that takes that window away. It is idempotent, so it runs on
+      // every path; only the announcement below is gated on this.
       already = !(await impl.alive(w.ref));
-      if (already) alive = false;
-      else {
-        await impl.kill(w.ref);
-        alive = await impl.alive(w.ref);
-      }
+      await impl.kill(w.ref);
+      alive = await impl.alive(w.ref);
     } catch (e) { err = e; }
     if (alive || err) {
       const why = err ? String((err && err.message) || err) : 'the pane answered alive() after the kill';
@@ -2931,6 +2941,19 @@ async function doStartCard(card, body) {
       }
     }
     const prevProject = findProject(existing.project) || project;
+    // A record that already released its worktree is no longer standing on it,
+    // so this start may be looking at a lease the pool has since handed to
+    // somebody else. Refused by name, on the same terms as the pointer branch
+    // below, before the teardown — stopping what runs on that ground would
+    // stop the card that owns it now.
+    if (!recordClaims(existing) && existing.worktree && existing.worktree.path) {
+      const held = worktreeHolder(card.id, existing.worktree.path);
+      if (held) {
+        return { error: 'the worktree ' + card.id + '\'s previous worker recorded (' + existing.worktree.path
+          + ') belongs to card ' + held.card + ', whose worker is live on it — this record\'s claim on it '
+          + 'is spent. Look at ' + held.card + ' first, then archive or restart ' + card.id, code: 409 };
+      }
+    }
     // A restart is not a handoff: it is the moment that checkout is actually
     // destroyed, so the teardown belongs here too — otherwise `keep_worktree`,
     // which skips it at the handoff precisely because the checkout is being

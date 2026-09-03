@@ -29,9 +29,11 @@
 //   <session>.json         spawn record { cwd, resumeId, prompt, stateDir }
 //   <session>.sends.jsonl  one JSON line per send { ts, session, text }
 // and a session unknown to THIS process counts as alive (and accepts sends)
-// iff its <session>.json marker exists. That lets a test process watch what a
-// server process sent, and pre-register "live" fake sessions by dropping a
-// marker file. Without BC_FAKE_STATE the fake stays purely in-memory.
+// iff its <session>.json marker exists AND does not say `exited: true` — the
+// window whose agent ended by itself, still standing until something kills it.
+// That lets a test process watch what a server process sent, and pre-register
+// "live" (or exited) fake sessions by dropping a marker file. Without
+// BC_FAKE_STATE the fake stays purely in-memory.
 //
 // spawn also writes opts.stateDir/<key>.prompt (the SAME source-of-truth file
 // the real tmux adapters persist) whenever opts.stateDir is given — distinct
@@ -78,11 +80,19 @@ function get(ref) {
 }
 
 // live(key) — known to THIS process, else the file-backed marker.
+//
+// A marker carrying `exited: true` is the state both tmux harnesses read as NOT
+// alive while the WINDOW is still standing: the agent process ended by itself
+// and its pane fell back to a shell. The marker is that window, so only kill()
+// takes it away — which is why alive() answering false never means there is
+// nothing left to kill.
 function live(key) {
   const s = sessions.get(key);
   if (s) return s.alive;
   const marker = markerFile(key);
-  return !!(marker && fs.existsSync(marker));
+  if (!marker || !fs.existsSync(marker)) return false;
+  try { return !JSON.parse(fs.readFileSync(marker, 'utf8')).exited; }
+  catch (e) { return true; } // unreadable marker: the window is there, that is all we know
 }
 
 // siblings(session) — every key living in that tmux session: the session

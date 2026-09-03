@@ -1679,6 +1679,107 @@ test('a kept record whose worktree was already released does not take it back', 
   }
 });
 
+// alive() answering false does not mean there is nothing left to end. On both
+// tmux harnesses it goes false the moment the agent process exits — the window
+// it ran in is still standing there at a shell, and the kill is the only thing
+// that takes it away. So the kill runs on every path; what the pre-check
+// decides is only whether there was a live session to ANNOUNCE the closing of.
+test('the handoff still closes the window of a worker whose agent exited by itself', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Walked out', id: 'walkedout', attributes: { repo: 'proj' } }));
+    const w = (await s.api('POST', '/api/cards/walkedout/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/walkedout/worker/done', { outcome: 'shipped' });
+
+    // the agent ends by itself (crash, /exit) — its window stays up at a shell,
+    // which is what the marker still being there means
+    await s.stop();
+    const marker = path.join(fdir, workerKey(wsDir, 'walkedout') + '.json');
+    const rec = JSON.parse(fs.readFileSync(marker, 'utf8'));
+    rec.exited = true;
+    fs.writeFileSync(marker, JSON.stringify(rec, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    assert.ok(fs.existsSync(marker), 'the window is up going in');
+
+    await s.api('POST', '/api/cards/walkedout/move', { column: 'review', actor: 'agent' });
+    await until('the handoff retired the record', async () =>
+      ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'walkedout'));
+
+    assert.ok(!fs.existsSync(marker), 'the leftover window was really closed');
+    assert.ok(!fs.existsSync(w.worktree.path), 'and the ground went with it');
+    assert.strictEqual((await cardEvents(s, 'walkedout')).filter((e) => /worker .* closed/.test(e.text)).length, 0,
+      'nothing was live to close, so nothing was announced');
+    assert.strictEqual((await cardEvents(s, 'walkedout')).filter((e) => e.kind === 'worker-kill-failed').length, 0,
+      'and it was not a failure either');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The same rule the archive and the pointer-only start already obey, at the
+// third release point: a record that has RELEASED its worktree is no longer the
+// claim on that path, so a restart reading it may be looking at a lease the
+// pool has since handed to a live worker on another card.
+test('a restart does not release the path another card\'s live worker now holds', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({ title: 'Standing on it', id: 'holder', attributes: { repo: 'proj' } }));
+    const live = (await s.api('POST', '/api/cards/holder/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards', withOwner({ title: 'Reworked', id: 'redoit', attributes: { repo: 'proj' } }));
+    await s.api('POST', '/api/cards/redoit/start', { harness: 'fake' });
+    await s.api('POST', '/api/cards/redoit/worker/done', { outcome: 'first pass' });
+
+    // redoit's release LANDED but its record was kept, and the ground it still
+    // names has since been leased to holder's live worker. keepWorktree keeps
+    // the boot sweep off the record — the restart is what reads it next.
+    await s.stop();
+    fs.rmSync(path.join(fdir, workerKey(wsDir, 'redoit') + '.json'));
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const w = doc.workers.find((x) => x.card === 'redoit');
+    w.keepWorktree = true;
+    w.worktree.path = live.worktree.path;
+    w.worktree.released = true;
+    const card = doc.cards.find((c) => c.id === 'redoit');
+    card.column = 'review';
+    delete card.attributes.worktree;
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    const r = await s.api('POST', '/api/cards/redoit/start', { harness: 'fake' });
+    assert.ok(fs.existsSync(live.worktree.path), 'the live worker keeps its ground');
+    assert.strictEqual(r.status, 409, JSON.stringify(r.body));
+    assert.match(r.body.error, /holder/, 'the refusal names who holds it now');
+    assert.match(r.body.error, rx(live.worktree.path));
+    assert.strictEqual((await s.api('GET', '/api/cards/holder')).body.attributes.worktree, live.worktree.path);
+    assert.strictEqual((await s.api('GET', '/api/cards/redoit')).body.column, 'review', 'and the card did not start');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // The pointer-only state — a card still naming a checkout with no worker record
 // behind it — is what a handoff leaves when its release never landed (the board
 // restarted mid-release, or the boot sweep retired the record without touching
