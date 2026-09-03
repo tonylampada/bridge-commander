@@ -2470,6 +2470,12 @@ async function releaseCardWorktree(card, w, opts = {}) {
 // that nothing on the board points at is worse than the idle one this whole
 // change exists to end.
 //
+// The level-1 bell rings ONCE per record. `killFailed` is set the first time a
+// kill cannot be verified and cleared the moment one is — the same shape the
+// stall ladder uses — because the sweep retries at every boot, and a bell that
+// rings for the same dead session on every restart of the board is noise the
+// captain learns to ignore. The console still says so every time.
+//
 // Never throws: every call site observes a lifecycle outcome it must not fail.
 async function killCardWorker(card, w, opts = {}) {
   try {
@@ -2490,10 +2496,14 @@ async function killCardWorker(card, w, opts = {}) {
         + 'so the session is still on the board rather than leaked; end it by hand '
         + '(tmux kill-window -t ' + name + ') and archive or restart the card';
       console.error(now() + ' worker kill for ' + card.id + ' failed: ' + why);
-      landCardEvent(card, mkEvent({ text, actor: 'server' }, { kind: 'worker-kill-failed' }));
+      if (!w.killFailed) {
+        w.killFailed = why;
+        landCardEvent(card, mkEvent({ text, actor: 'server' }, { kind: 'worker-kill-failed' }));
+      }
       saveBoard(); broadcast();
       return { killed: false, reason: why };
     }
+    delete w.killFailed; // the harness came back — the next failure is news again
     landCardEvent(card, mkEvent({
       text: 'worker ' + name + ' closed (' + (opts.reason || 'the card left Working') + ')',
       actor: 'server', level: 2,
@@ -2581,7 +2591,27 @@ async function sweepStaleWorkers() {
       kill = await killCardWorker(stand, w,
         { reason: 'boot sweep: the card is in ' + columnTitle(card.column) + ', not Working' });
     } else {
+      // Whether the board has already failed to end this one, read BEFORE the
+      // attempt: the attempt itself sets the flag.
+      const abandoned = !!w.killFailed;
       kill = await killCardWorker(stand, w, { reason: 'boot sweep: the card is no longer on the board' });
+      // The terminal path out of an unverifiable kill. Keeping the record is
+      // there to protect LIVE work — it is the only handle on a session
+      // somebody may still come back for — and nobody is coming back for this
+      // one: its card is off the board. So the record goes, having failed
+      // twice, and the timeline says which session was left running rather
+      // than letting the same bell ring at every boot forever.
+      if (kill && !kill.killed && abandoned) {
+        const name = workerName(w.ref);
+        landCardEvent(stand, mkEvent({
+          text: 'worker ' + name + ' ABANDONED (' + kill.reason + '): its card is off the board, so the '
+            + 'record is dropped — nothing is left to come back for it. End the session by hand if it '
+            + 'is still up (tmux kill-window -t ' + name + ')',
+          actor: 'server', level: 2,
+        }, {}));
+        dropWorkerRecord(stand, w);
+        continue;
+      }
     }
     // The sweep is not a release point — it ends processes, it does not touch
     // ground — so nothing here is waiting on the record.
@@ -2719,6 +2749,7 @@ async function doStartCard(card, body) {
     delete existing.lastTurnEndText;
     delete existing.lastSignalText;
     delete existing.paused; // a revived worker is watched again
+    delete existing.killFailed; // reincarnated on a harness that answers
     attachBriefArtifact(card, ref);
     enterWorking(card, 'worker ' + workerName(ref) + ' resumed in ' + existing.worktree.path);
     return { worker: existing, resumed: true };

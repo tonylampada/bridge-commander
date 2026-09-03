@@ -1724,6 +1724,119 @@ test('a restart over a pane the board cannot end refuses instead of spawning', a
   }
 });
 
+// A kill the board cannot verify keeps its record on purpose — that record is
+// the only handle on a session that may still be up. But the sweep retries at
+// every boot, so without a mark the same dead session would ring the captain's
+// level-1 bell on every restart of the board, forever.
+test('a kill that cannot be verified rings the bell once, not once per boot', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Rings once', id: 'bell', attributes: { repo: 'proj' },
+    }));
+    await s.api('POST', '/api/cards/bell/start', { harness: 'fake' });
+    await s.api('POST', '/api/cards/bell/worker/done', { outcome: 'done' });
+
+    // a record the sweep will reach and can never end: out of Working, holding
+    // no ground, on a harness this server has no implementation for
+    const rig = () => {
+      const file = path.join(wsDir, '.bridge-commander', 'board.json');
+      const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+      doc.cards.find((c) => c.id === 'bell').column = 'review';
+      const w = doc.workers.find((x) => x.card === 'bell');
+      w.ref.harness = 'ghost';
+      w.worktree.released = true;
+      fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    };
+    await s.stop(); rig();
+
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    const rang = await until('the first sweep rings the bell',
+      async () => (await cardEvents(s, 'bell')).filter((e) => e.kind === 'worker-kill-failed'));
+    assert.strictEqual(rang.length, 1);
+    assert.strictEqual(rang[0].level, 1);
+
+    // a second boot over the same unreachable session: still refused, still
+    // kept — and silent, because the captain has already been told
+    await s.stop();
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await until('the second sweep has had its turn',
+      async () => ((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'bell'));
+    await sleep(400);
+    assert.strictEqual((await cardEvents(s, 'bell')).filter((e) => e.kind === 'worker-kill-failed').length, 1,
+      'the same dead session does not ring again at every boot');
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'bell'),
+      'and the record is still kept — the card is on the board, somebody may come back for it');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Keeping an unkillable record protects work somebody may come back for. Once
+// the card is off the board nobody is, so the sweep has one terminal path out
+// of that state — otherwise the record is immortal and `card start` on it (were
+// the card restored) refuses forever.
+test('the sweep finally abandons an unkillable record whose card left the board', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    for (const id of ['gonecard', 'stillhere']) {
+      await s.api('POST', '/api/cards', withOwner({ title: id, id, attributes: { repo: 'proj' } }));
+      await s.api('POST', '/api/cards/' + id + '/start', { harness: 'fake' });
+      await s.api('POST', '/api/cards/' + id + '/worker/done', { outcome: 'done' });
+    }
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    for (const w of doc.workers) { w.ref.harness = 'ghost'; w.worktree.released = true; }
+    doc.cards.find((c) => c.id === 'stillhere').column = 'review';
+    doc.cards = doc.cards.filter((c) => c.id !== 'gonecard'); // archived out from under it
+    const deadSession = doc.workers.find((x) => x.card === 'gonecard').ref.session + ':w-gonecard';
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+
+    // first boot: neither can be ended, both records are kept and both ring
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await until('both are still on the registry after one failed sweep', async () => {
+      const ws = (await s.api('GET', '/api/board')).body.workers || [];
+      return ws.some((x) => x.card === 'gonecard') && ws.some((x) => x.card === 'stillhere');
+    });
+
+    // second boot: the one whose card is gone is let go, the other is not
+    await s.stop();
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await until('the abandoned record is dropped',
+      async () => ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'gonecard'));
+    const ev = (await s.api('GET', '/api/board')).body.events
+      .filter((e) => e.card === 'gonecard').find((e) => /ABANDONED/.test(e.text));
+    assert.ok(ev, 'the timeline says which session was left running');
+    assert.strictEqual(ev.level, 2, 'the bell already rang for this one');
+    assert.match(ev.text, rx(deadSession));
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'stillhere'),
+      'a card still on the board keeps its handle, however unkillable');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('a malformed frontmatter block refuses the start and names the line', async () => {
   const { s, teardown } = await boot();
   try {
