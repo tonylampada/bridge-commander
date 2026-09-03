@@ -1265,6 +1265,35 @@ test('the handoff kills the worker: no window, no record, and the card keeps the
   } finally { await teardown(); }
 });
 
+// Archiving straight out of Working takes the other order: archiveCard freezes
+// the card into the snapshot synchronously, while the kill and the drop are
+// detached and land when there is no card left to stamp. The address has to be
+// on the card BEFORE the freeze, or the transcript is unfindable afterwards.
+test('a card archived straight out of Working still carries the run\'s address into the snapshot', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Killed mid-flight', id: 'midair', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/midair/start', { harness: 'fake' })).body.worker;
+    const marker = path.join(fdir, workerKey(s.dir, 'midair') + '.json');
+    const resumeId = JSON.parse(fs.readFileSync(marker, 'utf8')).resumeId;
+    assert.ok(resumeId);
+
+    assert.strictEqual((await s.api('POST', '/api/cards/midair/archive', { reason: 'killed' })).status, 200);
+    const arch = (await s.api('GET', '/api/archive')).body.archive.find((r) => r.card.id === 'midair');
+    assert.strictEqual(arch.card.attributes.session, workerKey(s.dir, 'midair'));
+    assert.strictEqual(arch.card.attributes.resumeId, resumeId);
+
+    // and the archive is still the backstop for everything the handoff would
+    // have done: the window goes, its record with it, and the ground after
+    await until('the window is gone', async () => !fs.existsSync(marker));
+    await until('and its registry record',
+      async () => ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'midair'));
+    await until('and the worktree released', async () => !fs.existsSync(w.worktree.path));
+  } finally { await teardown(); }
+});
+
 // Both ways back into a finished worker name the same way out — a fresh worker —
 // instead of failing somewhere deep inside the harness on a session that is gone.
 test('after the handoff, resume and worker send both refuse and point at a fresh start', async () => {

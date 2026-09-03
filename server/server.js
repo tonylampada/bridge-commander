@@ -2504,23 +2504,35 @@ async function killCardWorker(card, w, opts = {}) {
   }
 }
 
-// dropWorkerRecord(card, w) — the registry entry goes, and what outlives it is
-// the card's own note of the run: `session` and `resumeId`, so the transcript
-// stays readable (and the archive snapshot carries it) long after the window is
-// gone. Call it ONLY behind a verified kill.
+// stampWorkerAddress(card, w) — the card's own note of the run: `session` and
+// `resumeId`, so the transcript stays readable long after the window is gone.
+// dropWorkerRecord writes it as the record goes, and archive writes it directly
+// — archiveCard freezes the card into the snapshot synchronously, well before a
+// detached drop could get there, and by then there is no card left to stamp.
+function stampWorkerAddress(card, w) {
+  if (!card || !card.attributes || !w) return;
+  card.attributes.session = workerName(w.ref);
+  if (w.ref && w.ref.resumeId) card.attributes.resumeId = w.ref.resumeId;
+}
+
+// dropWorkerRecord(card, w) — the registry entry goes, and the address it held
+// outlives it on the card. Call it ONLY behind a verified kill.
 //
 // It is deliberately NOT the second half of that kill. A checkout that refused
 // its release keeps its record, because that record is the last handle on the
 // unfinished business standing on it — the path, and a `teardown` that has not
 // run yet and gets another turn at archive. The window is dead either way; the
 // entry is what the next release point reads.
+//
+// Guarded like its two siblings: a record already spliced, or a NEWER worker
+// holding this card (a rework restart that raced the release's teardown wait),
+// and this dead worker neither drops the live one's record nor stamps its own
+// address over the live one's — the board would then send the lieutenant to a
+// session that no longer exists.
 function dropWorkerRecord(card, w) {
   if (!w) return null;
-  const live = findCard(w.card);
-  if (live && live.attributes) {
-    live.attributes.session = workerName(w.ref);
-    if (w.ref && w.ref.resumeId) live.attributes.resumeId = w.ref.resumeId;
-  }
+  if (findWorker(w.card) !== w) return null;
+  stampWorkerAddress(findCard(w.card), w);
   board.workers = board.workers.filter((x) => x !== w);
   saveBoard(); broadcast();
   return w;
@@ -4609,7 +4621,9 @@ const server = http.createServer(async (req, res) => {
               // release point and reads it there. Everything else: the worker
               // is gone from the board as well as from tmux.
               if (kill && kill.killed && (!rel || rel.released)) dropWorkerRecord(card, w);
-            });
+            })
+            .catch((e) => console.error(now() + ' handoff teardown for ' + card.id
+              + ' failed: ' + String((e && e.message) || e)));
         }
         saveBoard(); broadcast();
         return sendJson(res, 200, r);
@@ -4657,7 +4671,12 @@ const server = http.createServer(async (req, res) => {
         return sendJson(res, 200, { ok: true, event: ev });
       }
       if (sub === 'archive' && req.method === 'POST') {
-        const w = findWorker(card.id); // captured BEFORE archiveCard drops the registry entry
+        const w = findWorker(card.id); // captured BEFORE the detached chain below drops the registry entry
+        // The address goes onto the card BEFORE archiveCard freezes the
+        // snapshot: the drop below is detached and lands long after, when the
+        // card is off the board and there is nothing left to stamp. The frozen
+        // record is the only place the transcript stays findable.
+        stampWorkerAddress(card, w);
         const r = archiveCard(card, JSON.parse(await readBody(req) || '{}'));
         if (r.error) return sendJson(res, 400, { error: r.error });
         saveBoard(); broadcast();
@@ -4676,7 +4695,9 @@ const server = http.createServer(async (req, res) => {
             // Last release point there will ever be: the record has nothing
             // left to be the handle FOR, refused release or not.
             if (kill && kill.killed) dropWorkerRecord(card, w);
-          });
+          })
+          .catch((e) => console.error(now() + ' archive teardown for ' + card.id
+            + ' failed: ' + String((e && e.message) || e)));
         return sendJson(res, 200, r);
       }
       // promote-to-artifact — the deliberate tool. POST adds, DELETE removes an
