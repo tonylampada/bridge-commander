@@ -1803,6 +1803,76 @@ test('the boot sweep spares a worker whose worktree is still unreleased', async 
   }
 });
 
+// The unreleased-worktree carve-out is about the RECORD, never the process. An
+// upgraded board carries a card handed off under the old code: it left Working
+// with its session still up and a checkout dirty enough that the release would
+// have refused. The record is the last handle on that work and stays — the idle
+// window it names is exactly what the sweep exists to end, and it goes.
+test('the boot sweep ends the window of a spared record and keeps the record', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    const marker = (id) => path.join(fdir, workerKey(wsDir, id) + '.json');
+
+    // legacy: worked, reported done, left uncommitted work behind — and its
+    // window is still up, because the code that handed it off never killed one.
+    await s.api('POST', '/api/cards', withOwner({ title: 'Legacy', id: 'legacy', attributes: { repo: 'proj' } }));
+    const lw = (await s.api('POST', '/api/cards/legacy/start', { harness: 'fake' })).body.worker;
+    fs.writeFileSync(path.join(lw.worktree.path, 'unsaved.txt'), 'not committed\n');
+    await s.api('POST', '/api/cards/legacy/worker/done', { outcome: 'done, sort of' });
+
+    // parked: done, its session gone by itself, then shelved to be resumed in
+    // that very checkout. Registered last, so the sweep reaches it last.
+    await s.api('POST', '/api/cards', withOwner({ title: 'Shelved', id: 'parked', attributes: { repo: 'proj' } }));
+    const pw = (await s.api('POST', '/api/cards/parked/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/parked/worker/done', { outcome: 'shelved' });
+    await s.stop();
+    fs.rmSync(marker('parked'));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    const pk = await s.api('POST', '/api/cards/parked/park', {});
+    assert.strictEqual(pk.status, 200, JSON.stringify(pk.body));
+
+    // the old handoff, replayed on disk: out of Working, nothing killed,
+    // nothing released.
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.cards.find((c) => c.id === 'legacy').column = 'review';
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    assert.ok(fs.existsSync(marker('legacy')), 'the legacy window is up going in');
+
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await until('the sweep closed the last record it reaches', async () =>
+      (await cardEvents(s, 'parked')).some((e) => /worker .* closed/.test(e.text)));
+
+    assert.ok(!fs.existsSync(marker('legacy')), 'the idle legacy window is gone');
+    assert.ok((await cardEvents(s, 'legacy')).some((e) => /worker .* closed/.test(e.text)),
+      'and the timeline says so');
+    const ws = (await s.api('GET', '/api/board')).body.workers || [];
+    assert.ok(ws.some((x) => x.card === 'legacy'), 'the record on unreleased ground survives its own kill');
+    assert.ok(ws.some((x) => x.card === 'parked'), 'and so does the parked one');
+    assert.ok(fs.existsSync(path.join(lw.worktree.path, 'unsaved.txt')), 'the sweep took no ground');
+    assert.ok(fs.existsSync(pw.worktree.path), 'from either of them');
+
+    // the handle still works: resume goes back into that same checkout
+    const r = await s.api('POST', '/api/cards/parked/start', { harness: 'fake', resume: true });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+    assert.strictEqual((await s.api('GET', '/api/cards/parked')).body.column, 'working');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 // A refused release keeps its record ON PURPOSE — that worktree may hold the
 // only copy of the work — so the way back into it is still open. The handoff's
 // "there is nothing left to reincarnate" is about the record it DROPPED.
@@ -1992,8 +2062,9 @@ test('the sweep finally abandons an unkillable record whose card left the board'
 
 // The ring-once mark is about a session the board has stopped being able to
 // reach. A worker that has been ALIVE and working since — reopened in place by
-// `worker send` — is a different story: the next kill it refuses is news, and
-// swallowing it would leave the captain with no bell for a live leak.
+// `worker send`, which is how a `keep_worktree` card is reworked — is a
+// different story: the next kill it refuses is news, and swallowing it would
+// leave the captain with no bell for a live leak.
 test('a worker reopened in place rings again when its kill fails a second time', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
   const repo = makeRepo(root);
@@ -2013,19 +2084,22 @@ test('a worker reopened in place rings again when its kill fails a second time',
   let s = await startServerWithLieutenant({ dir: wsDir, env });
   try {
     await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    // keep_worktree: the one card whose worker survives the handoff on purpose,
+    // to be reworked in place — so a send still reaches it in review, and the
+    // boot sweep leaves it be
+    writePlaybook(s, 'kept', ['---', 'keep_worktree: true', '---', '{{TASK}}', ''].join('\n'));
     await s.api('POST', '/api/cards', withOwner({
-      title: 'Rings again', id: 'ringagain', attributes: { repo: 'proj' },
+      title: 'Rings again', id: 'ringagain', playbook: 'kept', attributes: { repo: 'proj' },
     }));
-    const w = (await s.api('POST', '/api/cards/ringagain/start', { harness: 'fake' })).body.worker;
-    // dirty, so the handoff's release refuses and the checkout survives — that
-    // is what leaves a send-able worker sitting in review
-    fs.writeFileSync(path.join(w.worktree.path, 'unsaved.txt'), 'not committed\n');
+    await s.api('POST', '/api/cards/ringagain/start', { harness: 'fake' });
     await s.api('POST', '/api/cards/ringagain/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/ringagain/move', { column: 'review', actor: 'agent' });
 
-    // the board loses its grip on the session: the handoff cannot end it
+    // the board loses its grip on the session: a fresh start cannot end it
     await s.stop(); setHarness('ghost');
     s = await startServerWithLieutenant({ dir: wsDir, env });
-    await s.api('POST', '/api/cards/ringagain/move', { column: 'review', actor: 'agent' });
+    let r = await s.api('POST', '/api/cards/ringagain/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 409, JSON.stringify(r.body));
     await until('the first failed kill rings', async () => (await bells(s)).length === 1);
 
     // the harness answers again, and the lieutenant reopens the turn in place
@@ -2035,12 +2109,14 @@ test('a worker reopened in place rings again when its kill fails a second time',
     assert.strictEqual(send.status, 200, JSON.stringify(send.body));
     assert.strictEqual((await s.api('GET', '/api/cards/ringagain')).body.column, 'working');
     await s.api('POST', '/api/cards/ringagain/worker/done', { outcome: 'second pass' });
+    await s.api('POST', '/api/cards/ringagain/move', { column: 'review', actor: 'agent' });
 
     // and it goes unreachable again: a NEW failure on a worker that has been
     // alive in between, so the captain hears about it
     await s.stop(); setHarness('ghost');
     s = await startServerWithLieutenant({ dir: wsDir, env });
-    await s.api('POST', '/api/cards/ringagain/move', { column: 'review', actor: 'agent' });
+    r = await s.api('POST', '/api/cards/ringagain/start', { harness: 'fake' });
+    assert.strictEqual(r.status, 409, JSON.stringify(r.body));
     await until('the second failed kill rings too', async () => (await bells(s)).length === 2);
     assert.ok((await bells(s)).every((e) => e.level === 1));
   } finally {
@@ -2048,7 +2124,6 @@ test('a worker reopened in place rings again when its kill fails a second time',
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
 // A pointer is not ownership. A frozen snapshot can name a POOLED lease that
 // has since been handed to another card, and releasing against it would take a
 // live worker's ground out from under it.

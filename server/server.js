@@ -2600,12 +2600,16 @@ function dropWorkerRecord(card, w) {
 // a `keep_worktree` card parked in review is deliberately waiting for its
 // worker.
 //
-// One more exception on the board, and it is the same one the handoff makes: a
-// record whose worktree is STILL UNRELEASED is the last handle on the work
-// standing there — `card.park` shelves a card to be resumed in that very
-// checkout, and a release that REFUSED left an unspent `teardown` archive is
-// contracted to retry. The window is dead either way; the entry is what the
-// next release point reads. A record with no worktree at all holds nothing.
+// One more exception on the board, and it spares the RECORD only, never the
+// process: a record whose worktree is STILL UNRELEASED is the last handle on
+// the work standing there — `card.park` shelves a card to be resumed in that
+// very checkout, and a release that REFUSED left an unspent `teardown` archive
+// is contracted to retry. The entry is what the next release point reads; the
+// window it names is not, and nothing legitimate wants that window alive.
+// `card.park` is legal only when the worker is absent or dead, a refused
+// release only ever follows a verified kill, and `card.start --resume` rides
+// the record's resumeId rather than a live pane. So the kill runs anyway and
+// only the drop is held back. A record with no worktree at all holds nothing.
 //
 // Runs once, after the listen: nothing here is on the critical path of a boot.
 async function sweepStaleWorkers() {
@@ -2614,9 +2618,10 @@ async function sweepStaleWorkers() {
     if (card && card.column === 'working') continue;
     const stand = card || { id: w.card, title: w.card };
     let kill;
+    let holdsGround = false;
     if (card) {
       if (w.keepWorktree || !w.done) continue;
-      if (w.worktree && w.worktree.path && !w.worktree.released) continue;
+      holdsGround = !!(w.worktree && w.worktree.path && !w.worktree.released);
       kill = await killCardWorker(stand, w,
         { reason: 'boot sweep: the card is in ' + columnTitle(card.column) + ', not Working' });
     } else {
@@ -2643,8 +2648,10 @@ async function sweepStaleWorkers() {
       }
     }
     // The sweep is not a release point — it ends processes, it does not touch
-    // ground — so nothing here is waiting on the record.
-    if (kill && kill.killed) dropWorkerRecord(stand, w);
+    // ground. So the kill is unconditional and only the DROP waits on the
+    // ground: a record still standing on an unreleased worktree survives its
+    // own kill.
+    if (kill && kill.killed && !holdsGround) dropWorkerRecord(stand, w);
   }
 }
 
