@@ -1138,16 +1138,20 @@ test('`keep_worktree: true` survives the handoff; archiving releases it anyway',
   } finally { await teardown(); }
 });
 
-test('a worker that never reported done keeps its worktree through the move', async () => {
-  const { s, teardown } = await boot();
+test('a worker that never reported done keeps its worktree AND its session through the move', async () => {
+  const { s, fdir, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({
       title: 'Moved out from under it', id: 'live', attributes: { repo: 'proj' },
     }));
     const w = (await s.api('POST', '/api/cards/live/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/live/move', { column: 'review', actor: 'agent' });
+    await sleep(400);
     assert.ok(fs.existsSync(w.worktree.path),
       'a card moved out from under a live or crashed worker: that checkout is still the only copy');
+    assert.ok(fs.existsSync(path.join(fdir, workerKey(s.dir, 'live') + '.json')),
+      'and so is the conversation in it');
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'live'));
   } finally { await teardown(); }
 });
 
@@ -1219,10 +1223,51 @@ test('archiving a card whose worktree is already gone is a no-op, not an error',
   } finally { await teardown(); }
 });
 
-// A released worktree is nothing to reincarnate into: both ways back into a
-// finished worker name the way out — a fresh worker — instead of failing
-// somewhere deep inside the harness on a missing cwd.
-test('resume and worker send both refuse a worker whose worktree was released', async () => {
+// MNC-114 — the handoff is the worker's DEATH. Your review is the standing-room
+// column and the captain is the bottleneck, so every card waiting there used to
+// pin one idle agent process for the whole wait, answering nothing: rework after
+// a handoff is a fresh start by the DNA's own rule.
+test('the handoff kills the worker: no window, no record, and the card keeps the run\'s address', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Handed off for good', id: 'dies', attributes: { repo: 'proj' },
+    }));
+    const w = (await s.api('POST', '/api/cards/dies/start', { harness: 'fake' })).body.worker;
+    const marker = path.join(fdir, workerKey(s.dir, 'dies') + '.json');
+    assert.ok(fs.existsSync(marker), 'the window is up while the card is Working');
+    const resumeId = JSON.parse(fs.readFileSync(marker, 'utf8')).resumeId;
+    assert.ok(resumeId);
+
+    await s.api('POST', '/api/cards/dies/worker/done', { outcome: 'shipped' });
+    await sleep(300);
+    assert.ok(fs.existsSync(marker), 'done alone never kills it — the lieutenant still has questions');
+
+    assert.strictEqual((await s.api('POST', '/api/cards/dies/move', { column: 'review', actor: 'agent' })).status, 200);
+    await until('the worker window is gone', async () => !fs.existsSync(marker));
+    await until('and so is its registry record',
+      async () => ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'dies'));
+    const ev = await until('the timeline says the worker was closed',
+      async () => (await cardEvents(s, 'dies')).find((e) => /worker .* closed/.test(e.text)));
+    assert.strictEqual(ev.level, 2, 'an expected death is not an alarm');
+
+    // what outlives the record: the card's own address for the run, so the
+    // transcript stays readable long after the window is gone
+    const card = (await s.api('GET', '/api/cards/dies')).body;
+    assert.strictEqual(card.attributes.session, workerKey(s.dir, 'dies'));
+    assert.strictEqual(card.attributes.resumeId, resumeId);
+
+    // and it rides the archive snapshot, which is where forensics look
+    assert.strictEqual((await s.api('POST', '/api/cards/dies/archive', { reason: 'merged' })).status, 200);
+    const arch = (await s.api('GET', '/api/archive')).body.archive.find((r) => r.card.id === 'dies');
+    assert.strictEqual(arch.card.attributes.resumeId, resumeId);
+    assert.ok(!fs.existsSync(w.worktree.path));
+  } finally { await teardown(); }
+});
+
+// Both ways back into a finished worker name the same way out — a fresh worker —
+// instead of failing somewhere deep inside the harness on a session that is gone.
+test('after the handoff, resume and worker send both refuse and point at a fresh start', async () => {
   const { s, teardown } = await boot();
   try {
     await s.api('POST', '/api/cards', withOwner({
@@ -1231,29 +1276,143 @@ test('resume and worker send both refuse a worker whose worktree was released', 
     const w = (await s.api('POST', '/api/cards/noback/start', { harness: 'fake' })).body.worker;
     await s.api('POST', '/api/cards/noback/worker/done', { outcome: 'shipped' });
     await s.api('POST', '/api/cards/noback/move', { column: 'review', actor: 'agent' });
-    await until('released at the handoff', async () => !(await s.api('GET', '/api/cards/noback')).body.attributes.worktree);
-    assert.ok(!fs.existsSync(w.worktree.path));
+    await until('the record is gone',
+      async () => ((await s.api('GET', '/api/board')).body.workers || []).every((x) => x.card !== 'noback'));
+    // the record goes with the window; the worktree follows behind the clone lock
+    await until('and the worktree with it', async () => !fs.existsSync(w.worktree.path));
 
-    // its session is still alive, so send would otherwise reopen the turn in place
     const send = await s.api('POST', '/api/cards/noback/worker/send', { text: 'one more thing' });
-    assert.strictEqual(send.status, 409, JSON.stringify(send.body));
-    assert.match(send.body.error, /worktree was released at the handoff/);
+    assert.strictEqual(send.status, 404, JSON.stringify(send.body));
+    assert.match(send.body.error, /no worker bound to card noback/);
     assert.match(send.body.error, /card start noback/);
-    assert.match(send.body.error, /keep_worktree/);
 
     const res = await s.api('POST', '/api/cards/noback/start', { resume: true });
-    assert.strictEqual(res.status, 409, JSON.stringify(res.body));
-    assert.match(res.body.error, /worktree is gone/);
+    assert.match(res.body.error, /nothing to resume/);
     assert.match(res.body.error, /card start noback/);
 
-    // and the way out both refusals name really is one: a fresh start spawns
-    // over the finished session (the ONLY live session that is ever spawned
-    // over) instead of dead-ending on "its session is still alive"
+    // and the way out both refusals name really is one
     const fresh = await s.api('POST', '/api/cards/noback/start', { harness: 'fake' });
     assert.strictEqual(fresh.status, 200, JSON.stringify(fresh.body));
     assert.ok(fs.existsSync(fresh.body.worker.worktree.path), 'a new worktree, at the same deterministic path');
     assert.strictEqual((await s.api('GET', '/api/cards/noback')).body.column, 'working');
   } finally { await teardown(); }
+});
+
+// The exceptions are the worktree release's, and for the same reason: a card
+// reworked in place needs the conversation as much as the checkout.
+test('`keep_worktree: true` keeps the worker alive through the handoff, worktree and all', async () => {
+  const { s, fdir, teardown } = await boot();
+  try {
+    writePlaybook(s, 'reworked', ['---', 'keep_worktree: true', '---', 'rework me', ''].join('\n'));
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Rework in place', id: 'kept', playbook: 'reworked', attributes: { repo: 'proj' },
+    }));
+    const k = (await s.api('POST', '/api/cards/kept/start', { harness: 'fake' })).body.worker;
+    await s.api('POST', '/api/cards/kept/worker/done', { outcome: 'first pass' });
+    await s.api('POST', '/api/cards/kept/move', { column: 'review', actor: 'agent' });
+    await sleep(400);
+    const marker = path.join(fdir, workerKey(s.dir, 'kept') + '.json');
+    assert.ok(fs.existsSync(marker), 'the session is half of what keep_worktree keeps');
+    assert.ok(fs.existsSync(k.worktree.path));
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'kept'));
+
+    // and a send still reopens it in place — the whole point of the exception
+    const send = await s.api('POST', '/api/cards/kept/worker/send', { text: 'one more pass' });
+    assert.strictEqual(send.status, 200, JSON.stringify(send.body));
+    assert.strictEqual((await s.api('GET', '/api/cards/kept')).body.column, 'working');
+  } finally { await teardown(); }
+});
+
+// The record is the only handle anyone has on a live agent process, so it is
+// dropped ONLY by a path that watched the pane go. A kill that cannot be
+// verified keeps the record and rings the captain — a session nothing points at
+// is worse than the idle one this whole change exists to end.
+test('a worker the board cannot kill keeps its record, loudly', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const env = {
+    BC_FAKE_STATE: path.join(root, 'fake'), BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    await s.api('POST', '/api/cards', withOwner({
+      title: 'Undead', id: 'undead', attributes: { repo: 'proj' },
+    }));
+    await s.api('POST', '/api/cards/undead/start', { harness: 'fake' });
+    await s.api('POST', '/api/cards/undead/worker/done', { outcome: 'done' });
+
+    // a harness this server has no implementation for: the kill throws, so the
+    // pane can never be shown to be gone
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.workers.find((w) => w.card === 'undead').ref.harness = 'ghost';
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+
+    assert.strictEqual((await s.api('POST', '/api/cards/undead/move', { column: 'review', actor: 'agent' })).status, 200);
+    const ev = await until('the failed kill is on the timeline',
+      async () => (await cardEvents(s, 'undead')).find((e) => e.kind === 'worker-kill-failed'));
+    assert.strictEqual(ev.level, 1, 'a session nobody can reach is the captain\'s problem');
+    assert.match(ev.text, /could NOT be killed/);
+    assert.match(ev.text, /unknown harness/);
+    assert.ok(((await s.api('GET', '/api/board')).body.workers || []).some((x) => x.card === 'undead'),
+      'the record is kept: it is the only thing pointing at that session');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// The rule only fires on the move, so everything already sitting in the
+// registry when a board upgrades to it needs one pass: ~30 records for cards
+// long since handed off, and windows whose agent died months ago.
+test('the boot sweep ends every worker whose card is not Working — and the orphans', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-workers-'));
+  const repo = makeRepo(root);
+  const wsDir = path.join(root, 'ws');
+  fs.mkdirSync(wsDir);
+  const fdir = path.join(root, 'fake');
+  const env = {
+    BC_FAKE_STATE: fdir, BC_WORKTREE_TOOL: 'git',
+    BC_SUPERVISE_INTERVAL_MS: '0', BC_PRWATCH_INTERVAL_MS: '0',
+  };
+  let s = await startServerWithLieutenant({ dir: wsDir, env });
+  try {
+    await s.api('POST', '/api/projects', { source: repo, name: 'proj' });
+    for (const id of ['handedoff', 'orphan', 'live']) {
+      await s.api('POST', '/api/cards', withOwner({ title: id, id, attributes: { repo: 'proj' } }));
+      await s.api('POST', '/api/cards/' + id + '/start', { harness: 'fake' });
+      await s.api('POST', '/api/cards/' + id + '/worker/done', { outcome: 'done' });
+    }
+    const marker = (id) => path.join(fdir, workerKey(wsDir, id) + '.json');
+
+    // Fake the board this change inherits: a card handed off with its worker
+    // left alive (the old behaviour), and a record whose card is gone entirely.
+    await s.stop();
+    const file = path.join(wsDir, '.bridge-commander', 'board.json');
+    const doc = JSON.parse(fs.readFileSync(file, 'utf8'));
+    doc.cards.find((c) => c.id === 'handedoff').column = 'review';
+    doc.cards = doc.cards.filter((c) => c.id !== 'orphan');
+    fs.writeFileSync(file, JSON.stringify(doc, null, 2));
+    assert.ok(fs.existsSync(marker('handedoff')) && fs.existsSync(marker('orphan')));
+
+    s = await startServerWithLieutenant({ dir: wsDir, env });
+    await until('the handed-off worker is swept', async () => !fs.existsSync(marker('handedoff')));
+    await until('the orphan window goes too', async () => !fs.existsSync(marker('orphan')));
+    await until('and both records with them', async () => {
+      const ws = (await s.api('GET', '/api/board')).body.workers || [];
+      return ws.length === 1 && ws[0].card === 'live';
+    });
+    assert.ok(fs.existsSync(marker('live')), 'a Working card keeps its worker, swept board or not');
+  } finally {
+    await s.stop();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('a malformed frontmatter block refuses the start and names the line', async () => {

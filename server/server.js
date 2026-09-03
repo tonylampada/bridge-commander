@@ -456,6 +456,10 @@ const BUILTIN_KINDS = {
   'schedule-failed': { emoji: '🔔', level: 1 },
   'worker-stopped': { emoji: '⏸️', level: 2 },
   'worker-stalled': { emoji: '🐢', level: 1 },
+  // A worker that would not die. The record is kept on purpose (a session
+  // nothing points at is a leak), so this has to be loud enough that somebody
+  // ends it: level 1, the captain's bell.
+  'worker-kill-failed': { emoji: '🧟', level: 1 },
   // A start that could not put the worker on the tip it just fetched. It still
   // started — that is exactly why this is level 1: the work is running, on a
   // base nobody chose.
@@ -1939,16 +1943,13 @@ function archiveCard(card, body, actorDefault) {
   if (note) rec.note = note;
   fs.appendFileSync(ARCHIVE_FILE, JSON.stringify(rec) + '\n');
   board.cards = board.cards.filter((c) => c.id !== card.id);
-  // An archived card has no worker (invariant: Working ⇔ live worker): kill any
-  // lingering worker session (best-effort, fire-and-forget — a done worker's
-  // session otherwise outlives its card) and drop the registry entry so
-  // supervision stops watching a session that no longer represents live work.
-  for (const w of board.workers) {
-    if (w.card !== card.id) continue;
-    const ref = w.ref;
-    Promise.resolve().then(() => harnessFor(ref).kill(ref)).catch(() => {});
-  }
-  board.workers = board.workers.filter((w) => w.card !== card.id);
+  // An archived card has no worker (invariant: Working ⇔ live worker), and by
+  // now it usually has none left either — the handoff killed it. Any lingering
+  // one is ended by the CALLER, through killCardWorker: the kill is awaited and
+  // verified there, and the registry entry is dropped only once the pane is
+  // provably gone. It used to be a fire-and-forget kill plus an unconditional
+  // drop right here, which is exactly how a session ends up alive with nothing
+  // on the board pointing at it.
   // The kill lands on the board-level stream (the card is gone) with a card
   // reference. Typed by reason: merged = landed (level 1 — worth a bell),
   // killed = killed (level 2 — the captain's own act, no bell). Levels come from
@@ -2443,6 +2444,119 @@ async function releaseCardWorktree(card, w, opts = {}) {
   }
 }
 
+// killCardWorker(card, w, opts) — the handoff is the worker's DEATH, not its
+// retirement. Your review is the standing-room column: the captain is the
+// bottleneck, so a card can sit there for a day, and every card sitting there
+// used to pin one idle agent process for the whole wait. That process served
+// almost nothing — rework after a handoff is a fresh start by the DNA's own
+// rule, and the only thing it could still answer, a stray `worker.send`, had
+// nowhere to write once the same handoff released its worktree.
+//
+// So it goes with the worktree, on the same trigger and with the SAME
+// exceptions, for the same reason: a `keep_worktree: true` playbook reworks its
+// card in place (the conversation is the other half of that checkout), and a
+// worker that never reported done may hold the only copy of what it was doing.
+// A worktree still holding work is NOT one of them — that refusal is about the
+// ground, and a finished worker standing on ground nobody will take is still a
+// finished worker.
+//
+// This verb only KILLS: dropping the record is dropWorkerRecord below, and the
+// split is the point. The registry entry is the only handle anyone has on a
+// live agent process, so it may be dropped ONLY by a path that watched the pane
+// go: kill, then alive() again. A kill that throws, or a pane that answers
+// alive afterwards, keeps the record and says so at level 1 — a leaked session
+// that nothing on the board points at is worse than the idle one this whole
+// change exists to end.
+//
+// Never throws: every call site observes a lifecycle outcome it must not fail.
+async function killCardWorker(card, w, opts = {}) {
+  try {
+    if (!w) return null;
+    if (opts.honorKeep && w.keepWorktree) return null;
+    if (findWorker(w.card) !== w) return null; // already dropped, or a newer worker holds the card
+    const name = workerName(w.ref);
+    let alive = true;
+    let err = null;
+    try {
+      const impl = harnessFor(w.ref);
+      await impl.kill(w.ref);
+      alive = await impl.alive(w.ref);
+    } catch (e) { err = e; }
+    if (alive || err) {
+      const why = err ? String((err && err.message) || err) : 'the pane answered alive() after the kill';
+      const text = 'worker ' + name + ' could NOT be killed (' + why + ') — its record is kept, '
+        + 'so the session is still on the board rather than leaked; end it by hand '
+        + '(tmux kill-window -t ' + name + ') and archive or restart the card';
+      console.error(now() + ' worker kill for ' + card.id + ' failed: ' + why);
+      landCardEvent(card, mkEvent({ text, actor: 'server' }, { kind: 'worker-kill-failed' }));
+      saveBoard(); broadcast();
+      return { killed: false, reason: why };
+    }
+    landCardEvent(card, mkEvent({
+      text: 'worker ' + name + ' closed (' + (opts.reason || 'the card left Working') + ')',
+      actor: 'server', level: 2,
+    }, {}));
+    saveBoard(); broadcast();
+    return { killed: true };
+  } catch (e) {
+    console.error(now() + ' worker kill for ' + card.id + ' failed: ' + String((e && e.message) || e));
+    return null;
+  }
+}
+
+// dropWorkerRecord(card, w) — the registry entry goes, and what outlives it is
+// the card's own note of the run: `session` and `resumeId`, so the transcript
+// stays readable (and the archive snapshot carries it) long after the window is
+// gone. Call it ONLY behind a verified kill.
+//
+// It is deliberately NOT the second half of that kill. A checkout that refused
+// its release keeps its record, because that record is the last handle on the
+// unfinished business standing on it — the path, and a `teardown` that has not
+// run yet and gets another turn at archive. The window is dead either way; the
+// entry is what the next release point reads.
+function dropWorkerRecord(card, w) {
+  if (!w) return null;
+  const live = findCard(w.card);
+  if (live && live.attributes) {
+    live.attributes.session = workerName(w.ref);
+    if (w.ref && w.ref.resumeId) live.attributes.resumeId = w.ref.resumeId;
+  }
+  board.workers = board.workers.filter((x) => x !== w);
+  saveBoard(); broadcast();
+  return w;
+}
+
+// sweepStaleWorkers() — one pass at boot over the registry, because a rule that
+// only fires on the move leaves behind everything that was already there: a
+// board upgrading to this carries records for cards long since handed off, and
+// windows whose agent died months ago.
+//
+// A worker outlives neither its card's Working state nor a restart that forgot
+// to notice. Off the board entirely (archived, killed) → it goes, no exceptions,
+// exactly as archive would have done. Still on the board but out of Working →
+// the handoff's own rule, exceptions included, since a `keep_worktree` card
+// parked in review is deliberately waiting for its worker.
+//
+// Runs once, after the listen: nothing here is on the critical path of a boot.
+async function sweepStaleWorkers() {
+  for (const w of [...board.workers]) {
+    const card = findCard(w.card);
+    if (card && card.column === 'working') continue;
+    const stand = card || { id: w.card, title: w.card };
+    let kill;
+    if (card) {
+      if (w.keepWorktree || !w.done) continue;
+      kill = await killCardWorker(stand, w,
+        { reason: 'boot sweep: the card is in ' + columnTitle(card.column) + ', not Working' });
+    } else {
+      kill = await killCardWorker(stand, w, { reason: 'boot sweep: the card is no longer on the board' });
+    }
+    // The sweep is not a release point — it ends processes, it does not touch
+    // ground — so nothing here is waiting on the record.
+    if (kill && kill.killed) dropWorkerRecord(stand, w);
+  }
+}
+
 // The system move into Working — card.start is the ONE way in (invariant:
 // Working ⇔ live worker). Clears any pendingOrder (a start-order just executed).
 function enterWorking(card, text) {
@@ -2528,7 +2642,11 @@ async function doStartCard(card, body) {
         + 'and the brief would be silently dropped. To hand a live worker new instructions: '
         + 'bc-axi worker send ' + card.id + ' --text-file <f|->' };
     }
-    if (!existing) return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker' };
+    if (!existing) {
+      return { error: 'nothing to resume: card ' + card.id + ' has no recorded worker — a handoff '
+        + 'ends the worker it hands off, so rework after one is a fresh start (card start ' + card.id
+        + '), and a card that never started has nothing to reincarnate either' };
+    }
     // A worker paused with --expect-exit is stopped ON PURPOSE and already told
     // the board the way back — and --resume is not it. Resuming spawns a SECOND
     // run against a path the first one still holds, and the new session dies on
@@ -2702,6 +2820,24 @@ async function doStartCard(card, body) {
     }
     const idx = board.workers.indexOf(existing);
     if (idx !== -1) board.workers.splice(idx, 1);
+  } else if (card.attributes && card.attributes.worktree) {
+    // No record, but the card still points at a checkout. That is what a
+    // handoff leaves behind when its release did not finish — refused (a
+    // worktree still holding work), or interrupted by a restart of the board —
+    // and the pointer is now the only handle on it, the worker record having
+    // died with the handoff. So the restart releases against the POINTER, on
+    // exactly the terms the record would have got: refused means 409, never a
+    // silent `git worktree add` onto a path that already exists.
+    // The previous run's `teardown` is not recoverable here (it lived on the
+    // record) — it had its turn at the handoff.
+    const stale = { path: String(card.attributes.worktree), tool: 'git' };
+    if (fs.existsSync(stale.path)) {
+      const rel = await releaseWorktree(stale, project.path);
+      if (!rel.released) {
+        return { error: 'previous worker worktree not releasable (' + rel.reason + '): ' + stale.path, code: 409 };
+      }
+    }
+    delete card.attributes.worktree;
   }
 
   let wt;
@@ -3233,14 +3369,18 @@ async function prWatchTick() {
       if (merged.length && !anyOpenLeft) {
         const w = findWorker(card.id);
         let note = merged.map((p) => p.url).join(' ');
-        // card-archived hooks run — and finish or time out — BEFORE the
-        // worktree release: a hook may need paths inside $BC_WORKTREE.
+        // Same order as the archive endpoint: the worker dies first (awaited
+        // and verified — usually a no-op, the handoff having killed it), then
+        // the card-archived hooks run — and finish or time out — BEFORE the
+        // worktree release, since a hook may need paths inside $BC_WORKTREE.
+        const kill = await killCardWorker(card, w, { reason: 'the PR merged' });
         await fireHooks('card-archived', card, w, { boardLevel: true });
         // the archive record is the only place a merged card's refusal is
         // readable afterwards, so the reason rides the note as well as the
         // timeline event the release lands
         const rel = await releaseCardWorktree(card, w);
         if (rel && !rel.released) note += ' (worktree NOT released: ' + rel.reason + ')';
+        if (kill && kill.killed) dropWorkerRecord(card, w);
         archiveCard(card, { reason: 'merged', note, actor: 'server' }); // landed — the level-1 bell
       }
       saveBoard(); broadcast();
@@ -4457,7 +4597,19 @@ const server = http.createServer(async (req, res) => {
         // and its own saveBoard/broadcast carries it (including a refusal) to
         // every screen. Same shape archive already uses.
         if (wasWorking && card.column !== 'working' && (!w || w.done)) {
-          releaseCardWorktree(card, w, { honorKeep: true }); // never throws
+          // The worker dies first and the ground goes after it: the kill is a
+          // tmux window closing (fast), while the release queues behind the
+          // per-clone lock and a playbook's teardown — minutes, on a bad day.
+          // Chained so the timeline reads in that order; neither ever throws.
+          killCardWorker(card, w, { honorKeep: true, reason: 'the handoff — the card left Working' })
+            .then(async (kill) => {
+              const rel = await releaseCardWorktree(card, w, { honorKeep: true });
+              // A release that REFUSED leaves work standing on that checkout,
+              // and its teardown unspent. Keep the record — archive is the next
+              // release point and reads it there. Everything else: the worker
+              // is gone from the board as well as from tmux.
+              if (kill && kill.killed && (!rel || rel.released)) dropWorkerRecord(card, w);
+            });
         }
         saveBoard(); broadcast();
         return sendJson(res, 200, r);
@@ -4513,8 +4665,18 @@ const server = http.createServer(async (req, res) => {
         // still need paths inside $BC_WORKTREE. The card is gone, so nothing
         // is ever kept here; a worktree already released at the handoff is a
         // no-op, and an unclean one stays exactly where it is.
-        fireHooks('card-archived', card, w, { boardLevel: true })
-          .then(() => releaseCardWorktree(card, w));
+        // The kill first — it is fast and it is what an archived card must not
+        // keep — then the hooks (which may still need paths inside
+        // $BC_WORKTREE), then the release. `keep_worktree` buys nothing here:
+        // the card is gone, there is nothing left to rework.
+        killCardWorker(card, w, { reason: 'the card was archived' })
+          .then(async (kill) => {
+            await fireHooks('card-archived', card, w, { boardLevel: true });
+            await releaseCardWorktree(card, w);
+            // Last release point there will ever be: the record has nothing
+            // left to be the handle FOR, refused release or not.
+            if (kill && kill.killed) dropWorkerRecord(card, w);
+          });
         return sendJson(res, 200, r);
       }
       // promote-to-artifact — the deliberate tool. POST adds, DELETE removes an
@@ -5116,6 +5278,9 @@ server.on('error', (e) => { console.error('server error: ' + e.message); cleanup
 server.listen(PORT, BIND_HOST, () => {
   console.log('bridge-commander server up: http://localhost:' + PORT + '/ host=' + BIND_HOST +
     ' workspace=' + WORKSPACE + ' pid=' + process.pid);
+  // A worker outlives neither its card's Working state nor a board restart that
+  // forgot to notice. Off the critical path of the boot, and it never throws.
+  sweepStaleWorkers().catch((e) => console.error(now() + ' worker sweep failed: ' + String((e && e.message) || e)));
 });
 // Non-loopback bind: also listen on loopback so local CLI/UI keep working.
 if (!LOOPBACKS.includes(BIND_HOST) && BIND_HOST !== '0.0.0.0') {
