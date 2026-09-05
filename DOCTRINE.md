@@ -137,7 +137,8 @@ when the field was still called `brief`, which nothing backfills — have none: 
 `card patch --playbook <id>` when you get to them.
 
 A playbook orders only what a worker can run: the Skill tool refuses a `disable-model-invocation`
-skill to an agent — `writing-great-skills` is one — so that step is yours, at handoff.
+skill to an agent — `retro` is one — so that step is yours, at handoff. A skill without that flag
+(`writing-for-agents`, say) a worker loads for itself, so a playbook may order it.
 
 ## Starting work
 
