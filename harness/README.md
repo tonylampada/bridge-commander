@@ -235,6 +235,22 @@ launch line, the screen signatures, and where the turn-end relay rides
   clears; codex's busy footer matches the shared `BUSY_RE`
   ("esc to interrupt").
 
+## Moving a lieutenant between harnesses
+
+A lieutenant's harness is a property of its SESSION (`ref.harness`), so there is
+no migration to perform: `lieutenant.patch --harness` kills the lieutenant's `lt`
+window — never its session, whose worker windows are alive — and spawns a new
+session on the other harness, on the same from-nothing prompt `/reset` and
+supervision's non-resumable branch use (doctrine + charter + owned cards +
+pending queue). The ref is rewritten whole and comes back WITHOUT a `resumeId`:
+a claude session id means nothing to codex, and a stale one would have
+supervision try to resume a thread that never existed. The conversation is lost
+in the move; the delivery queue is not, so the new session drains everything the
+old one never acked. A `model` on the lieutenant rides `opts.extraArgs` as
+`--model` on every spawn AND resume of it — recorded in `<key>.spawn-args` like a
+worker's, so a later respawn comes back on the same model instead of the
+harness's default.
+
 ## Adding a new harness
 
 Implement the seven verbs in one module and register it (claude and codex are

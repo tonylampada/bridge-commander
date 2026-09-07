@@ -372,6 +372,18 @@
              title="card-id prefix — heads every card id this lieutenant mints (MON-14)">
       <select id="ls-voice" title="the voice this lieutenant speaks with"></select>
     </div>
+    <!-- What this lieutenant RUNS ON. Changing the harness is not cosmetic: it
+         kills the session and respawns it, so it asks first. The model is a
+         free-text box on purpose — the board keeps no list of model names, the
+         string goes straight to the harness CLI. -->
+    <div class="lt-row">
+      <select id="ls-harness" title="agent harness — changing this respawns the lieutenant">
+        <option value="claude">claude</option>
+        <option value="codex">codex</option>
+      </select>
+      <input id="ls-model" placeholder="model (harness default)" autocomplete="off" spellcheck="false"
+             title="passed to the harness as --model on every spawn and resume; empty = the harness default">
+    </div>
     <div id="ls-grid"></div>
     <div class="nc-actions">
       <button type="button" id="ls-cancel">close</button>

@@ -272,7 +272,10 @@ test('cli: lieutenant create writes the charter to the memory file, and list rea
 
     r = await runCli(['lieutenant', 'list', ...args]);
     assert.strictEqual(r.code, 0, r.stderr);
-    assert.match(r.stdout, /ada\tAda\t#58b6ff\tADA-1\tOwn the API surface\./);
+    // …and what it runs on, between the next id and the charter's first line.
+    // '-' because this one was registered without a session, and a harness is a
+    // property of the session it runs in.
+    assert.match(r.stdout, /ada\tAda\t#58b6ff\tADA-1\t-\tOwn the API surface\./);
 
     // --charter-file wrote the memory file, and the board record stayed clean
     assert.strictEqual(fs.readFileSync(charterPath(s.dir, 'ada'), 'utf8'),

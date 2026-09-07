@@ -467,6 +467,10 @@ const BUILTIN_KINDS = {
   'worker-paused': { emoji: '💤', level: 2 },
   parked: { emoji: '🅿️', level: 2 },
   respawned: { emoji: '♻️', level: 1 },
+  // The captain moved a lieutenant to another harness (or model): its session
+  // is gone and a new one is up on the respawn prompt. Level 1 — nobody should
+  // learn that from the session name changing under them.
+  'harness-switch': { emoji: '🔀', level: 1 },
   'needs-captain': { emoji: '🚨', level: 1 },
   line: { emoji: '📞', level: 2 },
 };
@@ -513,6 +517,18 @@ function validAvatar(a) { return Number.isInteger(a) && a >= 0 && a <= 63; }
 // lieutenant voice: an opaque TTS-engine voice id, whatever the engine calls its
 // own. Absent = the board's voice speaks for this lieutenant (the default).
 function validVoice(v) { return typeof v === 'string' && v.trim() ? v.trim().slice(0, 200) : null; }
+// lieutenant model: the string handed STRAIGHT to the harness CLI as `--model`.
+// Bridge Commander keeps no list of model names — a board that did would be
+// wrong the week a new one ships — so the only rules are the ones argv itself
+// has: one token, no control characters, bounded. Absent = the harness default
+// (`~/.codex/config.toml` for codex, claude's own for claude).
+function validModel(m) {
+  if (typeof m !== 'string') return null;
+  const t = m.trim();
+  // eslint-disable-next-line no-control-regex
+  if (!t || /[\s\u0000-\u001f]/.test(t) || t.length > 100) return null;
+  return t;
+}
 function labelIndex(name) { return board.labels.findIndex((l) => l && l.name === name); }
 function registerCardLabels() {
   for (const c of board.cards) {
@@ -572,6 +588,8 @@ function uniquePrefixIn(lts, base, exceptId) {
   }
 }
 const BAD_PREFIX = 'bad prefix (1-8 letters/digits starting with a letter — it heads every card id this lieutenant mints)';
+const BAD_MODEL = 'bad model (one token, no spaces or control characters, max 100 chars — '
+  + 'it is handed straight to the harness CLI as --model; null clears it back to the harness default)';
 function prefixOwner(p, exceptId) {
   return board.lieutenants.find((l) => l.id !== exceptId && l.prefix === p) || null;
 }
@@ -644,6 +662,7 @@ function createLieutenant(body) {
   };
   if (validAvatar(body.avatar)) lt.avatar = body.avatar;
   if (validVoice(body.voice)) lt.voice = validVoice(body.voice);
+  if (validModel(body.model)) lt.model = validModel(body.model);
   if (isHarnessRef(body.ref)) lt.ref = body.ref; // the live-session address, persisted with the board
   board.lieutenants.push(lt);
   const ev = mkEvent({ text: 'lieutenant ' + lt.name + ' joined the bridge', actor: body.actor || 'user', level: 2 }, {});
@@ -673,18 +692,80 @@ function lieutenantPrompt(name, id) {
       + 'Your first act, now and at the start of every turn: run `bc-axi drain`. Ack what you handle.',
   ].filter(Boolean).join('\n\n');
 }
+// A handoff artifact on one of the lieutenant's PLAN cards is the note the
+// previous incarnation left for whoever picks the work up. The fresh session
+// gets the PATHS and nothing else — a prompt that inlined them would be a
+// launch prompt the size of a plan, and the agent can read what it decides it
+// needs. Label match is `handoff*` (handoff, handoff-2026-09, handoff notes).
+function handoffPointers(owned) {
+  const out = [];
+  for (const c of owned) {
+    if (c.type !== 'plan') continue;
+    const arts = Array.isArray(c.attributes && c.attributes.artifacts) ? c.attributes.artifacts : [];
+    for (const a of arts) {
+      if (!a || typeof a.label !== 'string' || !/^handoff/i.test(a.label.trim())) continue;
+      const uri = String(a.uri || '');
+      out.push('- ' + c.id + ' (' + a.label.trim() + '): '
+        + (uri.startsWith('file://') ? decodeURIComponent(uri.slice(7)) : uri));
+    }
+  }
+  return out;
+}
 // Relaunch prompt for a lieutenant whose dead session has no recoverable
 // memory (harness.resumable said no): the same doctrine + charter launch
-// prompt, plus a compact board digest — owned cards and pending queue count —
-// so the fresh session reorients from truth instead of lost conversation.
+// prompt, plus a compact board digest — owned cards, the handoff notes on them,
+// and the pending queue count — so the fresh session reorients from truth
+// instead of lost conversation.
 function respawnPrompt(lt) {
   const owned = board.cards.filter((c) => c.owner === lt.id);
   const digest = owned.map((c) => '- ' + c.id + ' [' + c.column + '] ' + c.title).join('\n');
+  const handoffs = handoffPointers(owned);
   return lieutenantPrompt(lt.name, lt.id) + '\n\n'
     + '## Respawned without memory\n\n'
     + 'Your previous session is gone; the board is truth — reorient from it.\n'
     + 'Your cards (' + owned.length + '):\n' + (digest || '(none)') + '\n'
+    + (handoffs.length
+      ? 'Handoff notes on your plan cards — read these first:\n' + handoffs.join('\n') + '\n'
+      : '')
     + 'Pending queue: ' + pendingItems(lt.id).length + ' item(s). Your first act: `bc-axi drain`.';
+}
+
+// The launch options every lieutenant spawn and resume goes out with. The model
+// rides in `extraArgs` exactly the way card.start pins a worker's, so the flag
+// is recorded with the spawn and replayed by a resume — a lieutenant pinned to
+// a model comes back on it, respawn after respawn.
+function ltLaunchOpts(lt, extra) {
+  const opts = Object.assign(
+    { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false },
+    extra || {}
+  );
+  const model = lt && validModel(lt.model);
+  if (model) opts.extraArgs = ['--model', model];
+  return opts;
+}
+
+// The one way a lieutenant comes back FROM NOTHING: kill whatever holds its
+// window and spawn a new session on respawnPrompt (doctrine + charter + what it
+// owns). /reset, supervision's non-resumable branch and a harness switch all
+// land here, so there is one implementation of "start this lieutenant over",
+// not three.
+//
+// `harness` names the one to come back on — absent = the one it is on. The KILL
+// always goes to the harness that owns the pane today (a switch changes hands
+// between these two lines), and it takes the lieutenant's WINDOW, never its
+// session: the worker windows cohabiting it are alive and did not ask to die.
+// A kill that fails is logged, not fatal — a pane nobody could clear announces
+// itself in the spawn that follows, and a dead one is exactly what we wanted.
+async function respawnFresh(lt, harness) {
+  const impl = getHarness(harness || lt.ref.harness);
+  // Keep the session name (an incarnation, not a new entity) when it is
+  // spawnable; a founder's foreign name gets a workspace-scoped one.
+  const session = /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
+    ? lt.ref.session : names.lieutenantSession(WORKSPACE, lt.id);
+  const window = lt.ref.window || names.LIEUTENANT_WINDOW;
+  try { await harnessFor(lt.ref).kill({ ...lt.ref, window }); }
+  catch (e) { console.error(now() + ' kill failed relaunching ' + lt.id + ': ' + String((e && e.message) || e)); }
+  return impl.spawn(lt.ref.cwd, respawnPrompt(lt), ltLaunchOpts(lt, { session, window }));
 }
 
 async function spawnLieutenant(body) {
@@ -705,24 +786,28 @@ async function spawnLieutenant(body) {
   const harnessName = String(body.harness || readConfig().harness || 'claude');
   let impl;
   try { impl = getHarness(harnessName); } catch (e) { return { error: String(e.message || e) }; }
+  if (body.model !== undefined && body.model !== null && body.model !== '' && !validModel(body.model)) {
+    return { error: BAD_MODEL };
+  }
+  // A revived lieutenant keeps the model it was pinned to unless this call
+  // names another; a new one is born on whatever it was given.
+  const model = validModel(body.model) || (existing && validModel(existing.model)) || null;
   const session = names.lieutenantSession(WORKSPACE, id);
   let ref;
   try {
-    ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id), {
+    ref = await impl.spawn(WORKSPACE, lieutenantPrompt(name, id), ltLaunchOpts({ model }, {
       session,
       window: names.LIEUTENANT_WINDOW, // its own window in its own session — see names.js
-      stateDir: HARNESS_STATE_DIR,
-      callbackUrl: TURNEND_URL,
-      installHooks: false,
       // Only the first run sends this, and only when the person said so out
       // loud: the harness decides what it means (for claude, IS_SANDBOX=1).
       allowRoot: !!body.allowRoot,
-    });
+    }));
   } catch (e) {
     return { error: 'spawn failed: ' + String((e && e.message) || e), code: 502 };
   }
   if (existing) {
     existing.ref = ref;
+    if (model) existing.model = model; else delete existing.model;
     return { lieutenant: existing, spawned: true };
   }
   return Object.assign({ spawned: true }, createLieutenant(Object.assign({}, body, { id, ref })));
@@ -1500,15 +1585,9 @@ async function resetLieutenant(id) {
   const lt = findLieutenant(id);
   if (!lt) return { error: 'unknown lieutenant: ' + id };
   if (!isHarnessRef(lt.ref)) return { error: 'lieutenant ' + id + ' has no session to reset' };
-  let impl;
-  try { impl = getHarness(lt.ref.harness); } catch (e) { return { error: String((e && e.message) || e) }; }
-  const session = /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
-    ? lt.ref.session : names.lieutenantSession(WORKSPACE, id);
-  const window = lt.ref.window || names.LIEUTENANT_WINDOW;
-  const opts = { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false };
+  try { getHarness(lt.ref.harness); } catch (e) { return { error: String((e && e.message) || e) }; }
   try {
-    await impl.kill({ ...lt.ref, window });
-    lt.ref = await impl.spawn(lt.ref.cwd, respawnPrompt(lt), Object.assign({ session, window }, opts));
+    lt.ref = await respawnFresh(lt);
   } catch (e) {
     return { error: 'reset failed: ' + String((e && e.message) || e) };
   }
@@ -1544,6 +1623,55 @@ async function withCycleGuard(id, fn) {
   } finally {
     cyclingLieutenants.delete(id);
   }
+}
+
+// lieutenant.patch { harness } — move a LIVING lieutenant to another harness.
+// retire is refused while it owns cards, so before this there was no front door
+// at all: the captain's only route from claude to codex was hand-editing
+// board.json under a running server.
+//
+// It is a RELAUNCH, not a migration — no harness can hand another its
+// conversation — so it is deliberately the same from-nothing path /reset and
+// supervision take: the new session opens on doctrine + charter + owned cards +
+// pending queue (+ the handoff notes on its plan cards), and the queue it never
+// drained is still there, because the queue is the truth and the conversation
+// was the cache.
+//
+// resumeId goes with the old harness: an id minted by claude means nothing to
+// codex, and a ref carrying one would have supervision try to resume a thread
+// that does not exist.
+//
+// Wrapped in withCycleGuard for the same reason /reset is: between the kill and
+// the spawn the lieutenant is legitimately down, and supervision's one rule for
+// a lieutenant that is down is to respawn it — racing this spawn for the pane
+// and telling the captain his lieutenant crashed while he is the one moving it.
+async function switchLieutenantHarness(lt, harness, actor) {
+  try { getHarness(harness); } catch (e) { return { error: String((e && e.message) || e) }; }
+  if (!isHarnessRef(lt.ref)) {
+    return { error: 'lieutenant ' + lt.id + ' has no session — a harness is a property of the '
+      + 'session it runs in, so there is nothing here to move (spawn one first)', code: 409 };
+  }
+  if (lt.ref.harness === harness) return { ok: true, switched: false, lieutenant: lt };
+  let ref;
+  try {
+    ref = await withCycleGuard(lt.id, () => respawnFresh(lt, harness));
+  } catch (e) {
+    return { error: 'harness switch failed: ' + String((e && e.message) || e), code: 502 };
+  }
+  // The ref is rewritten WHOLE — window kept, resumeId gone — rather than
+  // patched: half of an old address is not an address.
+  lt.ref = { harness: ref.harness, session: ref.session, cwd: ref.cwd, window: ref.window || names.LIEUTENANT_WINDOW };
+  respawnAttempts.delete(lt.id);
+  nudged.delete(lt.id); // the new session owes a drain; its predecessor's memory went with it
+  const ev = mkEvent({
+    text: 'lieutenant ' + lt.name + ' moved to ' + harness
+      + (validModel(lt.model) ? ':' + validModel(lt.model) : '')
+      + ' — respawned as ' + lt.ref.session,
+    actor: actor || 'user',
+  }, { kind: 'harness-switch', level: 1 });
+  board.events.push(ev);
+  if (pendingItems(lt.id).length) scheduleWake(lt.id);
+  return { ok: true, switched: true, lieutenant: lt, event: ev };
 }
 
 // A captain chat message starting with "/" routes HERE instead of becoming a
@@ -3390,21 +3518,15 @@ async function superviseTick() {
         // Resume when memory is recoverable; else relaunch a fresh session with
         // charter + owned cards + pending queue as the prompt (the DNA's
         // auto-respawn side effect) — a bare agent with no context helps nobody.
-        const opts = { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false };
+        // The model rides both halves: a resume replays the recorded --model,
+        // and passing it explicitly keeps a lieutenant repinned since its last
+        // launch from coming back on the old one.
+        const opts = ltLaunchOpts(lt);
         let ref;
         if (await impl.resumable(lt.ref, opts)) {
           ref = await impl.resume(lt.ref, opts);
         } else {
-          // Keep the session name (an incarnation, not a new entity) when it is
-          // spawnable; a founder's foreign name gets a workspace-scoped one.
-          const session = /^bc-[A-Za-z0-9_-]+$/.test(lt.ref.session)
-            ? lt.ref.session : names.lieutenantSession(WORKSPACE, lt.id);
-          const window = lt.ref.window || names.LIEUTENANT_WINDOW;
-          // Clear any dead pane still holding the name — the lieutenant's
-          // WINDOW, never its session: the worker windows cohabiting it are
-          // alive and did not ask to die (an unmigrated ref would take them all).
-          await impl.kill({ ...lt.ref, window });
-          ref = await impl.spawn(lt.ref.cwd, respawnPrompt(lt), Object.assign({ session, window }, opts));
+          ref = await respawnFresh(lt); // kills the dead pane, relaunches on the digest prompt
         }
         lt.ref = ref;
         respawnAttempts.delete(lt.id);
@@ -4565,7 +4687,7 @@ const server = http.createServer(async (req, res) => {
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, event: r.event, memory: r.memory });
     }
-    if (ltRoute && req.method === 'PATCH') { // update name/color/avatar/voice/prefix/ref (init idempotency)
+    if (ltRoute && req.method === 'PATCH') { // name/color/avatar/voice/prefix/model/harness/ref (init idempotency)
       const lt = findLieutenant(decodeURIComponent(ltRoute[1]));
       if (!lt) return sendJson(res, 404, { error: 'unknown lieutenant: ' + decodeURIComponent(ltRoute[1]) });
       const body = JSON.parse(await readBody(req) || '{}');
@@ -4604,6 +4726,27 @@ const server = http.createServer(async (req, res) => {
       if (body.voice !== undefined) {
         const v = validVoice(body.voice);
         if (v) lt.voice = v; else delete lt.voice;
+      }
+      // The model is stored, not applied: it rides `--model` on the next spawn
+      // or resume this lieutenant gets. Set BEFORE the harness switch below, so
+      // a captain who moves harness and model in one call lands on both.
+      // null / "" clears it back to the harness's own default.
+      if (body.model !== undefined) {
+        if (body.model === null || body.model === '') delete lt.model;
+        else {
+          const m = validModel(body.model);
+          if (!m) return sendJson(res, 400, { error: BAD_MODEL });
+          lt.model = m;
+        }
+      }
+      // Last, because it is the only field that costs the lieutenant its
+      // session: everything above is already on the record the respawn prompt
+      // is built from.
+      if (body.harness !== undefined && body.harness !== null && String(body.harness) !== '') {
+        const sw = await switchLieutenantHarness(lt, String(body.harness), body.actor);
+        if (sw.error) { saveBoard(); broadcast(); return sendJson(res, sw.code || 400, { error: sw.error }); }
+        saveBoard(); broadcast();
+        return sendJson(res, 200, { ok: true, lieutenant: lt, switched: sw.switched, event: sw.event });
       }
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, lieutenant: lt });

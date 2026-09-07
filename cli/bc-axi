@@ -833,7 +833,12 @@ async function cmdLtCreate() {
     + (ref ? ' — live session ' + ref.harness + ':' + ref.session : ''));
 }
 
-const LT_PATCH_USAGE = 'usage: bc-axi lieutenant patch <id> [--avatar N|none] [--color #rrggbb] [--prefix ABC]';
+const LT_PATCH_USAGE = 'usage: bc-axi lieutenant patch <id> [--avatar N|none] [--color #rrggbb] [--prefix ABC]'
+  + ' [--harness claude|codex] [--model m|none]\n'
+  + '  --harness KILLS the current session and respawns the lieutenant on the other harness with\n'
+  + '  charter + owned cards + pending queue as its prompt; the conversation does not survive.\n'
+  + '  --model is stored and rides --model on every later spawn/resume; `none` clears it back to\n'
+  + '  the harness default (~/.codex/config.toml for codex).';
 async function cmdLtPatch() {
   const id = positional[0];
   if (!id) die(LT_PATCH_USAGE);
@@ -841,13 +846,29 @@ async function cmdLtPatch() {
   if (opts.avatar !== null) body.avatar = opts.avatar === 'none' ? null : parseAvatarOpt(opts.avatar);
   if (opts.color) body.color = opts.color;
   if (opts.prefix) body.prefix = opts.prefix;
+  if (opts.model !== null) body.model = opts.model === 'none' ? null : opts.model;
+  if (opts.harness) body.harness = opts.harness;
   if (!Object.keys(body).length) die(LT_PATCH_USAGE);
-  // A prefix another lieutenant already holds is refused (409) — say whose it is.
+  // A prefix another lieutenant already holds is refused (409) — say whose it
+  // is. So is a harness switch on a lieutenant with no session to move.
   let r;
-  try { r = await request('PATCH', '/api/lieutenants/' + encodeURIComponent(id), body); }
+  // A switch is a whole spawn: launch-settle takes as long as it takes.
+  try { r = await request('PATCH', '/api/lieutenants/' + encodeURIComponent(id), body, body.harness ? 120000 : undefined); }
   catch (e) { die(e.status === 409 && e.body && e.body.error ? 'refused: ' + e.body.error : e.message); }
-  console.log('lieutenant ' + id + ' updated (avatar=' + (r.lieutenant.avatar != null ? r.lieutenant.avatar : 'none')
-    + ' color=' + r.lieutenant.color + ' prefix=' + r.lieutenant.prefix + ')');
+  const lt = r.lieutenant;
+  console.log('lieutenant ' + id + ' updated (avatar=' + (lt.avatar != null ? lt.avatar : 'none')
+    + ' color=' + lt.color + ' prefix=' + lt.prefix
+    + ' harness=' + (lt.ref ? lt.ref.harness : 'none')
+    + ' model=' + (lt.model || 'default') + ')');
+  if (body.harness) {
+    console.log(r.switched
+      ? 'respawned on ' + lt.ref.harness + ' — session ' + lt.ref.session
+        + '; it opens on charter + owned cards + pending queue'
+      : 'already on ' + body.harness + ' — session left alone');
+  } else if (body.model !== undefined) {
+    console.log('the model applies to the NEXT spawn or resume of this lieutenant'
+      + ' (bc-axi lieutenant patch ' + id + ' --harness ' + (lt.ref ? lt.ref.harness : 'codex') + ' respawns it now)');
+  }
 }
 
 async function cmdLtRetire() {
@@ -865,8 +886,11 @@ async function cmdLtList() {
   if (opts.json) return console.log(JSON.stringify(r.lieutenants, null, 2));
   for (const l of r.lieutenants) {
     const charter = readCharter(WORKSPACE, l.id).split('\n')[0].slice(0, 80);
+    // The harness is a property of the SESSION, so a lieutenant with none shows
+    // '-' rather than a default it is not actually running on.
+    const run = (l.ref ? l.ref.harness : '-') + (l.model ? ':' + l.model : '');
     console.log(l.id + '\t' + l.name + '\t' + l.color + '\t' + l.prefix + '-' + ((l.cardSeq || 0) + 1)
-      + (charter ? '\t' + charter : ''));
+      + '\t' + run + (charter ? '\t' + charter : ''));
   }
 }
 
@@ -1859,13 +1883,20 @@ if (!commands[cmd]) {
     '                                         to the first three letters of the name); --spawn births a REAL\n' +
     '                                         agent session in the workspace root (doctrine + charter as\n' +
     '                                         launch prompt, ref persisted)\n' +
-    '  lieutenant list [--json]               id, name, color, next card id, charter first line\n' +
+    '  lieutenant list [--json]               id, name, color, next card id, harness[:model],\n' +
+    '                                         charter first line\n' +
     '                                         (the charter is lieutenants/<id>/README.md, the memory file\n' +
     '                                         the agent is launched on — --charter-file creates it when\n' +
     '                                         absent and never replaces one)\n' +
     '  lieutenant patch <id> [--avatar N|none] [--color #rrggbb] [--prefix ABC]\n' +
+    '                        [--harness claude|codex] [--model m|none]\n' +
     '                                         lieutenant.update: cosmetics + the card-id prefix (refused\n' +
-    '                                         when another lieutenant holds it) — name/id stay immutable\n' +
+    '                                         when another lieutenant holds it) — name/id stay immutable.\n' +
+    '                                         --harness MOVES a living lieutenant: kills its session and\n' +
+    '                                         respawns it on the other harness with charter + owned cards\n' +
+    '                                         + pending queue as the prompt (the conversation is lost, the\n' +
+    '                                         queue is not). --model is stored and rides --model on every\n' +
+    '                                         later spawn/resume; `none` = the harness default\n' +
     '  lieutenant retire <id>                 lieutenant.retire: refuses while the lieutenant owns\n' +
     '                                         non-archived cards; else kills its session, removes it\n' +
     '                                         and its queue, level-1 event\n' +

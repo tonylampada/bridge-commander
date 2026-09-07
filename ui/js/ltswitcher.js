@@ -173,6 +173,8 @@ const lsColor = document.getElementById('ls-color');
 const lsPrefix = document.getElementById('ls-prefix');
 const lsVoice = document.getElementById('ls-voice');
 const lsGrid = document.getElementById('ls-grid');
+const lsHarness = document.getElementById('ls-harness');
+const lsModel = document.getElementById('ls-model');
 let lsLtId = null;
 // Exported for the config screen's lieutenants tab: its ⚙ is THIS modal, not a
 // second form over the same four fields.
@@ -186,6 +188,8 @@ export function openLtSettings(ltId) {
   lsGrid.innerHTML = avatarGridHtml(lieutenantAvatar(ltId));
   wireAvatarGrid(lsGrid, (idx) => patch({ avatar: idx }));
   fillVoices(l.voice || '');
+  fillHarness(l);
+  lsModel.value = l.model || '';
   lsEl.hidden = false;
   lsPrefix.focus();
 }
@@ -214,7 +218,53 @@ function fillVoices(chosen) {
     if (chosen && list.some((v) => v.id === chosen)) lsVoice.value = chosen;
   });
 }
+// The harness a lieutenant is on is a property of its SESSION, so the select
+// reads off the ref — and a lieutenant running on something the board does not
+// list (a test harness, one somebody registered) gets its own option rather
+// than being silently shown as claude.
+function fillHarness(l) {
+  const cur = l.ref && l.ref.harness ? l.ref.harness : '';
+  for (const extra of [...lsHarness.querySelectorAll('option[data-extra]')]) extra.remove();
+  if (cur && ![...lsHarness.options].some((o) => o.value === cur)) {
+    const o = document.createElement('option');
+    o.value = cur;
+    o.textContent = cur;
+    o.dataset.extra = '1';
+    lsHarness.appendChild(o);
+  }
+  lsHarness.value = cur;
+  // Nothing to move: a lieutenant with no session has no harness to be on.
+  lsHarness.disabled = !cur;
+  lsHarness.title = cur ? 'agent harness — changing this respawns the lieutenant'
+    : 'no live session: a harness is a property of the session it runs in';
+}
 lsColor.onchange = () => patch({ color: lsColor.value });
+// The one field here that costs the lieutenant its conversation, so it is the
+// one that asks. Declined (or refused server-side) puts the select back, so the
+// box never shows a harness this lieutenant is not on.
+lsHarness.onchange = async () => {
+  const l = lieutenant(lsLtId);
+  const cur = l && l.ref ? l.ref.harness : '';
+  const want = lsHarness.value;
+  if (!l || want === cur) return;
+  const model = (l.model || '').trim();
+  if (!confirm('Move ' + (l.name || lsLtId) + ' to ' + want + (model ? ' (' + model + ')' : '') + '?\n\n'
+    + 'This kills the current session and respawns it with charter + cards + queue.'
+    + ' The conversation does not survive; the delivery queue does.')
+    || !(await patch({ harness: want }))) lsHarness.value = cur;
+};
+// Free text, committed on change: the board keeps no list of model names — the
+// string is handed straight to the harness CLI. Empty clears it back to the
+// harness default. It applies to the NEXT spawn or resume, not to the live
+// session, so nothing is killed here.
+lsModel.onchange = async () => {
+  const l = lieutenant(lsLtId);
+  const want = lsModel.value.trim();
+  if (!l || want === (l.model || '')) return;
+  if (!(await patch({ model: want || null }))) lsModel.value = l.model || '';
+  else lsModel.value = want;
+};
+lsModel.onkeydown = (e) => { if (e.key === 'Enter') { e.preventDefault(); lsModel.blur(); } };
 // The card-id prefix commits on change like the other picks. The server refuses
 // one another lieutenant already holds — say so and put the field back, so the
 // box never shows a prefix this lieutenant does not have.
