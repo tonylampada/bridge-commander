@@ -44,6 +44,17 @@ test('defaultCategoryPolicy: done/chat/error toast on with non-none sounds', () 
   }
 });
 
+test('permission prompts get their own approval bucket: toast + a sound by default', () => {
+  assert.strictEqual(categorize('permission', 1), 'approval');
+  const d = defaultCategoryPolicy();
+  assert.strictEqual(d.approval.toast, true);
+  assert.notStrictEqual(d.approval.sound, 'none');
+  // the captain can mute it without touching failures
+  const settings = { master: true, categories: { approval: { sound: 'none' } } };
+  assert.deepStrictEqual(policyFor('permission', 1, settings), { toast: true, sound: 'none' });
+  assert.strictEqual(policyFor('failed', 1, settings).sound, d.error.sound);
+});
+
 test('defaultCategoryPolicy: other is toast off + no sound', () => {
   const d = defaultCategoryPolicy();
   assert.deepStrictEqual(d.other, { toast: false, sound: 'none' });

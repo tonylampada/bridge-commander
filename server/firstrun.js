@@ -189,10 +189,19 @@ function gitIdentityText(id) {
     + '  git config --global user.email "<their email>"';
 }
 
+// The permission mode agents launch with (.bridge-commander/config.json
+// `permissionMode`). Only 'bypass' launches with --dangerously-skip-permissions,
+// so only 'bypass' can hit the root refusal and the bypass consent screen.
+function permissionModeOf(config) {
+  const m = config && config.permissionMode;
+  return typeof m === 'string' && m ? m : 'auto';
+}
+
 // Root. Claude Code refuses `--dangerously-skip-permissions` as uid 0 and exits
 // immediately, so as root there is no lieutenant to be had — the board would
 // come up with nobody on it. That is checked HERE, before anything is written,
-// rather than discovered from a dead pane afterwards.
+// rather than discovered from a dead pane afterwards. Only asked in bypass mode:
+// no other mode trips the refusal.
 function rootBlockText() {
   return 'you are running as root, and Claude Code refuses --dangerously-skip-permissions as root.\n'
     + 'Bridget is a real claude session, so as root she cannot start and you would be left with a\n'
@@ -232,7 +241,13 @@ function rootBlockText() {
 // passes to her spawn. Without it the line dies on sight with the very refusal
 // the person is trying to get past, which reads as "these instructions are
 // broken" at exactly the moment they have no other move.
+//
+// The flag is the spawn's own (opts.mode, default 'auto'), so the hand run
+// clears the same screens her launch meets. Outside bypass there is no root
+// refusal and no IS_SANDBOX=1. codex ignores the mode, so its line is unchanged.
 function handRunLine(bin, here, opts = {}) {
+  const mode = opts.mode || 'auto';
+  if (bin === 'claude' && mode !== 'bypass') return '  cd ' + here + ' && claude --permission-mode ' + mode;
   const root = opts.root === undefined ? isRoot() : opts.root;
   return '  cd ' + here + ' && ' + (root ? 'IS_SANDBOX=1 ' : '') + bin + ' --dangerously-skip-permissions';
 }
@@ -244,15 +259,20 @@ function agentAtHome(bin) {
   try { fs.accessSync(p, fs.constants.X_OK); return p; } catch (e) { return ''; }
 }
 
-function agentMissingText(harness, workspace) {
+function agentMissingText(harness, workspace, opts = {}) {
   const codex = harness === 'codex';
   const bin = codex ? 'codex' : 'claude';
   const here = workspace || '<the workspace folder>';
   const installed = agentAtHome(bin);
+  const mode = opts.mode || 'auto';
+  // The consent screen exists only for the skip-permissions launch.
+  const screens = codex || mode === 'bypass'
+    ? '(a theme picker, a login, a trust question about this folder, and a\n'
+      + 'one-time bypass-permissions consent screen that only the launch flag raises):\n'
+    : '(a theme picker, a login, and a trust question about this folder):\n';
   const runByHand = 'Then run it once by hand IN THE WORKSPACE — it has setup screens of its own that a spawned\n'
-    + 'session cannot answer (a theme picker, a login, a trust question about this folder, and a\n'
-    + 'one-time bypass-permissions consent screen that only the launch flag raises):\n'
-    + handRunLine(bin, here);
+    + 'session cannot answer ' + screens
+    + handRunLine(bin, here, { mode });
   if (installed) {
     return '`' + bin + '` is installed at ' + installed + ' but is not on PATH, so neither I nor her\n'
       + 'session can start it. The board is up and her welcome message is on it.\n\n'
@@ -282,13 +302,16 @@ function agentMissingText(harness, workspace) {
 // in a real container; the fallback is the only place a guess is allowed, and it
 // is labelled as one. Guessing "not installed, or not logged in" at a pane that
 // plainly says something else is how a tester loses an afternoon.
-function diagnoseSpawn(text, workspace) {
+function diagnoseSpawn(text, workspace, opts = {}) {
   const t = String(text || '');
   const tail = (/pane tail:\n([\s\S]*)$/.exec(t) || [, ''])[1].trim();
   const here = workspace || '<the workspace folder>';
+  const mode = opts.mode || 'auto';
+  const bypass = mode === 'bypass';
   const hit = (re, cause, headline, fix) => (re.test(t) ? { cause, headline, fix, tail } : null);
   // First, because it is the one screen our own launch line raises and the one
-  // no hand-run of plain `claude` can ever clear.
+  // no hand-run of plain `claude` can ever clear. Only the bypass launch raises
+  // it, so its recipe is the bypass line whatever the config says now.
   return hit(/Bypass Permissions mode|Yes, I accept/, 'bypass',
     'her pane is on Claude Code\'s one-time bypass-permissions consent screen. That warning is\n'
       + 'raised BY the --dangerously-skip-permissions flag the spawn uses, so running plain `claude`\n'
@@ -296,7 +319,7 @@ function diagnoseSpawn(text, workspace) {
       + 'skips permission prompts on this machine.',
     'Have the person run the launch line itself, once, and answer 2 (Yes, I accept) — then /exit\n'
       + 'and run the SAME command again:\n'
-      + handRunLine('claude', here) + '\n'
+      + handRunLine('claude', here, { mode: 'bypass' }) + '\n'
       + '(The preselected option on that screen is "No, exit", so it is theirs to answer, not mine.)')
   || hit(/Quick safety check|trust this folder|Accessing workspace/, 'trust',
     'her pane is on Claude Code\'s folder-trust question for the workspace — it asks about any\n'
@@ -304,8 +327,8 @@ function diagnoseSpawn(text, workspace) {
     'Trust is inherited from a trusted ancestor, so running `claude` in their home directory MAY\n'
       + 'have cleared it (a workspace under ~ usually is) — but it may not have. Run it in the\n'
       + 'workspace itself, answer the question, quit with /exit, then run the SAME command again:\n'
-      + handRunLine('claude', here) + '\n'
-      + '(The flag is in there so this one sitting also clears the consent screen behind it.)')
+      + handRunLine('claude', here, { mode })
+      + (bypass ? '\n(The flag is in there so this one sitting also clears the consent screen behind it.)' : ''))
   || hit(/cannot be used with root\/sudo privileges/, 'root',
     'claude refuses --dangerously-skip-permissions as root, and exited.',
     'Do the first run as a normal user (`useradd -m dev && su - dev`), or, on a throwaway box,\n'
@@ -315,7 +338,7 @@ function diagnoseSpawn(text, workspace) {
       + '(theme picker), which comes BEFORE any login question.',
     'Run it once by hand IN THE WORKSPACE, answer its questions (there is a folder-trust one about\n'
       + 'this directory after the theme), quit with /exit, then run the SAME command again:\n'
-      + handRunLine('claude', here))
+      + handRunLine('claude', here, { mode }))
   || hit(/command not found|ENOENT|not found: claude/, 'missing',
     'the agent CLI is not installed — the shell answered "command not found".',
     'Install it and run the SAME command again:\n  npm i -g @anthropic-ai/claude-code')
@@ -359,5 +382,5 @@ module.exports = {
   IGNORABLE, MANIFESTS, SOURCE_DIRS, SOURCE_EXT, ONBOARDING_STEPS,
   isWorkspaceDir, inspectTarget, listPhrase, refusalText,
   hasBin, isRoot, installCommand, tmuxMissingText, gitIdentity, gitIdentityText, portFree,
-  rootBlockText, agentMissingText, agentAtHome, handRunLine, diagnoseSpawn,
+  rootBlockText, agentMissingText, agentAtHome, handRunLine, diagnoseSpawn, permissionModeOf,
 };

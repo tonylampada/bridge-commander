@@ -7,7 +7,10 @@
 //   hookruns.jsonl append-only trace of every hook run (lifecycle and named), read from the tail
 //   eventkeys.json at-most-once keys for `event --key`, per card, pruned at 7 days
 //   chat/<lieutenant>.jsonl  append-only lieutenant main chat (the truth; board.json holds none)
-//   config.json    { port, host?, voices?, tts? } — port default 4780, written on first boot
+//   config.json    { port, host?, voices?, tts?, permissionMode? } — port default 4780, written on first boot;
+//                  permissionMode: auto (default) | default | acceptEdits | bypass — how every agent
+//                  launches; bypass = --dangerously-skip-permissions, the rest ask via the board
+//                  (POST /api/permission holds the hook until the captain decides)
 //   queue/<lieutenant>.jsonl  durable per-lieutenant delivery queue (global seq)
 //   queue/<lieutenant>.ack    committed ack cursor (at-least-once; only ack removes)
 //   server.pid     single server instance per workspace
@@ -23,7 +26,7 @@
 //             projects: [{name, path, mode, source?, added}],   // registered repos (F6)
 //             workers:  [{card, ref, worktree: {path, tool}, branch?, project,
 //                         spawnedAt, done?, outcome?, flagged?, paused?, lastTurnEnd?, lastTurnEndText?,
-//                         lastSignalAt?, lastSignalText?, turns?,
+//                         lastSignalAt?, lastSignalText?, lastPermissionAt?, turns?,
 //                         stopNotified?, staleNotified?, staleNotifiedAt?, staleHits?}],
 //             cards:   [{id, title, type, owner, column, labels[], attributes{}, body,
 //                        created, updated, threadStart, pendingOrder,
@@ -80,6 +83,7 @@ const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 
 const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
 const { proxyTts } = require(path.join(__dirname, 'ttsproxy.js'));
 const { proxyStt, proxySttUpgrade } = require(path.join(__dirname, 'sttproxy.js'));
+const { permissionMode, summarize, createPermissions } = require(path.join(__dirname, 'permissions.js'));
 const { execFile, execFileSync } = require('child_process');
 
 // ---------- args ----------
@@ -194,9 +198,23 @@ function readConfig() {
   } catch (e) {}
   return {};
 }
+// The launch mode every agent gets, read at launch time so an edit to
+// config.json takes effect on the next spawn. An unknown value launches as
+// auto — said once per value, not on every launch.
+const warnedModes = new Set();
+function configPermissionMode(c) {
+  const raw = (c || readConfig()).permissionMode;
+  const mode = permissionMode(raw);
+  if (raw !== undefined && raw !== mode && !warnedModes.has(String(raw))) {
+    warnedModes.add(String(raw));
+    console.warn(now() + ' config.json permissionMode ' + JSON.stringify(raw)
+      + ' is not one of auto|default|acceptEdits|bypass — using auto');
+  }
+  return mode;
+}
 function userConfig() {
   const c = readConfig();
-  const out = { voices: null };
+  const out = { voices: null, permissionMode: configPermissionMode(c) };
   if (Array.isArray(c.voices)) {
     const voices = c.voices.filter((v) => typeof v === 'string' && v.trim()).map((v) => v.trim());
     if (voices.length) out.voices = voices;
@@ -736,7 +754,8 @@ function respawnPrompt(lt) {
 // a model comes back on it, respawn after respawn.
 function ltLaunchOpts(lt, extra) {
   const opts = Object.assign(
-    { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false },
+    { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL, installHooks: false,
+      permissionMode: configPermissionMode() },
     extra || {}
   );
   const model = lt && validModel(lt.model);
@@ -1156,6 +1175,9 @@ function publicBoard(user) {
     line: holder ? holder.id : null,
     cards: board.cards.map((c) => publicCard(c, user, msgSeqs)),
     workers: board.workers.map(withStatusAge),
+    // Held permission asks — in memory only, never in board.json (storedBoard
+    // never sees them): a restart drops the held requests they stand for.
+    permissions: permissions.list(),
     // chatOwed/chatQueued mirror status.owed/owedState:'queued' for a
     // lieutenant's MAIN chat — both queue-derived, same rules as cards.
     lieutenants: board.lieutenants.map((l) => Object.assign({}, withStatusAge(l), {
@@ -1194,6 +1216,43 @@ function sseSend(event, data) {
   for (const res of sseClients) res.write(payload);
 }
 function broadcast() { sseSend('board', publicBoard('user')); }
+
+// ---------- permission approvals (see server/permissions.js) ----------
+// Claude Code gives the hook 3600s; answering null a little earlier lets the
+// agent fall back to its own dialog instead of dying on a hook timeout.
+const PERMISSION_CAP_MS = Number(process.env.BC_PERMISSION_TIMEOUT_MS) > 0
+  ? Number(process.env.BC_PERMISSION_TIMEOUT_MS) : 3500 * 1000;
+const permissions = createPermissions({ capMs: PERMISSION_CAP_MS, onChange: permissionChanged });
+function permissionWorker(item) {
+  return item.card ? board.workers.find((w) => w.card === item.card && workerName(w.ref) === item.worker) || null : null;
+}
+// An ask and its end are both activity: the stall ladder starts over from
+// here, not from whenever the worker last spoke before it waited.
+function permissionChanged(item, outcome) {
+  const w = permissionWorker(item);
+  if (w) { w.lastPermissionAt = now(); clearStale(w); }
+  if (outcome === 'allow' || outcome === 'deny') return; // the decide route saves and broadcasts with its event
+  if (w) saveBoard();
+  broadcast();
+}
+function permissionFields(body, lt, w) {
+  const tool = String(body.tool_name || 'unknown').slice(0, 200);
+  const input = body.tool_input && typeof body.tool_input === 'object' && !Array.isArray(body.tool_input)
+    ? body.tool_input : {};
+  const out = { ts: now(), tool_name: tool, tool_input: input, summary: summarize(tool, input),
+    lieutenant: null, card: null, worker: null, agentLabel: '' };
+  if (w) {
+    const card = findCard(w.card);
+    Object.assign(out, { lieutenant: card ? card.owner : null, card: w.card, worker: workerName(w.ref),
+      agentLabel: 'worker on ' + (card ? card.title : w.card) });
+  } else if (lt) {
+    Object.assign(out, { lieutenant: lt.id, agentLabel: lt.name });
+  } else {
+    out.agentLabel = body.cwd ? path.basename(String(body.cwd)) || String(body.cwd) : 'unknown agent';
+  }
+  return out;
+}
+
 // A file an editor may have open changed on disk (through PUT /api/artifact —
 // the one door). Tiny event on the SAME stream, not a channel of its own: which
 // uri, which version now, and `by` = the writer's own client tag (a random
@@ -2920,7 +2979,8 @@ async function doStartCard(card, body) {
     }
     let ref;
     try {
-      ref = await harnessFor(existing.ref).resume(existing.ref, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL });
+      ref = await harnessFor(existing.ref).resume(existing.ref, { stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL,
+        permissionMode: configPermissionMode() });
     } catch (e) {
       return { error: 'worker resume failed: ' + String((e && e.message) || e), code: 502 };
     }
@@ -3173,7 +3233,8 @@ async function doStartCard(card, body) {
     project, worktree: wt.path, branch: branch || '', workspace: WORKSPACE,
     stateDir: STATE_DIR, cli: path.join(__dirname, '..', 'cli', 'bc-axi'),
   });
-  const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL };
+  const spawnOpts = { session, window, stateDir: HARNESS_STATE_DIR, callbackUrl: TURNEND_URL,
+    permissionMode: configPermissionMode() };
   const extraArgs = [];
   // Model precedence mirrors harness: explicit --model wins, else the
   // playbook's frontmatter.
@@ -3566,11 +3627,12 @@ async function superviseTick() {
       // time, level 1 from the second hit on — a worker nobody answered for
       // two windows is the captain's problem, and the text says what it last
       // said so he can judge from the feed. Any real activity — signal,
-      // turn-end, resume — resets the ladder.
-      if (up && !w.paused && BC_WORKER_STALE_SECS > 0) {
+      // turn-end, resume, a permission ask or its answer — resets the ladder.
+      // A worker with a permission ask pending is waiting on the captain, not hung.
+      if (up && !w.paused && BC_WORKER_STALE_SECS > 0 && !permissions.has((it) => it.card === w.card)) {
         const card = findCard(w.card);
         if (card && card.column === 'working') {
-          const stamps = [w.spawnedAt, w.lastTurnEnd, w.lastSignalAt]
+          const stamps = [w.spawnedAt, w.lastTurnEnd, w.lastSignalAt, w.lastPermissionAt]
             .map((t) => (t ? Date.parse(t) : NaN)).filter((n) => !Number.isNaN(n));
           const lastActivity = stamps.length ? Math.max(...stamps) : 0;
           const notifiedAt = w.staleNotifiedAt ? Date.parse(w.staleNotifiedAt) : NaN;
@@ -4283,6 +4345,41 @@ function hookTarget(uri) {
 }
 
 // ---------- server ----------
+// Which agent a hook payload speaks for, READ-ONLY — turn-end and permission
+// asks share it so both attribute the same way (rules at POST /api/turn-end).
+// -> { lt, worker } with at most one set; both null = some other agent.
+function resolveHookAgent(body) {
+  const sid = body.session_id ? String(body.session_id) : '';
+  const sname = body.session ? String(body.session) : '';
+  const tmux = typeof body.tmux_session === 'string' ? body.tmux_session : null;
+  let lt = sid ? board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.resumeId === sid) : null;
+  // A lieutenant's hook posts its state key, which for a window-granular
+  // ref is `session:lt` — matching on ref.session alone never saw it, and
+  // a codex lieutenant (born without a resumeId) had no other way in.
+  if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && refKey(l.ref) === sname);
+  if (!lt) {
+    let w = sid ? board.workers.find((x) => x.ref.resumeId === sid) : null;
+    // A window-granular worker's hook posts the `session:window` key —
+    // never the bare session name it shares with its lieutenant.
+    if (!w && sname) w = board.workers.find((x) => workerName(x.ref) === sname);
+    if (w) return { lt: null, worker: w };
+  }
+  // Worker hooks are excluded from tmux attribution: a worker's pane sits
+  // in the lieutenant session it cohabits, so its tmux_session IS that
+  // lieutenant's — without this guard a stale worker POST (its record
+  // already gone) would corrupt the lieutenant's resumeId. The WINDOW part
+  // of the key tells them apart: `:lt` is the lieutenant's own window,
+  // `:w-<card>` is a worker's (names.js — workerWindow / LIEUTENANT_WINDOW).
+  const keyWindow = sname.includes(':') ? sname.slice(sname.indexOf(':') + 1) : '';
+  const workerKey = !!keyWindow && keyWindow !== names.LIEUTENANT_WINDOW;
+  if (!lt && tmux && !workerKey) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
+  if (!lt && tmux === null && sid) {
+    const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
+    if (cands.length === 1 && body.cwd && path.resolve(String(body.cwd)) === cands[0].ref.cwd) lt = cands[0];
+  }
+  return { lt: lt || null, worker: null };
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
   const p = url.pathname;
@@ -4771,60 +4868,35 @@ const server = http.createServer(async (req, res) => {
     if (route === 'POST /api/turn-end') {
       const body = JSON.parse(await readBody(req) || '{}');
       const sid = body.session_id ? String(body.session_id) : '';
-      const sname = body.session ? String(body.session) : '';
-      const tmux = typeof body.tmux_session === 'string' ? body.tmux_session : null;
-      let lt = sid ? board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.resumeId === sid) : null;
-      // A lieutenant's hook posts its state key, which for a window-granular
-      // ref is `session:lt` — matching on ref.session alone never saw it, and
-      // a codex lieutenant (born without a resumeId) had no other way in.
-      if (!lt && sname) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && refKey(l.ref) === sname);
-      if (!lt) {
-        let w = sid ? board.workers.find((x) => x.ref.resumeId === sid) : null;
-        // A window-granular worker's hook posts the `session:window` key —
-        // never the bare session name it shares with its lieutenant.
-        if (!w && sname) w = board.workers.find((x) => workerName(x.ref) === sname);
-        if (w) {
-          if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
-          w.lastTurnEnd = now();
-          w.turns = (w.turns || 0) + 1;
-          if (typeof body.text === 'string' && body.text.trim()) w.lastTurnEndText = body.text.trim().slice(0, 300);
-          clearStale(w); // a turn-end is activity: the stall ladder starts over
-          // turn-end is the status refresh point (context bar / /status data)
-          const statusChanged = await refreshAgentStatus(w);
-          // A worker turn-end IS the stop signal: a Working card whose worker
-          // stopped without done would otherwise be invisible to its owner.
-          // EVERY such turn-end posts — a worker re-sent after a stop that ends
-          // its turn again with no signal has stopped AGAIN, and an owner who
-          // heard about the first stop only is the 3h silence of CMD-26.
-          // stopNotified marks "this stop was notified" for the drain hint;
-          // signal/done/leaving Working clear it.
-          const card = findCard(w.card);
-          let stopped = false;
-          if (card && card.column === 'working' && !w.done) {
-            w.stopNotified = true;
-            stopped = true;
-            const text = 'worker ' + workerName(w.ref) + ' stopped without reporting done';
-            card.events.push(mkEvent({ text, actor: 'server' }, { kind: 'worker-stopped' }));
-            card.updated = now();
-            queuePush(card.owner, { kind: 'worker-stopped', card: card.id, text });
-          }
-          saveBoard();
-          if (stopped || statusChanged) broadcast();
-          return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
+      const { lt, worker: w } = resolveHookAgent(body);
+      if (w) {
+        if (sid && w.ref.resumeId !== sid) w.ref.resumeId = sid; // hook payload is ground truth
+        w.lastTurnEnd = now();
+        w.turns = (w.turns || 0) + 1;
+        if (typeof body.text === 'string' && body.text.trim()) w.lastTurnEndText = body.text.trim().slice(0, 300);
+        clearStale(w); // a turn-end is activity: the stall ladder starts over
+        // turn-end is the status refresh point (context bar / /status data)
+        const statusChanged = await refreshAgentStatus(w);
+        // A worker turn-end IS the stop signal: a Working card whose worker
+        // stopped without done would otherwise be invisible to its owner.
+        // EVERY such turn-end posts — a worker re-sent after a stop that ends
+        // its turn again with no signal has stopped AGAIN, and an owner who
+        // heard about the first stop only is the 3h silence of CMD-26.
+        // stopNotified marks "this stop was notified" for the drain hint;
+        // signal/done/leaving Working clear it.
+        const card = findCard(w.card);
+        let stopped = false;
+        if (card && card.column === 'working' && !w.done) {
+          w.stopNotified = true;
+          stopped = true;
+          const text = 'worker ' + workerName(w.ref) + ' stopped without reporting done';
+          card.events.push(mkEvent({ text, actor: 'server' }, { kind: 'worker-stopped' }));
+          card.updated = now();
+          queuePush(card.owner, { kind: 'worker-stopped', card: card.id, text });
         }
-      }
-      // Worker hooks are excluded from tmux attribution: a worker's pane sits
-      // in the lieutenant session it cohabits, so its tmux_session IS that
-      // lieutenant's — without this guard a stale worker POST (its record
-      // already gone) would corrupt the lieutenant's resumeId. The WINDOW part
-      // of the key tells them apart: `:lt` is the lieutenant's own window,
-      // `:w-<card>` is a worker's (names.js — workerWindow / LIEUTENANT_WINDOW).
-      const keyWindow = sname.includes(':') ? sname.slice(sname.indexOf(':') + 1) : '';
-      const workerKey = !!keyWindow && keyWindow !== names.LIEUTENANT_WINDOW;
-      if (!lt && tmux && !workerKey) lt = board.lieutenants.find((l) => isHarnessRef(l.ref) && l.ref.session === tmux);
-      if (!lt && tmux === null && sid) {
-        const cands = board.lieutenants.filter((l) => isHarnessRef(l.ref) && !l.ref.resumeId);
-        if (cands.length === 1 && body.cwd && path.resolve(String(body.cwd)) === cands[0].ref.cwd) lt = cands[0];
+        saveBoard();
+        if (stopped || statusChanged) broadcast();
+        return sendJson(res, 200, { ok: true, lieutenant: null, worker: w.card });
       }
       if (!lt) return sendJson(res, 200, { ok: true, lieutenant: null });
       if (sid && lt.ref.resumeId !== sid) lt.ref.resumeId = sid; // hook payload is ground truth
@@ -4841,6 +4913,40 @@ const server = http.createServer(async (req, res) => {
       const pending = pendingItems(lt.id).length;
       if (pending) scheduleWake(lt.id);
       return sendJson(res, 200, { ok: true, lieutenant: lt.id, pending });
+    }
+
+    // ----- permission approvals -----
+    // A PermissionRequest hook asks here and waits: the response stays open
+    // until the captain decides (/decide below), the cap answers null, or the
+    // hook hangs up. Attribution is turn-end's, read-only — an ask never
+    // adopts a resumeId. Unattributed asks still show: the captain can judge.
+    if (route === 'POST /api/permission') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const { lt, worker } = resolveHookAgent(body);
+      permissions.hold(res, permissionFields(body, lt, worker));
+      return;
+    }
+    const decideRoute = /^\/api\/permission\/([^/]+)\/decide$/.exec(p);
+    if (decideRoute && req.method === 'POST') {
+      const id = decodeURIComponent(decideRoute[1]);
+      if (!permissions.has((it) => it.id === id)) return sendJson(res, 404, { error: 'unknown permission: ' + id });
+      const body = JSON.parse(await readBody(req) || '{}');
+      if (body.decision !== 'allow' && body.decision !== 'deny') {
+        return sendJson(res, 400, { error: 'decision must be allow or deny' });
+      }
+      const message = typeof body.message === 'string' ? body.message.trim().slice(0, 1000) : '';
+      const item = permissions.decide(id, body.decision, message);
+      // The hook may have hung up while this body was being read.
+      if (!item) return sendJson(res, 404, { error: 'unknown permission: ' + id });
+      const card = item.card ? findCard(item.card) : null;
+      if (card) {
+        const text = 'captain ' + (body.decision === 'allow' ? 'approved ' : 'denied ') + item.tool_name + ': '
+          + item.summary + (message ? ' — ' + message : '');
+        card.events.push(mkEvent({ text, actor: 'captain' }, { kind: 'permission', level: 2 }));
+        card.updated = now();
+      }
+      saveBoard(); broadcast();
+      return sendJson(res, 200, { ok: true });
     }
 
     // ----- cards -----

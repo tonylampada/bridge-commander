@@ -5,6 +5,7 @@ import { S, kindEmoji, lieutenantByActor } from './state.js';
 import { defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages, shouldSuppressChat } from './notifypolicy.js';
 import * as sound from './sound.js';
 import * as toast from './toast.js';
+import { selectNewPermissions } from './perms.js';
 
 // Mirrors ui/app.css's mobile breakpoint (`@media (max-width: 760px)`) that
 // collapses the board/chat columns into tabs. Below it, the chat panel is only
@@ -24,6 +25,7 @@ const CATEGORIES = [
   { key: 'done', emoji: '✅', label: 'Card finished' },
   { key: 'chat', emoji: '💬', label: 'New chat message' },
   { key: 'error', emoji: '💥', label: 'Something went wrong' },
+  { key: 'approval', emoji: '🔐', label: 'Permission request' },
   { key: 'other', emoji: '🔔', label: 'Everything else' },
 ];
 
@@ -87,6 +89,27 @@ export function trackEvents(doc) {
     }
     if (p.sound && p.sound !== 'none') sound.play(p.sound); // ALWAYS — captain: "mantém o som"
   }
+}
+
+// ---------- driver: new permission prompts -> toast/sound ----------
+// Keyed by prompt id, not by board update: a prompt announces itself once, the
+// SSE stream re-sending it with every broadcast never re-fires. A burst (several
+// workers blocked in one update) is one tone and one toast per prompt, capped by
+// the toast stack itself. The first doc only seeds: the tray already shows it.
+let permFirst = true;
+const seenPerms = new Set();
+export function trackPermissions(doc) {
+  if (!doc) return;
+  const fresh = selectNewPermissions(seenPerms, doc);
+  if (permFirst) { permFirst = false; return; }
+  if (!fresh.length) return;
+  const p = policyFor('permission', 1, settings);
+  if (p.toast) for (const x of fresh) {
+    toast.push({ emoji: '🔐', text: (x.tool_name || 'tool') + ': ' + (x.summary || ''),
+      sub: (x.agentLabel || 'an agent') + ' asks permission', card: x.card || undefined,
+      lieutenant: x.card ? undefined : x.lieutenant || undefined });
+  }
+  if (p.sound && p.sound !== 'none') sound.play(p.sound);
 }
 
 // ---------- settings section (rendered inside #settings-panel while open) ----------

@@ -468,6 +468,14 @@ body.resizing { user-select: none; cursor: col-resize; }
   padding: 1px 7px; border: 1px dashed var(--warn); border-radius: 999px; color: var(--warn);
   line-height: 1.6; white-space: nowrap; opacity: .85;
 }
+/* a worker on this card is blocked on a permission prompt: solid amber chip
+   plus an amber ring, loud on purpose — the card is frozen until answered */
+.tile.needs-perm { box-shadow: inset 0 0 0 1px var(--warn); }
+.tile .t-perm {
+  display: inline-flex; align-items: center; font-size: 10.5px; font-weight: 600;
+  padding: 1px 7px; border: 1px solid var(--warn); border-radius: 999px;
+  color: var(--warn); background: var(--warn-soft); line-height: 1.6; white-space: nowrap;
+}
 /* PR chips — attributes.prs [{url, state: open|merged|closed}], state-colored */
 .prchip {
   display: inline-flex; align-items: center; font-family: var(--mono); font-size: 11px;
@@ -611,6 +619,78 @@ body.resizing { user-select: none; cursor: col-resize; }
 .toast .sub { color: var(--faint); font-size: 10.5px; margin-top: 2px; font-family: var(--mono); }
 .toast .x { flex: none; color: var(--faint); font-size: 12px; padding: 0 2px; }
 .toast .x:hover { color: var(--danger); }
+
+/* ---------- permission approvals ----------
+   One .perm-block markup, drawn in the fixed tray and at the chat feed tail.
+   The tray sits above the modal overlays (≤95) but below the diagram zoom (97):
+   an agent blocked on the captain must be answerable from any screen. */
+#perm-tray {
+  position: fixed; right: 12px; bottom: 14px; z-index: 96;
+  width: min(400px, calc(100vw - 24px)); max-height: min(70vh, 640px);
+  display: flex; flex-direction: column; border-radius: 12px; overflow: hidden;
+  background: var(--bg2); border: 1px solid var(--warn); box-shadow: var(--shadow);
+}
+#perm-tray .pt-toggle {
+  flex: none; display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 8px 12px; font-size: 12.5px; font-weight: 600; color: var(--warn);
+  background: var(--warn-soft); text-align: left;
+}
+#perm-tray .pt-toggle .grow { flex: 1; }
+#perm-tray .pt-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--warn); flex: none; animation: typing-blink 1.6s infinite; }
+#perm-tray .pt-chev { color: var(--dim); }
+#perm-tray .pt-list { overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 8px; }
+@media (max-width: 760px) {
+  /* a phone has no spare corner: floating, the tray sat on the composer. In
+     the body column instead, between the main area and the tab bar, so the
+     layout shrinks around it and nothing is covered */
+  #perm-tray { position: static; order: 1; flex: none; width: auto; margin: 0 6px 6px; max-height: 45vh; }
+  #tabs { order: 2; }
+}
+@media (prefers-reduced-motion: reduce) { #perm-tray .pt-dot { animation: none; } }
+.perm-block {
+  display: flex; flex-direction: column; gap: 6px; padding: 9px 11px; border-radius: var(--radius);
+  background: var(--panel); border: 1px solid var(--line2); border-left: 3px solid var(--warn);
+  font-size: 12.5px; min-width: 0;
+}
+.perm-block.busy { opacity: .7; }
+.perm-block .perm-head { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.perm-block .perm-head .grow { flex: 1; }
+.perm-block .perm-ic { flex: none; }
+.perm-block .perm-who { color: var(--text); font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.perm-block button.perm-who:hover { color: var(--accent); text-decoration: underline; }
+.perm-block .perm-tool {
+  flex: none; font-family: var(--mono); font-size: 11px; color: var(--warn);
+  padding: 0 6px; border: 1px solid var(--warn); border-radius: 999px; line-height: 1.6;
+}
+.perm-block .perm-ago { flex: none; font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.perm-block .perm-sum {
+  font-family: var(--mono); font-size: 12px; color: var(--text); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 7px; padding: 5px 8px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 9em; overflow-y: auto;
+}
+.perm-block .perm-json summary { cursor: pointer; color: var(--dim); font-size: 11px; width: fit-content; }
+.perm-block .perm-json summary:hover { color: var(--text); }
+.perm-block .perm-json pre {
+  margin-top: 4px; font-family: var(--mono); font-size: 11px; color: var(--dim); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 7px; padding: 6px 8px;
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 16em; overflow-y: auto;
+}
+.perm-block .perm-acts { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.perm-block .perm-acts button {
+  flex: none; font-size: 12px; font-weight: 600; padding: 4px 12px; border-radius: 7px; border: 1px solid;
+}
+.perm-block .perm-allow { color: var(--ok); border-color: var(--ok); background: var(--ok-soft); }
+.perm-block .perm-deny { color: var(--danger); border-color: var(--danger); background: var(--danger-soft); }
+.perm-block .perm-acts button:hover:not(:disabled) { filter: brightness(1.25); }
+.perm-block .perm-acts button:disabled { opacity: .5; cursor: default; }
+.perm-block .perm-reason {
+  flex: 1 1 120px; min-width: 0; font-size: 12px; padding: 4px 8px; border-radius: 7px;
+  background: var(--bg); border: 1px solid var(--line); outline: none;
+}
+.perm-block .perm-reason:focus { border-color: var(--danger); }
+.perm-block .perm-err { color: var(--danger); font-size: 11.5px; }
+/* chat tail: a feed item, not a bubble — full width so the command reads */
+#chat-feed .perm-block { flex: none; }
 
 /* workspace screen: the board region's own mode, one section per thing the
    board owns (labels, playbooks) */

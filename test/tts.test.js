@@ -36,7 +36,7 @@ test('no tts in config: /api/config is unchanged', async () => {
   try {
     const r = await s.api('GET', '/api/config');
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { voices: ['Luciana'] });
+    assert.deepEqual(r.body, { voices: ['Luciana'], permissionMode: 'auto' });
     assert.ok(!('tts' in r.body));
   } finally { await s.stop(); }
 });

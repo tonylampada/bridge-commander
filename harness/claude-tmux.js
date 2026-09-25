@@ -21,8 +21,12 @@
 // launch line, screen signatures, the Stop-hook install, and resume.
 //
 // Verified launch template (mined from firstmate's fm-spawn.sh):
-//   CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions \
+//   CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --permission-mode <mode> \
 //     --session-id <uuid>
+//   - <mode> is opts.permissionMode (default 'auto'). 'bypass' is the old
+//     --dangerously-skip-permissions launch. Every other mode keeps claude's
+//     permission prompts, and the PermissionRequest hook relays them to the
+//     board (permission-hook.js) so the captain answers them there.
 //   - CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false kills the dim "ghost text"
 //     prompt suggestion that otherwise reads as pending composer input.
 //   - the prompt is NEVER passed on the command line — claude launches bare,
@@ -33,12 +37,14 @@
 //     pattern-kill run BY that very agent (matching its own argv) could
 //     freeze or kill itself. The prompt file in stateDir stays the source of
 //     truth; only the delivery mechanism changed.
-//   - a fresh cwd triggers claude's folder-trust dialog even with
-//     --dangerously-skip-permissions (verified); spawn auto-accepts it.
+//   - a fresh cwd triggers claude's folder-trust dialog in every permission
+//     mode, bypass included (verified); spawn auto-accepts it.
 //
 // Turn boundaries: spawn installs a Stop hook in <cwd>/.claude/settings.local.json
 // running harness/turnend-hook.js, which appends to <stateDir>/<session>.turnend.jsonl
 // (and optionally POSTs to a callback URL). onTurnEnd() tails that file.
+// With a callback URL it also installs a PermissionRequest hook running
+// harness/permission-hook.js, which holds the prompt open on /api/permission.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -50,6 +56,10 @@ const s = require('./tmux-session.js');
 const { claudeStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
+const PERMISSION_HOOK_SCRIPT = path.join(__dirname, 'permission-hook.js');
+// Claude kills a hook at its timeout and shows its own dialog; an hour leaves the
+// captain time to see the board. The hook's own fetch gives up a little sooner.
+const PERMISSION_HOOK_TIMEOUT_S = 3600;
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
 
 // RESUME_RE — the picker `claude --resume` shows when the transcript is big
@@ -72,13 +82,15 @@ const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
 const RESUME_RE = /Resume from summary|Resume full session as-is/;
 
 // UI_READY_RE matches signatures only the main UI renders (composer prompt,
-// busy footer, permission-mode footer) and the trust screen does not.
+// busy footer, permission-mode footer) and the trust screen does not. The
+// footer depends on the mode: "bypass permissions on", "auto mode on",
+// "accept edits on"; default mode shows none, so only `\n❯` catches it.
 //
 // ⚠ It is nearly wrong on the resume picker, which draws its own `❯` — and is
 // saved only by `\n❯` demanding column zero while the picker indents. Do not
 // relax that anchor: the picker would then read as READY and every unattended
 // revival would leave a lieutenant sitting on an unanswered menu forever.
-const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
+const UI_READY_RE = /bypass permissions|auto mode on|accept edits on|esc (to )?interrupt|\n❯/i;
 
 // FATAL_RE — what a pane shows when this launch is never going to come up, so
 // waiting the remaining 44 seconds only delays a wrong guess:
@@ -92,7 +104,8 @@ const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 //              for them.
 //   missing    the shell answering "command not found" — no binary at all.
 //   bypass     the one-time "WARNING: Claude Code running in Bypass Permissions
-//              mode" consent modal, raised BY --dangerously-skip-permissions.
+//              mode" consent modal, raised BY --dangerously-skip-permissions
+//              (permissionMode 'bypass' only; other modes never show it).
 //              Its preselected option is `1. No, exit`, so it is emphatically
 //              not one to answer with a blind Enter, and it is not ours to
 //              accept on anyone's behalf: it is a person saying yes to an agent
@@ -153,24 +166,49 @@ async function excludeLocalSettings(cwd) {
   }
 }
 
-// installHooks — write/merge the Stop hook into <cwd>/.claude/settings.local.json.
-// Idempotent; preserves any existing settings/hooks. Also hides the file from
-// git (info/exclude) when cwd is a repo, so it never dirties a worktree.
+// upsertHook(settings, event, script, entry) — keep exactly ONE entry in
+// settings.hooks[event] whose command runs `script`, equal to `entry`. Entries
+// of other tools are preserved; a stale bc entry (a previous session in this
+// cwd) is replaced. Unchanged when ours is already there verbatim.
+function upsertHook(settings, event, script, entry) {
+  if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
+  if (!Array.isArray(settings.hooks[event])) settings.hooks[event] = [];
+  const command = entry.hooks[0].command;
+  const ours = settings.hooks[event].some((m) =>
+    Array.isArray(m.hooks) && m.hooks.some((h) => h.command === command));
+  if (ours) return;
+  settings.hooks[event] = settings.hooks[event].filter((m) =>
+    !(Array.isArray(m.hooks) && m.hooks.some((h) =>
+      typeof h.command === 'string' && h.command.includes(script))));
+  settings.hooks[event].push(entry);
+}
+
+// permissionUrl(callbackUrl) — the turn-end callback's server, path swapped to
+// /api/permission. '' when there is no usable callback: with no server to ask,
+// the hook would only delay claude's own dialog.
+function permissionUrl(callbackUrl) {
+  if (!callbackUrl) return '';
+  try { return new URL('/api/permission', callbackUrl).href; } catch { return ''; }
+}
+
+// installHooks — write/merge the Stop hook (and, with a callback URL, the
+// PermissionRequest hook) into <cwd>/.claude/settings.local.json. Idempotent;
+// preserves any existing settings/hooks. Also hides the file from git
+// (info/exclude) when cwd is a repo, so it never dirties a worktree.
 async function installHooks(cwd, session, stateDir, callbackUrl) {
   const command = ['node', s.shellQuote(HOOK_SCRIPT), s.shellQuote(stateDir), s.shellQuote(session)]
     .concat(callbackUrl ? [s.shellQuote(callbackUrl)] : [])
     .join(' ');
+  const permUrl = permissionUrl(callbackUrl);
   mergeLocalSettings(cwd, (settings) => {
-    if (!settings.hooks || typeof settings.hooks !== 'object') settings.hooks = {};
-    if (!Array.isArray(settings.hooks.Stop)) settings.hooks.Stop = [];
-    const ours = settings.hooks.Stop.some((m) =>
-      Array.isArray(m.hooks) && m.hooks.some((h) => h.command === command));
-    if (!ours) {
-      // Drop stale bc hook entries (e.g. a previous session in this cwd) first.
-      settings.hooks.Stop = settings.hooks.Stop.filter((m) =>
-        !(Array.isArray(m.hooks) && m.hooks.some((h) =>
-          typeof h.command === 'string' && h.command.includes(HOOK_SCRIPT))));
-      settings.hooks.Stop.push({ hooks: [{ type: 'command', command }] });
+    upsertHook(settings, 'Stop', HOOK_SCRIPT, { hooks: [{ type: 'command', command }] });
+    if (permUrl) {
+      const permCommand = ['node', PERMISSION_HOOK_SCRIPT, stateDir, session, permUrl]
+        .map((a, i) => (i ? s.shellQuote(a) : a)).join(' ');
+      upsertHook(settings, 'PermissionRequest', PERMISSION_HOOK_SCRIPT, {
+        matcher: '*',
+        hooks: [{ type: 'command', command: permCommand, timeout: PERMISSION_HOOK_TIMEOUT_S }],
+      });
     }
   });
   await excludeLocalSettings(cwd);
@@ -187,8 +225,22 @@ function sandboxPrefix(allowRoot) {
   return asRoot ? 'IS_SANDBOX=1 ' : '';
 }
 
+// launchPrefix(mode, allowRoot) — everything on the launch line before the
+// session flags. Only bypass needs the root escape hatch: claude's uid-0
+// refusal is about skipping permissions, and no other mode skips them.
+function launchPrefix(mode, allowRoot) {
+  const bypass = mode === 'bypass';
+  return (bypass ? sandboxPrefix(allowRoot) : '')
+    + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude '
+    + (bypass ? '--dangerously-skip-permissions' : '--permission-mode ' + s.shellQuote(mode));
+}
+function permissionModeOf(v) {
+  return typeof v === 'string' && v ? v : 'auto';
+}
+
 // spawn(cwd, prompt, opts?) -> HarnessRef
-// opts: { session?, window?, stateDir?, callbackUrl?, extraArgs?: string[], installHooks?: boolean }
+// opts: { session?, window?, stateDir?, callbackUrl?, extraArgs?: string[], installHooks?: boolean,
+//         permissionMode?: 'auto'|'default'|'acceptEdits'|'bypass' (default 'auto'), allowRoot? }
 // window: birth the agent as a named window inside `session` (which must then
 // be given too) instead of owning a whole session; the session is created on
 // demand when it is not up yet.
@@ -209,16 +261,16 @@ async function spawn(cwd, prompt, opts = {}) {
 
   const promptFile = path.join(stateDir, `${key}.prompt`);
   fs.writeFileSync(promptFile, prompt);
+  const mode = permissionModeOf(opts.permissionMode);
   // Recorded so resume() can replay them — a worker pinned to a model by its
   // playbook must not come back on the default one (tmux-session.js).
-  s.recordSpawnArgs(stateDir, key, opts);
+  s.recordSpawnArgs(stateDir, key, { ...opts, permissionMode: mode });
 
   await s.createPane(session, window, cwdAbs);
   try {
     const extra = (opts.extraArgs || []).map(s.shellQuote).join(' ');
-    const launchCmd = sandboxPrefix(opts.allowRoot)
-      + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false '
-      + `claude --dangerously-skip-permissions --session-id ${resumeId}`
+    const launchCmd = launchPrefix(mode, opts.allowRoot)
+      + ` --session-id ${resumeId}`
       + (extra ? ' ' + extra : '');
     await s.launchAndSettle(s.paneTarget(session, window), launchCmd, SETTLE);
     await deliverPrompt(s.paneTarget(session, window), prompt);
@@ -330,15 +382,18 @@ async function resume(ref, opts = {}) {
     // The spawn's launch facts are replayed, not rebuilt: --model/--effort came
     // from the card's playbook and a resume that drops them is a worker quietly
     // moved to another model, and a root session that comes back without
-    // IS_SANDBOX=1 does not come back at all. opts, when given, wins over the
-    // record. A missing or corrupt record is no flags and no prefix, never a throw.
+    // IS_SANDBOX=1 does not come back at all. The permission mode is replayed
+    // too, so an agent never comes back looser than it was born. opts, when
+    // given, wins over the record. A missing or corrupt record is no flags, no
+    // prefix and the default mode, never a throw.
     const rec = s.recordedSpawnArgs(stateDir, key);
     const extra = (opts.extraArgs || rec.args).map(String);
-    const parts = ['claude', '--dangerously-skip-permissions'];
+    const mode = permissionModeOf(opts.permissionMode || rec.permissionMode);
+    const parts = [];
     if (resumeId) parts.push('--resume', resumeId);
     for (const a of extra) parts.push(s.shellQuote(a));
-    const launchCmd = sandboxPrefix(opts.allowRoot || rec.allowRoot)
-      + 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false ' + parts.join(' ');
+    const launchCmd = launchPrefix(mode, opts.allowRoot || rec.allowRoot)
+      + (parts.length ? ' ' + parts.join(' ') : '');
     await s.launchAndSettle(s.paneTarget(ref.session, ref.window), launchCmd, SETTLE);
   } catch (err) {
     await s.killPane(ref.session, ref.window);

@@ -81,19 +81,25 @@ grep -q "sudo" /root/notmux.log && { echo "it printed sudo on a box with no sudo
 eval "$(grep -oE '(sudo )?apt-get update.*' /root/notmux.log | head -1)" || exit 1
 tmux -V || exit 1
 
-echo "=== root: blocked BEFORE anything is spawned, with the real reason ==="
+echo "=== root + permissionMode bypass: blocked BEFORE anything is spawned, with the real reason ==="
+# Only the bypass launch (--dangerously-skip-permissions) is refused as root, so
+# only a workspace configured for bypass meets this block.
 cd /root/myfleet
+mkdir -p .bridge-commander && echo '{"permissionMode":"bypass"}' > .bridge-commander/config.json
 $BC init --onboard --port 4790 > /root/root.log 2>&1
-test $? -eq 1 || { echo "running as root was NOT blocked"; exit 1; }
+test $? -eq 1 || { echo "running as root in bypass mode was NOT blocked"; exit 1; }
 cat /root/root.log
 grep -q "first run blocked (root)" /root/root.log || exit 1
 grep -q "useradd" /root/root.log || exit 1
 grep -q -- "--allow-root" /root/root.log || exit 1
+rm -rf /root/myfleet/.bridge-commander
 
-echo "=== the first run itself, on a throwaway box (no claude in here — the board must come up anyway) ==="
+echo "=== the first run itself, as root in the default mode (no claude in here — the board must come up anyway) ==="
+# The default permissionMode is auto, which claude runs as root: no block, no --allow-root.
 cd /root/myfleet
-$BC init --onboard --port 4790 --allow-root > /root/init.log 2>&1
+$BC init --onboard --port 4790 > /root/init.log 2>&1
 cat /root/init.log
+grep -q "first run blocked (root)" /root/init.log && { echo "root was blocked outside bypass"; exit 1; }
 
 echo "=== a missing agent CLI is named as missing, and never guessed at ==="
 grep -q "is not on PATH" /root/init.log || exit 1
@@ -102,11 +108,10 @@ grep -q "is not on PATH" /root/init.log || exit 1
 grep -q "claude.ai/install.sh" /root/init.log || exit 1
 # …and the by-hand run has to happen in the WORKSPACE, because the folder-trust
 # question is about that folder, not about $HOME.
-# …with the launch flag, because the bypass-permissions consent screen is raised
-# BY that flag: a hand-run of plain `claude` can never clear it.
-# …and as root, with IS_SANDBOX=1, or the recipe dies on the root refusal it is
-# meant to get them past — the same escape hatch --allow-root gives her spawn.
-grep -q "cd /root/myfleet && IS_SANDBOX=1 claude --dangerously-skip-permissions" /root/init.log || exit 1
+# …with the same --permission-mode her spawn uses, and no IS_SANDBOX=1: outside
+# bypass there is no root refusal to get past.
+grep -q "cd /root/myfleet && claude --permission-mode auto" /root/init.log || exit 1
+grep -q "IS_SANDBOX" /root/init.log && { echo "it printed a root escape hatch auto mode does not need"; exit 1; }
 # The installer does not edit PATH, and root's ~/.profile does not pick up ~/.local/bin.
 grep -q 'PATH="$HOME/.local/bin:$PATH"' /root/init.log || exit 1
 grep -q "not installed, or not logged in" /root/init.log && { echo "it guessed at a cause it did not check"; exit 1; }
@@ -124,7 +129,7 @@ echo "=== the git-identity warning is a warning, not a wall ==="
 grep -q "git has no identity here" /root/init.log || exit 1
 
 echo "=== twice in a row: a re-run resumes, it does not restart ==="
-$BC init --onboard --port 4790 --allow-root > /root/init2.log 2>&1
+$BC init --onboard --port 4790 > /root/init2.log 2>&1
 cat /root/init2.log
 grep -q "charter left alone" /root/init2.log || exit 1
 grep -q "welcome message already on the board" /root/init2.log || exit 1
@@ -133,7 +138,7 @@ test "$(grep -c 'Welcome aboard' /root/board.json)" = "1" || exit 1
 
 echo "=== --host after the board is already up: rebinds, persists, prints a URL that works ==="
 IP=$(hostname -i | awk '{print $1}')
-$BC init --onboard --port 4790 --allow-root --host "$IP" > /root/host.log 2>&1
+$BC init --onboard --port 4790 --host "$IP" > /root/host.log 2>&1
 cat /root/host.log
 grep -q "restarting it on the new address" /root/host.log || exit 1
 grep -q "board: http://$IP:4790/" /root/host.log || exit 1
@@ -141,7 +146,7 @@ grep -q "board: http://localhost" /root/host.log && { echo "it handed over a URL
 grep -q "\"host\": \"$IP\"" /root/myfleet/.bridge-commander/config.json || exit 1
 curl -sf "http://$IP:4790/api/status" | grep -q "\"host\":\"$IP\"" || exit 1
 # …and back to loopback, so the rest of the run is where it was.
-$BC init --onboard --port 4790 --allow-root --host 127.0.0.1 > /root/host2.log 2>&1
+$BC init --onboard --port 4790 --host 127.0.0.1 > /root/host2.log 2>&1
 grep -q "board: http://localhost:4790/" /root/host2.log || exit 1
 
 echo "=== the tools the README no longer asks for, installed the way Bridget would ==="
@@ -167,7 +172,7 @@ cat >/usr/local/bin/claude <<'SHIM'
 #!/bin/bash
 echo ""
 echo "❯ "
-echo "  bypass permissions"
+echo "  ⏵⏵ auto mode on (shift+tab to cycle)"
 exec sleep infinity
 SHIM
 chmod +x /usr/local/bin/claude

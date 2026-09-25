@@ -10,6 +10,7 @@ import { openLieutenantChat } from './chat.js';
 import { openCardPane } from './pane.js';
 import { avatarGridHtml, wireAvatarGrid } from './avatars.js';
 import { selectionOn, isSelected, enterSelection, pick } from './selection.js';
+import { cardPermissions } from './perms.js';
 
 const boardEl = document.getElementById('board');
 
@@ -42,6 +43,12 @@ function tileHtml(c) {
   // PR chips: attributes.prs [{url, state}] — one state-colored chip per entry
   const prs = cardPrs(c).map((pr) => prChipHtml(pr)).join('');
   // a captain drag-order awaiting the lieutenant: subtle pending marker
+  // a worker on this card is blocked on a permission prompt: the loudest chip,
+  // first in the row, because nothing moves on the card until the captain answers
+  const nPerm = cardPermissions(S.doc, c.id).length;
+  const perm = nPerm
+    ? '<span class="t-perm" title="' + nPerm + ' permission request' + (nPerm > 1 ? 's' : '') + ' waiting for you">🔐 needs approval' + (nPerm > 1 ? ' ×' + nPerm : '') + '</span>'
+    : '';
   const order = c.pendingOrder
     ? '<span class="t-order" title="' + esc(c.pendingOrder.kind) + ' sent to ' + esc(c.owner) + ' — the card moves when the lieutenant acts">⏳ ordered</span>'
     : '';
@@ -64,13 +71,13 @@ function tileHtml(c) {
   const box = sel
     ? '<input class="t-sel" type="checkbox" tabindex="-1" aria-label="select card"' + (isSelected(c.id) ? ' checked' : '') + '>'
     : '';
-  return '<div class="tile' + (c.id === S.openCardId ? ' open' : '') + (sel && isSelected(c.id) ? ' sel' : '') + workerCls +
+  return '<div class="tile' + (c.id === S.openCardId ? ' open' : '') + (sel && isSelected(c.id) ? ' sel' : '') + workerCls + (nPerm ? ' needs-perm' : '') +
     '" draggable="' + (sel ? 'false' : 'true') + '" data-id="' + esc(c.id) + '"' + workerTitle + '>' +
     stripe +
     '<div class="t-row1">' + box + '<span class="t-emoji">' + esc(cardEmoji(c)) + '</span>' +
     '<span class="t-title">' + esc(c.title || c.id) + '</span>' +
     cardNumHtml(c.id) + cornerInd + '</div>' +
-    (labels || prs || order ? '<div class="t-chips">' + order + labels + prs + '</div>' : '') +
+    (perm || labels || prs || order ? '<div class="t-chips">' + perm + order + labels + prs + '</div>' : '') +
     '<div class="t-foot">' +
     '<span class="t-owner' + (filterSelected('owner', c.owner) ? ' active' : '') + '" data-owner="' + esc(c.owner) +
       '" title="click: filter by lieutenant · alt-click: exclude"><span class="dot" style="background:' + esc(lieutenantColor(c.owner)) + '"></span>' + esc((lieutenant(c.owner) || {}).name || c.owner) + '</span>' +

@@ -13,6 +13,7 @@ import { isEchoOf, addPending, pendingFor } from './pending.js';
 import { fileContextBlock } from './filectx.js';
 import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 import { slashOptions } from './slash.js';
+import { cardPermissions, mainChatPermissions, permBlockHtml, capturePermFocus, hydratePermInputs } from './perms.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -488,6 +489,11 @@ export function renderChat() {
   }
   const owedState = targetOwedState(target);
   if (owedState) tail += typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName);
+  // an agent of THIS conversation is blocked on a permission prompt: answer it
+  // where you are reading, last in the feed (the tray carries the same block)
+  const perms = isCard ? cardPermissions(S.doc, c.id) : lt ? mainChatPermissions(S.doc, lt.id) : [];
+  for (const p of perms) tail += permBlockHtml(p, 'chat');
+  const permFocus = perms.length ? capturePermFocus() : null;
 
   const prev = feed;
   feed = { key: target, blocks, tail };
@@ -499,8 +505,9 @@ export function renderChat() {
   } else if (prefixOk && prev.blocks.length) {
     // append-only delta: swap the typing indicator, add the new blocks at the
     // end; the earlier DOM — scroll, selection, focus — is never touched
-    const typingEl = feedEl.querySelector('.msg.typing');
-    if (typingEl) typingEl.remove();
+    // every tail element goes: the unified stream can hold several owed
+    // bubbles plus approval blocks, and each one is re-emitted below
+    for (const el of feedEl.querySelectorAll('.msg.typing, .perm-block')) el.remove();
     const fresh = blocks.slice(prev.blocks.length);
     feedEl.insertAdjacentHTML('beforeend', fresh.map((b) => b.html).join('') + tail);
     mdEnhance(feedEl);
@@ -525,6 +532,7 @@ export function renderChat() {
     };
   }
 
+  if (perms.length) hydratePermInputs(feedEl, permFocus);
   maybeMarkRead(isCard ? c : null, target);
 }
 

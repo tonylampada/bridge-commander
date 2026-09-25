@@ -12,6 +12,9 @@
 const DONE_KINDS = new Set(['worker-done', 'landed', 'handoff', 'done']);
 const CHAT_KINDS = new Set(['reply', 'question', 'message']);
 const ERROR_KINDS = new Set(['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled']);
+// An agent blocked on a permission prompt is not "something went wrong": it
+// gets its own bucket so the captain can tune it apart from failures.
+const APPROVAL_KINDS = new Set(['permission']);
 
 // Maps a kind (+ level, currently unused but kept for symmetry with the old
 // per-kind API and in case a future kind needs level to disambiguate) to one
@@ -23,6 +26,7 @@ export function categorize(kind, level) {
   if (DONE_KINDS.has(kind)) return 'done';
   if (CHAT_KINDS.has(kind)) return 'chat';
   if (ERROR_KINDS.has(kind)) return 'error';
+  if (APPROVAL_KINDS.has(kind)) return 'approval';
   return 'other';
 }
 
@@ -32,6 +36,7 @@ export function defaultCategoryPolicy() {
     done: { toast: true, sound: 'chime' },
     chat: { toast: true, sound: 'ding' },
     error: { toast: true, sound: 'alert' },
+    approval: { toast: true, sound: 'alert' },
     other: { toast: false, sound: 'none' },
   };
 }

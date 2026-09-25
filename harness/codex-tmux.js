@@ -75,7 +75,9 @@ function launchFlags(stateDir, key, callbackUrl) {
 // opts: { session?, window?, stateDir?, callbackUrl?, extraArgs?: string[], installHooks?: boolean }
 // Same opts contract as claude-tmux.js. installHooks is accepted and ignored:
 // codex has no settings-file hook — the notify relay rides the launch line, so
-// there is nothing to install (or clobber) in any cwd.
+// there is nothing to install (or clobber) in any cwd. permissionMode is also
+// accepted and ignored: codex has no board-relayed approval hook, so it keeps
+// its bypass flags whatever the board is configured for.
 // The returned ref carries NO resumeId: codex assigns the thread-id itself and
 // the first notify delivers it (the server adopts it from that turn-end).
 async function spawn(cwd, prompt, opts = {}) {

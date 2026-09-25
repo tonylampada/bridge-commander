@@ -100,6 +100,9 @@ focus, so an agent with siblings must always carry its window.
   (pane lifecycle, naming, launch-and-settle skeleton, turn-end tail, pane viewing)
 - `tmux.js` — shared tmux primitives (composer state, ghost-text stripping, verified submit)
 - `turnend-hook.js` — the Stop-hook relay claude runs at every turn boundary
+- `permission-hook.js` — the PermissionRequest-hook relay: holds claude's
+  permission prompt open on the board's `/api/permission` until the captain
+  answers
 - `codex-notify.js` — the notify relay codex runs at every turn boundary
 - `fake.js` — in-memory implementation for unit-testing server code; set
   `BC_FAKE_STATE=<dir>` for file-backed mode (cross-process: spawn writes a
@@ -114,10 +117,15 @@ focus, so an agent with siblings must always carry its window.
 ## The claude implementation
 
 - **spawn** — `tmux new-session -d -s bc-<id> -c <cwd>`, then launches
-  `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions --session-id <uuid>`
-  (bare — no prompt on the command line). The uuid is generated up front, so
+  `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --permission-mode <mode> --session-id <uuid>`
+  (bare — no prompt on the command line). `<mode>` is `opts.permissionMode`
+  (`auto` when absent; `default`, `acceptEdits` also pass through). `bypass`
+  is the old launch: `claude --dangerously-skip-permissions`, with the
+  `IS_SANDBOX=1` prefix when `opts.allowRoot` is set and we run as uid 0. No
+  other mode needs that prefix: claude only refuses the bypass launch as root.
+  The uuid is generated up front, so
   `resumeId` is known deterministically at birth. A fresh cwd shows claude's
-  folder-trust dialog even in bypass mode; spawn detects and auto-accepts it,
+  folder-trust dialog in every permission mode; spawn detects and auto-accepts it,
   waits for the main UI, and only THEN types the prompt into the composer with
   the same verified-submit machinery `send()` uses — the prompt is persisted to
   `<stateDir>/<key>.prompt` (source of truth) but never rides in argv, so
@@ -149,15 +157,28 @@ focus, so an agent with siblings must always carry its window.
   session id to `<stateDir>/<session>.session-id`, which resume prefers over the
   ref (ground truth wins). Without any id: fresh session, memory lost. The
   spawn's launch facts are REPLAYED from `<session>.spawn-args`, not rebuilt:
-  its extra flags (`opts.extraArgs` wins when the caller passes them) and its
-  `allowRoot` consent, without which a resume as uid 0 comes back missing the
-  `IS_SANDBOX=1` prefix and claude refuses to start.
+  its extra flags (`opts.extraArgs` wins when the caller passes them), its
+  permission mode (`opts.permissionMode` wins; a record from before modes
+  existed resumes in `auto`), and its `allowRoot` consent, without which a
+  bypass resume as uid 0 comes back missing the `IS_SANDBOX=1` prefix and
+  claude refuses to start.
 - **onTurnEnd** — spawn merges a `Stop` hook into the worktree's
   `.claude/settings.local.json` (kept out of git via `info/exclude`) running
   `turnend-hook.js`, which appends one JSON line per turn boundary to
   `<stateDir>/<session>.turnend.jsonl` and optionally POSTs it to a callback URL
   (`opts.callbackUrl` / `BC_TURNEND_URL`). `onTurnEnd()` tails that file
   (fs.watch + 1s polling backstop) and fires the hook per event.
+- **permission prompts** — when there is a callback URL, `installHooks` also
+  merges ONE `PermissionRequest` entry (`matcher: "*"`, `timeout: 3600`)
+  running `permission-hook.js <stateDir> <session> <server>/api/permission`
+  (other tools' entries survive; a stale bc entry is replaced). Claude runs it
+  only when it would show a permission dialog, so never in bypass mode. The
+  hook POSTs `{ ts, session, session_id, cwd, tmux_session, tool_name,
+  tool_input, permission_mode }` and waits (up to ~3550s) while the server holds
+  the request for the captain. A reply of `{ decision: "allow" }` or
+  `{ decision: "deny", message? }` becomes the hook's decision on stdout. A null
+  decision, an error, bad JSON or no server prints nothing, so claude falls back
+  to its own in-terminal dialog. The hook always exits 0.
 - **slash commands** — beyond the shared set, claude reports `/autocompact` and
   `/output-style` (both verified against the binary; the public docs lag). The
   latter is NOT a pass-through — the 2.1.239 binary removed the command and
@@ -180,8 +201,8 @@ State lives in `opts.stateDir` — the server and CLI always pass the
 workspace's `.bridge-commander/harness/` (`BC_HARNESS_STATE` overrides; the
 global `~/.bridge-commander/harness/` is a last-resort for bare embedders only):
 `<session>.prompt`, `<session>.session-id`, `<session>.turnend.jsonl`,
-`<session>.spawn-args` (the launch facts a spawn was given — `opts.extraArgs`
-and `opts.allowRoot` — recorded by the shared `tmux-session.js` so a RESUME
+`<session>.spawn-args` (the launch facts a spawn was given — `opts.extraArgs`,
+`opts.permissionMode` and `opts.allowRoot` — recorded by the shared `tmux-session.js` so a RESUME
 replays them: a worker pinned to a `--model` by its playbook must not come back
 on the default one. A missing or corrupt record reads as "nothing extra" and
 never throws — a resume that cannot read a hint must still resume).
@@ -273,8 +294,12 @@ Rules of the road, learned the hard way (from firstmate's verified adapters):
    paste). Type once, verify the composer cleared, retry Enter only.
 3. **Turn ends are pushed.** Use the harness's own hook/notify mechanism
    (claude: Stop hooks; codex: `-c notify=[...]`), never pane polling.
-4. **Full autonomy at launch.** The agent must run unattended
-   (claude: `--dangerously-skip-permissions`; handle any trust dialog at spawn).
+4. **Unattended at launch, answerable from the board.** The agent must never
+   wait on a terminal nobody watches. claude launches with
+   `--permission-mode <mode>` (default `auto`) and relays the prompts it still
+   raises to the board through the PermissionRequest hook; `bypass` restores
+   `--dangerously-skip-permissions`. codex keeps its bypass flags and ignores
+   `permissionMode`. Handle any trust dialog at spawn.
 5. **Never dirty the worktree.** Hook/config files written into the worktree go
    into `.git/info/exclude`.
 6. Verify each behavior empirically in a real session before relying on it.

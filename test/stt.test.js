@@ -43,7 +43,7 @@ test('no stt block: the proxy path is a plain 404 and /api/config is untouched',
     assert.equal((await s.api('POST', '/api/stt/transcribe', {})).status, 404);
     assert.equal((await s.api('GET', '/api/stt')).status, 404);
     const cfg = await s.api('GET', '/api/config');
-    assert.deepEqual(cfg.body, { voices: ['Luciana'] });   // no stt key: this is not a UI feature
+    assert.deepEqual(cfg.body, { voices: ['Luciana'], permissionMode: 'auto' });   // no stt key: this is not a UI feature
   } finally { await s.stop(); }
 });
 

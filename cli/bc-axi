@@ -505,7 +505,7 @@ async function installTurnEndHook() {
   // dir); BC_HARNESS_STATE stays an explicit override, matching the server.
   const harnessState = process.env.BC_HARNESS_STATE || path.join(STATE_DIR, 'harness');
   await installHooks(WORKSPACE, 'ws', harnessState, 'http://127.0.0.1:' + PORT + '/api/turn-end');
-  console.log('turn-end hook installed (.claude/settings.local.json -> /api/turn-end)');
+  console.log('turn-end + permission hooks installed (.claude/settings.local.json -> /api/turn-end, /api/permission)');
   installStatusLine(WORKSPACE);
   console.log('statusLine installed (.claude/settings.local.json -> real context window sidecar)');
 }
@@ -627,10 +627,14 @@ async function cmdInitOnboard() {
   // Root is checked HERE, not discovered from a dead pane 45 seconds later: as
   // root claude exits on sight of --dangerously-skip-permissions, so the board
   // would come up with nobody on it and a message that guessed wrong about why.
-  if (harness === 'claude' && fr.isRoot() && !opts.allowRoot) {
+  // Only the bypass launch carries that flag; the server spawns her with the
+  // same config permissionMode read here.
+  const mode = fr.permissionModeOf(readConfig());
+  const bypass = mode === 'bypass';
+  if (harness === 'claude' && bypass && fr.isRoot() && !opts.allowRoot) {
     die('bc-axi: first run blocked (root)\n\n' + fr.rootBlockText());
   }
-  if (opts.allowRoot && fr.isRoot()) {
+  if (bypass && opts.allowRoot && fr.isRoot()) {
     console.error('\n⚠ --allow-root: Bridget will be launched with IS_SANDBOX=1, skipping the guard that\n'
       + '  stops a permissions-skipping agent from running as root. Throwaway machines only.\n');
   }
@@ -651,7 +655,8 @@ async function cmdInitOnboard() {
   console.error('┌─ bridge-commander first run');
   console.error('│  workspace : ' + WORKSPACE + (resuming ? '   (existing)' : '   (NEW)'));
   console.error('│  board     : ' + boardUrl(opts.host));
-  console.error('└─ lieutenant: ' + BRIDGET.name);
+  console.error('│  lieutenant: ' + BRIDGET.name);
+  console.error('└─ permissions: ' + mode + (harness === 'claude' ? '' : ' (ignored by ' + harness + ')'));
 
   // 3. The workspace itself.
   fs.mkdirSync(STATE_DIR, { recursive: true });
@@ -724,7 +729,7 @@ async function cmdInitOnboard() {
     // Certain, and cheap to know: there is no point spawning into a binary that
     // is not there, and no point making anyone read a pane to find that out.
     live = false;
-    console.log('\n⚠ ' + fr.agentMissingText(harness, WORKSPACE).split('\n').join('\n  ')
+    console.log('\n⚠ ' + fr.agentMissingText(harness, WORKSPACE, { mode }).split('\n').join('\n  ')
       + '\n\n  Then run the SAME command again — it picks up where it stopped.');
   } else {
     try {
@@ -741,7 +746,7 @@ async function cmdInitOnboard() {
       // own session; that tail is printed verbatim and the cause is named FROM
       // it, with a guess only where the pane said nothing — and labelled as one.
       const why = (e.body && e.body.error) || e.message;
-      const d = fr.diagnoseSpawn(why, WORKSPACE);
+      const d = fr.diagnoseSpawn(why, WORKSPACE, { mode });
       console.log('\n⚠ ' + name + '\'s session did not start (' + d.cause + ').');
       // ALWAYS, even when there is nothing in it: a message that says "read the
       // pane above" over an empty space is worse than one that says the pane
@@ -1865,7 +1870,9 @@ if (!commands[cmd]) {
     '                                         welcome message already waiting. Installs nothing. Idempotent:\n' +
     '                                         a re-run resumes (see `onboarding`). --here overrides the\n' +
     '                                         refusal for a non-empty folder, --allow-root the refusal\n' +
-    '                                         to launch an agent as uid 0 — ask the person for both\n' +
+    '                                         to launch a bypass-mode agent as uid 0 (config.json\n' +
+    '                                         "permissionMode": "bypass"; the default "auto" runs as root) —\n' +
+    '                                         ask the person for both\n' +
     '  onboarding [--json]                    the first-run step the board remembers\n' +
     '  onboarding set <step> [--note "..."]   advance it: board-up | tools | project | checklist | done\n' +
     '  open [--port N] [--host H]             start the workspace server if needed (idempotent), print URL.\n' +

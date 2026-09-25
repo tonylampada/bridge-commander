@@ -58,7 +58,7 @@ test('spawn validates the window name before touching tmux: numeric or hostile n
 test('spawn never puts the brief on the launch line — it is typed into the composer after settle', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
-  const mock = mockTmux({ readyTail: 'bypass permissions\nsome status\n❯ ' });
+  const mock = mockTmux({ readyTail: '⏵⏵ auto mode on (shift+tab to cycle)\nsome status\n❯ ' });
   const brief = 'SECRET_BRIEF_MARKER: do the thing, then do the other thing.\nmulti-line too.';
   try {
     const ref = await claude.spawn(dir, brief, { session: 'bc-argvtest', stateDir });
@@ -67,7 +67,7 @@ test('spawn never puts the brief on the launch line — it is typed into the com
     const launchCall = mock.calls.find((c) => c.fn === 'sendLiteral');
     assert.ok(launchCall, 'the launch line must have been typed');
     assert.doesNotMatch(launchCall.args[1], /SECRET_BRIEF_MARKER/, 'launch line must not carry the brief');
-    assert.match(launchCall.args[1], /claude --dangerously-skip-permissions --session-id/);
+    assert.match(launchCall.args[1], /claude --permission-mode 'auto' --session-id/);
 
     const submitCall = mock.calls.find((c) => c.fn === 'submit');
     assert.ok(submitCall, 'the brief must have been delivered via verified submit');
@@ -192,6 +192,7 @@ test('a launch claude refuses ends the wait at once, with the pane attached', as
 
 // --allow-root is the ONLY thing that puts IS_SANDBOX=1 on a launch line: it is
 // the guard claude itself checks, and it is never switched off on our own say-so.
+// It only matters in bypass: no other mode trips claude's uid-0 refusal.
 test('IS_SANDBOX rides the launch line only when the caller asked for it', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
@@ -203,8 +204,9 @@ test('IS_SANDBOX rides the launch line only when the caller asked for it', async
     } finally { mock.restore(); }
   };
   try {
-    assert.doesNotMatch(await launchLine({}), /IS_SANDBOX/);
-    const asked = await launchLine({ allowRoot: true });
+    assert.doesNotMatch(await launchLine({ permissionMode: 'bypass' }), /IS_SANDBOX/);
+    assert.doesNotMatch(await launchLine({ allowRoot: true }), /IS_SANDBOX/, 'auto mode never needs it');
+    const asked = await launchLine({ allowRoot: true, permissionMode: 'bypass' });
     // Off root the flag is inert — the guard it lifts only exists for uid 0.
     if (typeof process.getuid === 'function' && process.getuid() === 0) {
       assert.match(asked, /^IS_SANDBOX=1 /);
@@ -229,7 +231,7 @@ test('spawn refuses to report success over a screen that is waiting for a person
     '  WARNING: Claude Code running in Bypass Permissions mode\n\n  ❯ 1. No, exit\n    2. Yes, I accept' });
   try {
     await assert.rejects(
-      () => claude.spawn(dir, 'a brief', { session: 'bc-consent', stateDir }),
+      () => claude.spawn(dir, 'a brief', { session: 'bc-consent', stateDir, permissionMode: 'bypass' }),
       (e) => {
         assert.match(e.message, /Yes, I accept/, 'the screen rides back on the failure');
         return true;
@@ -282,4 +284,109 @@ test('alive is still false when tmux answers that the window is not there', asyn
       await claude.alive({ harness: 'claude-tmux', session: 'bc-lt', window: 'w-card', cwd: '/tmp' }),
       false);
   } finally { mock.restore(); }
+});
+
+// ---------- permission modes ----------
+// The launch line is the whole contract with claude about permissions: bypass
+// is the old skip-everything flag, every other mode keeps claude's prompts so
+// the PermissionRequest hook can relay them to the board.
+async function spawnLine(opts, stateDir, dir) {
+  const mock = mockTmux({ readyTail: 'welcome\n❯ ' });
+  try {
+    await claude.spawn(dir, 'a brief', Object.assign({ session: 'bc-mode', stateDir }, opts));
+    return mock.calls.find((c) => c.fn === 'sendLiteral').args[1];
+  } finally { mock.restore(); }
+}
+
+test('the launch line carries the permission mode; bypass is the only skip-permissions launch', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  try {
+    const def = await spawnLine({}, stateDir, dir);
+    assert.match(def, /^CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --permission-mode 'auto' --session-id /);
+    assert.doesNotMatch(def, /dangerously/);
+    for (const mode of ['default', 'acceptEdits', 'auto']) {
+      const line = await spawnLine({ permissionMode: mode }, stateDir, dir);
+      assert.match(line, new RegExp(`claude --permission-mode '${mode}' --session-id `));
+      assert.doesNotMatch(line, /dangerously/);
+    }
+    const bypass = await spawnLine({ permissionMode: 'bypass', extraArgs: ['--model', 'opus'] }, stateDir, dir);
+    assert.match(bypass, /claude --dangerously-skip-permissions --session-id \S+ '--model' 'opus'$/);
+    assert.doesNotMatch(bypass, /--permission-mode/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('resume replays the spawn\'s permission mode, and opts wins over the record', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-spawn-'));
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const resumeLine = async (opts) => {
+    const mock = mockTmux({ readyTail: 'welcome\n❯ ' });
+    try {
+      await claude.resume({ harness: 'claude', session: 'bc-mode', cwd: dir, resumeId: 'u-1' },
+        Object.assign({ stateDir }, opts));
+      return mock.calls.find((c) => c.fn === 'sendLiteral').args[1];
+    } finally { mock.restore(); }
+  };
+  try {
+    await spawnLine({ permissionMode: 'acceptEdits' }, stateDir, dir);
+    assert.match(await resumeLine({}), /claude --permission-mode 'acceptEdits' --resume u-1$/);
+    assert.match(await resumeLine({ permissionMode: 'default' }), /claude --permission-mode 'default' --resume u-1$/);
+
+    await spawnLine({ permissionMode: 'bypass' }, stateDir, dir);
+    assert.match(await resumeLine({}), /claude --dangerously-skip-permissions --resume u-1$/);
+
+    // A record from before permission modes (flags only) resumes in the default mode.
+    fs.writeFileSync(path.join(stateDir, 'bc-mode.spawn-args'), JSON.stringify({ args: ['--model', 'opus'] }));
+    assert.match(await resumeLine({}), /claude --permission-mode 'auto' --resume u-1 '--model' 'opus'$/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test('installHooks writes ONE PermissionRequest entry pointing at /api/permission, and keeps other tools\' hooks', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-hooks-'));
+  const file = path.join(dir, '.claude', 'settings.local.json');
+  const read = () => JSON.parse(fs.readFileSync(file, 'utf8'));
+  const theirs = { matcher: 'Bash', hooks: [{ type: 'command', command: 'echo theirs' }] };
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, JSON.stringify({ hooks: { PermissionRequest: [theirs] } }));
+
+    await claude.installHooks(dir, 'bc-a', '/state', 'http://127.0.0.1:4780/api/turn-end');
+    let pr = read().hooks.PermissionRequest;
+    assert.strictEqual(pr.length, 2);
+    assert.deepStrictEqual(pr[0], theirs, 'another tool\'s entry survives');
+    assert.strictEqual(pr[1].matcher, '*');
+    assert.strictEqual(pr[1].hooks.length, 1);
+    const h = pr[1].hooks[0];
+    assert.strictEqual(h.type, 'command');
+    assert.strictEqual(h.timeout, 3600);
+    const script = path.join(__dirname, '..', 'permission-hook.js');
+    assert.strictEqual(h.command,
+      `node '${script}' '/state' 'bc-a' 'http://127.0.0.1:4780/api/permission'`);
+
+    // Re-install is a no-op; a new session in the same cwd replaces ours only.
+    await claude.installHooks(dir, 'bc-a', '/state', 'http://127.0.0.1:4780/api/turn-end');
+    assert.strictEqual(read().hooks.PermissionRequest.length, 2);
+    await claude.installHooks(dir, 'bc-b', '/state', 'http://127.0.0.1:4781/api/turn-end');
+    pr = read().hooks.PermissionRequest;
+    assert.strictEqual(pr.length, 2);
+    assert.deepStrictEqual(pr[0], theirs);
+    assert.match(pr[1].hooks[0].command, /'bc-b' 'http:\/\/127\.0\.0\.1:4781\/api\/permission'$/);
+    assert.strictEqual(read().hooks.Stop.length, 1, 'the Stop hook is still deduped as before');
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('installHooks with no callback URL installs no PermissionRequest hook', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-hooks-'));
+  try {
+    await claude.installHooks(dir, 'bc-a', '/state', '');
+    const settings = JSON.parse(fs.readFileSync(path.join(dir, '.claude', 'settings.local.json'), 'utf8'));
+    assert.strictEqual(settings.hooks.Stop.length, 1);
+    assert.strictEqual(settings.hooks.PermissionRequest, undefined);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
 });

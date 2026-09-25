@@ -16,11 +16,11 @@ const OUT = process.env.BC_REC_EXTRAARGS || '';
 // (a supervision tick, a harness switch), so what it needs is the sequence, not
 // the last one. Off unless BC_REC_LOG names a file.
 const LOG = process.env.BC_REC_LOG || '';
-function log(verb, extraArgs, ref) {
+function log(verb, extraArgs, ref, permissionMode) {
   if (!LOG) return;
   try {
     fs.appendFileSync(LOG, JSON.stringify({
-      ts: new Date().toISOString(), verb, extraArgs: extraArgs || [],
+      ts: new Date().toISOString(), verb, extraArgs: extraArgs || [], permissionMode: permissionMode || null,
       session: ref && ref.session, window: ref && ref.window, resumeId: (ref && ref.resumeId) || null,
     }) + '\n');
   } catch { /* the log is an observation, never a precondition */ }
@@ -34,14 +34,14 @@ function log(verb, extraArgs, ref) {
 function recording(name) {
   return Object.assign({}, fake, {
     async spawn(cwd, prompt, opts = {}) {
-      if (OUT) fs.writeFileSync(OUT, JSON.stringify({ extraArgs: opts.extraArgs || [] }) + '\n');
+      if (OUT) fs.writeFileSync(OUT, JSON.stringify({ extraArgs: opts.extraArgs || [], permissionMode: opts.permissionMode || null }) + '\n');
       const ref = { ...(await fake.spawn(cwd, prompt, opts)), harness: name };
-      log('spawn', opts.extraArgs, ref);
+      log('spawn', opts.extraArgs, ref, opts.permissionMode);
       return ref;
     },
     async resume(ref, opts = {}) {
       const out = { ...(await fake.resume(ref, opts)), harness: name };
-      log('resume', opts.extraArgs, out);
+      log('resume', opts.extraArgs, out, opts.permissionMode);
       return out;
     },
   });

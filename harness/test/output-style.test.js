@@ -20,7 +20,7 @@ const claude = require('../claude-tmux.js');
 const codex = require('../codex-tmux.js');
 const { mockTmux } = require('./tmux-mock.js');
 
-const READY = '⏵⏵ bypass permissions on (shift+tab to cycle)\n❯ ';
+const READY = '⏵⏵ auto mode on (shift+tab to cycle)\n❯ ';
 
 function tmpdir(prefix) {
   return fs.mkdtempSync(path.join(os.tmpdir(), prefix));

@@ -113,7 +113,8 @@ test('a spawn failure is diagnosed from the pane, and the pane comes back with i
 
   let d = fr.diagnoseSpawn(withTail(
     '$ claude --dangerously-skip-permissions --session-id x\n'
-    + '--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons'));
+    + '--dangerously-skip-permissions cannot be used with root/sudo privileges for security reasons'),
+  undefined, { mode: 'bypass' });
   assert.strictEqual(d.cause, 'root');
   assert.match(d.fix, /--allow-root|normal user/);
   assert.match(d.tail, /cannot be used with root/, 'the pane is handed back verbatim');
@@ -130,9 +131,11 @@ test('a spawn failure is diagnosed from the pane, and the pane comes back with i
 
   // Round 3: the consent screen only OUR launch line raises. The recipe has to
   // carry the flag — `cd <ws> && claude` can be run all day and never see it.
+  // Only the bypass launch raises it, so the recipe is the bypass line even
+  // when the config has since moved to another mode.
   d = fr.diagnoseSpawn(withTail(
     '  WARNING: Claude Code running in Bypass Permissions mode\n  ❯ 1. No, exit\n    2. Yes, I accept'),
-  '/root/myfleet');
+  '/root/myfleet', { mode: 'auto' });
   assert.strictEqual(d.cause, 'bypass');
   assert.match(d.fix, /claude --dangerously-skip-permissions/, 'a recipe that cannot clear it is no recipe');
   assert.match(d.fix, /2 \(Yes, I accept\)/);
@@ -170,11 +173,19 @@ test('the agent-missing block installs as the user who will run it, and points a
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-home-')); // …one with no claude in it
   const oldHome = process.env.HOME;
   let t;
-  try { process.env.HOME = home; t = fr.agentMissingText('claude', '/home/dev/myfleet'); }
-  finally { process.env.HOME = oldHome; fs.rmSync(home, { recursive: true, force: true }); }
+  let bypass;
+  try {
+    process.env.HOME = home;
+    t = fr.agentMissingText('claude', '/home/dev/myfleet');
+    bypass = fr.agentMissingText('claude', '/home/dev/myfleet', { mode: 'bypass' });
+  } finally { process.env.HOME = oldHome; fs.rmSync(home, { recursive: true, force: true }); }
   assert.match(t, /claude\.ai\/install\.sh/, 'a route that needs no root comes first');
-  assert.match(t, /cd \/home\/dev\/myfleet && claude --dangerously-skip-permissions/,
-    'the by-hand run happens in the workspace, with the flag that raises every screen');
+  assert.match(t, /cd \/home\/dev\/myfleet && claude --permission-mode auto$/m,
+    'the by-hand run happens in the workspace, with the flag her spawn uses');
+  assert.doesNotMatch(t, /consent screen|dangerously/, 'no consent screen outside bypass');
+  assert.match(bypass, /cd \/home\/dev\/myfleet && claude --dangerously-skip-permissions/,
+    'in bypass, the flag that raises every screen');
+  assert.match(bypass, /consent screen/);
   assert.match(t, /PATH="\$HOME\/\.local\/bin/, 'the installer does not edit PATH, so the block does');
 });
 
@@ -243,9 +254,9 @@ test('init --onboard refuses a code project, names what it found, and writes not
 // get them past. Every hand-run line is built in one place now, and this is the
 // test that keeps it that way.
 test('a hand-run recipe printed at root carries the escape hatch root needs', () => {
-  assert.strictEqual(fr.handRunLine('claude', '/root/myfleet', { root: true }),
+  assert.strictEqual(fr.handRunLine('claude', '/root/myfleet', { root: true, mode: 'bypass' }),
     '  cd /root/myfleet && IS_SANDBOX=1 claude --dangerously-skip-permissions');
-  assert.strictEqual(fr.handRunLine('claude', '/home/dev/ws', { root: false }),
+  assert.strictEqual(fr.handRunLine('claude', '/home/dev/ws', { root: false, mode: 'bypass' }),
     '  cd /home/dev/ws && claude --dangerously-skip-permissions',
     'a normal user gets no sandbox flag they do not need');
 
@@ -259,11 +270,12 @@ test('a hand-run recipe printed at root carries the escape hatch root needs', ()
     process.getuid = () => 0;
     process.env.HOME = home;
     const tail = (t) => 'spawn failed; pane tail:\n' + t;
+    const bypass = { mode: 'bypass' };
     texts = [
-      fr.agentMissingText('claude', '/root/myfleet'),
-      fr.diagnoseSpawn(tail('WARNING: Claude Code running in Bypass Permissions mode'), '/root/myfleet').fix,
-      fr.diagnoseSpawn(tail('Quick safety check: Is this a project you created'), '/root/myfleet').fix,
-      fr.diagnoseSpawn(tail('Choose the text style that looks best'), '/root/myfleet').fix,
+      fr.agentMissingText('claude', '/root/myfleet', bypass),
+      fr.diagnoseSpawn(tail('WARNING: Claude Code running in Bypass Permissions mode'), '/root/myfleet', bypass).fix,
+      fr.diagnoseSpawn(tail('Quick safety check: Is this a project you created'), '/root/myfleet', bypass).fix,
+      fr.diagnoseSpawn(tail('Choose the text style that looks best'), '/root/myfleet', bypass).fix,
     ];
   } finally {
     process.getuid = realUid;
@@ -277,4 +289,26 @@ test('a hand-run recipe printed at root carries the escape hatch root needs', ()
         'a launch line printed at root that root cannot run: ' + line.trim());
     }
   }
+});
+
+// Agents launch with --permission-mode <config permissionMode> (default auto)
+// now. The hand-run line has to be the same launch her spawn makes, and outside
+// bypass there is no root refusal and no consent screen to explain.
+test('outside bypass, the hand-run line is the spawn\'s own --permission-mode, with no root escape hatch', () => {
+  assert.strictEqual(fr.permissionModeOf({}), 'auto');
+  assert.strictEqual(fr.permissionModeOf(null), 'auto');
+  assert.strictEqual(fr.permissionModeOf({ permissionMode: 'acceptEdits' }), 'acceptEdits');
+  assert.strictEqual(fr.permissionModeOf({ permissionMode: '' }), 'auto');
+
+  assert.strictEqual(fr.handRunLine('claude', '/root/myfleet', { root: true }),
+    '  cd /root/myfleet && claude --permission-mode auto', 'the default mode, and root needs nothing extra');
+  assert.strictEqual(fr.handRunLine('claude', '/ws', { root: false, mode: 'acceptEdits' }),
+    '  cd /ws && claude --permission-mode acceptEdits');
+
+  const tail = (t) => 'spawn failed; pane tail:\n' + t;
+  const trust = fr.diagnoseSpawn(tail('Quick safety check: Is this a project you created'), '/ws', { mode: 'default' });
+  assert.match(trust.fix, /cd \/ws && claude --permission-mode default/);
+  assert.doesNotMatch(trust.fix, /consent screen/, 'there is no consent screen behind it outside bypass');
+  const setup = fr.diagnoseSpawn(tail('Choose the text style that looks best'), '/ws');
+  assert.match(setup.fix, /cd \/ws && claude --permission-mode auto/);
 });

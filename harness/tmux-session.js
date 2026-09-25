@@ -55,36 +55,39 @@ function spawnArgsFile(stateDir, key) {
 // The launch facts a resume has to replay, taken straight off the spawn's opts:
 // the extra flags (--model/--effort, pinned by the card's playbook) and the
 // caller's allowRoot consent (the IS_SANDBOX=1 prefix without which claude
-// refuses to come back as uid 0). Written as an object; a bare array is the
-// older record's shape and still reads as flags-only.
+// refuses to come back as uid 0) and the permission mode (claude only; a
+// resume that drops it comes back in the default mode). Written as an object;
+// a bare array is the older record's shape and still reads as flags-only.
 function recordSpawnArgs(stateDir, key, opts = {}) {
   const file = spawnArgsFile(stateDir, key);
   try {
     const rec = { args: (opts.extraArgs || []).map(String) };
     if (opts.allowRoot) rec.allowRoot = true;
-    if (rec.args.length || rec.allowRoot) fs.writeFileSync(file, JSON.stringify(rec) + '\n');
+    if (typeof opts.permissionMode === 'string' && opts.permissionMode) rec.permissionMode = opts.permissionMode;
+    if (rec.args.length || rec.allowRoot || rec.permissionMode) fs.writeFileSync(file, JSON.stringify(rec) + '\n');
     else fs.rmSync(file, { force: true });
   } catch {
     // best-effort: the record is an optimisation, never a precondition
   }
 }
-// -> { args: string[], allowRoot: boolean }. Missing, unreadable or corrupt
+// -> { args: string[], allowRoot: boolean, permissionMode: string|null }. Missing, unreadable or corrupt
 // reads as "nothing extra" and never throws: a resume that cannot read a hint
 // must still resume.
 function recordedSpawnArgs(stateDir, key) {
   try {
     const v = JSON.parse(fs.readFileSync(spawnArgsFile(stateDir, key), 'utf8'));
-    if (Array.isArray(v)) return { args: v.filter((a) => typeof a === 'string'), allowRoot: false };
+    if (Array.isArray(v)) return { args: v.filter((a) => typeof a === 'string'), allowRoot: false, permissionMode: null };
     if (v && typeof v === 'object') {
       return {
         args: Array.isArray(v.args) ? v.args.filter((a) => typeof a === 'string') : [],
         allowRoot: !!v.allowRoot,
+        permissionMode: typeof v.permissionMode === 'string' && v.permissionMode ? v.permissionMode : null,
       };
     }
   } catch {
     // fall through to the empty record
   }
-  return { args: [], allowRoot: false };
+  return { args: [], allowRoot: false, permissionMode: null };
 }
 
 function shellQuote(s) {
@@ -237,6 +240,7 @@ async function adoptWindow(ref, window, taken = []) {
 // (composer + footer are the screen's last rows), so the tail is behavior-
 // preserving there.
 const SETTLE_TAIL_LINES = 15;
+const NO_PRESELECTED_RE = /❯\s*(\d+\.\s*)?No\b/;
 
 function paneTail(pane) {
   return pane.replace(/\s+$/, '').split('\n').slice(-SETTLE_TAIL_LINES).join('\n');
@@ -272,6 +276,13 @@ async function launchAndSettle(target, launchCmd, sig) {
     }
     if (SHELLS.has(cmd)) continue; // agent not up yet (or it already exited — captured by timeout)
     if (menus.some((re) => re.test(tail))) {
+      // claude 2.1.28x preselects "No, exit" on the trust screen, where Enter
+      // quits claude. Walk the cursor off a No before answering.
+      if (NO_PRESELECTED_RE.test(tail)) {
+        await t.sendKey(target, 'Down');
+        await t.sleep(300);
+        continue;
+      }
       await t.sendKey(target, 'Enter');
       await t.sleep(1000);
       continue;

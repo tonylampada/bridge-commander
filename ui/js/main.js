@@ -3,7 +3,9 @@ import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, 
 import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
-import { trackEvents, renderNotifSettings } from './notifysettings.js';
+import { trackEvents, trackPermissions, renderNotifSettings } from './notifysettings.js';
+import { renderPermTray } from './permtray.js';
+import { docPermissions } from './perms.js';
 import { onOpenCard as toastOnOpenCard, onOpenLieutenant as toastOnOpenLieutenant } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
 import { renderTable } from './table.js';
@@ -285,8 +287,12 @@ document.addEventListener('keydown', (e) => {
 let renderPending = false;
 onRender(() => {
   if (!S.doc) return;
+  // An agent is blocked on the captain: the tray stays live even over the
+  // reading-mode guard, and the tab title says so when the tab is in the background.
+  renderPermTray();
+  const nPerm = docPermissions(S.doc).length;
+  document.title = (nPerm ? '🔐' + nPerm + ' · ' : '') + (S.doc.title || 'bridge command');
   if (artifactOpen()) { renderPending = true; return; }
-  document.title = S.doc.title || 'bridge command';
   document.getElementById('b-title').textContent = S.doc.title || 'bridge command';
   document.getElementById('b-subtitle').textContent = S.doc.subtitle || '';
   syncFilterInputs();
@@ -337,6 +343,7 @@ function applyBoard(doc) {
   S.doc = doc;
   trackMessages(S.doc);
   trackEvents(S.doc);
+  trackPermissions(S.doc);
   render();
 }
 function refetchBoard() {

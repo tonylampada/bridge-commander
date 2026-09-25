@@ -72,13 +72,17 @@ one — never on your own initiative.
 show the install command the block printed for this machine, **ask**, install it on a yes, and run
 the command again. On a no: there is no board without it — say so plainly and stop.
 
-**`first run blocked (root)`** — you are uid 0, and Claude Code refuses `--dangerously-skip-permissions`
-as root, so Bridget could never start. The block prints the two ways forward; **ask which one**.
+**`first run blocked (root)`** — only when the workspace config sets `"permissionMode": "bypass"`.
+Agents launch with `claude --permission-mode auto` by default (the `permissionMode` key in
+`.bridge-commander/config.json`: `auto` | `default` | `acceptEdits` | `bypass`), and claude runs
+that as root. Their permission prompts come to the board for the captain to approve or deny. In
+bypass mode you are uid 0, and Claude Code refuses `--dangerously-skip-permissions` as root, so
+Bridget could never start. The block prints the two ways forward; **ask which one**.
 The normal-user route (`useradd -m dev && su - dev`, then install the skill and run again there) is
 the right default. `--allow-root` launches her with `IS_SANDBOX=1`, turning off a guard that exists
 for good reasons — offer it only for a container they are about to delete, and only if they say yes.
-Everything you hand them to run by hand from then on needs that same `IS_SANDBOX=1` in front of
-`claude --dangerously-skip-permissions`.
+In bypass mode, everything you hand them to run by hand from then on needs that same
+`IS_SANDBOX=1` in front of `claude --dangerously-skip-permissions`.
 
 If you install Claude Code with `curl -fsSL https://claude.ai/install.sh | bash`, note that it does
 **not** edit anyone's PATH — it prints "Installation complete" and leaves it to you. As root, whose
@@ -102,20 +106,26 @@ names the cause from what is in it. Two you will meet on a fresh machine:
   trust?`. Claude Code asks it for any directory it has not already trusted, also before login.
   Trust is inherited from a trusted ancestor, so a workspace under a home directory they have
   already used Claude Code in may never ask.
-- **the bypass-permissions consent screen** — `WARNING: Claude Code running in Bypass Permissions
-  mode`, with `1. No, exit` preselected. This one is raised **by the launch flag the spawn uses**,
-  so a hand-run of plain `claude` never meets it and can never clear it.
+- **the bypass-permissions consent screen** (bypass mode only) — `WARNING: Claude Code running in
+  Bypass Permissions mode`, with `1. No, exit` preselected. This one is raised **by the launch flag
+  the bypass spawn uses**, so a hand-run of plain `claude` never meets it and can never clear it.
 - **not installed / not logged in** — the block names which, from the pane.
 
-For all of these, have them run it by hand **in the workspace, with the flag** — that is the only
-form that meets every one of those screens:
+For all of these, have them run it by hand **in the workspace, with the flag her spawn uses** — that
+is the only form that meets every one of those screens. In the default mode:
+
+```sh
+cd <the workspace folder> && claude --permission-mode auto
+```
+
+In bypass mode:
 
 ```sh
 cd <the workspace folder> && claude --dangerously-skip-permissions
 ```
 
-**As root** (only ever reachable via `--allow-root`), that line needs the escape hatch her spawn
-uses, or it dies on the root refusal instead of reaching any of those screens:
+**As root in bypass mode** (only ever reachable via `--allow-root`), that line needs the escape
+hatch her spawn uses, or it dies on the root refusal instead of reaching any of those screens:
 
 ```sh
 cd <the workspace folder> && IS_SANDBOX=1 claude --dangerously-skip-permissions
@@ -124,7 +134,7 @@ cd <the workspace folder> && IS_SANDBOX=1 claude --dangerously-skip-permissions
 The blocks the command prints already carry the right form for the user running it — copy what it
 printed rather than retyping this.
 
-answer whatever it asks (`2. Yes, I accept` on the consent screen), `/exit`, then run the first-run
+answer whatever it asks (`2. Yes, I accept` on the bypass consent screen), `/exit`, then run the first-run
 command again. **Never answer those screens for them.** They choose a theme, a login method, what a
 machine is trusted with, and whether an agent may skip permission prompts — none of which is yours.
 

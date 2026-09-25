@@ -70,6 +70,10 @@ export const api = {
   addArtifact: (id, uri, label) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/artifacts',
     Object.assign({ uri, actor: 'user' }, label ? { label } : {})),
   removeArtifact: (id, uri) => j('DELETE', '/api/cards/' + encodeURIComponent(id) + '/artifacts', { uri, actor: 'user' }),
+  // answer an agent's held permission prompt; the item leaves the board payload
+  // on the next broadcast. `message` only rides a deny.
+  decidePermission: (id, decision, message) => j('POST', '/api/permission/' + encodeURIComponent(id) + '/decide',
+    Object.assign({ decision }, message ? { message } : {})),
   markNotifRead: (seqs) => j('POST', '/api/notifications/read', { user: 'user', seqs }),
   markAllNotifRead: () => j('POST', '/api/notifications/read', { user: 'user', all: true }),
   markThreadRead: (target) => j('POST', '/api/read', { user: 'user', target }),
