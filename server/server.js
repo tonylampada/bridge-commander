@@ -4117,6 +4117,9 @@ function validateSchedule(body) {
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png',
+  // iOS reads the manifest for the home-screen name and standalone display. It
+  // tolerates a wrong type here; Android's install prompt does not.
+  '.webmanifest': 'application/manifest+json',
   // The keep-alive's loops. music.js fetches them as bytes and would not care
   // what this said — but a captain auditioning one before he merges it opens
   // the URL, and a browser plays audio/mp4 where it downloads octet-stream.
