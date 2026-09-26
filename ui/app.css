@@ -1572,6 +1572,15 @@ a.a-uri { color: var(--accent); }
   /* the peek drawer goes full-screen — a terminal needs every column it can get */
   #pane-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: none; }
   #log-modal { width: 100vw; height: 100vh; height: 100dvh; border-radius: 0; border: none; }
+  /* A surface that covers the whole screen covers #topbar and #tabs with it, so it
+     inherits their job: `black-translucent` runs the page under the status bar and
+     the home indicator sits over the bottom. Un-inset, the terminal's ✕ lands under
+     the battery icon — untappable, and killing the app is the only way out — and its
+     prompt line sits under the gesture bar. */
+  #detail, #pane-modal, #log-modal, #av-modal, #ls-modal, #mmd-overlay { padding-top: env(safe-area-inset-top); }
+  #detail, #pane-modal, #log-modal { padding-bottom: env(safe-area-inset-bottom); }
+  /* position:fixed, so the overlay's padding cannot move it */
+  #mmd-close { top: calc(10px + env(safe-area-inset-top)); }
   /* the typing hint would crowd the session name off a phone head, and typing
      into a pane is a physical-keyboard affordance anyway — the accent border on
      a focused screen still says everything it needs to */
@@ -1579,8 +1588,16 @@ a.a-uri { color: var(--accent); }
   .attr .v { max-width: 150px; }
   #notif-panel { top: 48px; }
   #settings-panel { top: 48px; }
-  /* sit above the bottom tab bar + home-indicator inset. `body ` outranks the
-     module's own rule, which is injected after this sheet. */
+  /* #tabs above is the bottom-most element of the phone column and already pads
+     by the home-indicator inset, so the composer sitting on top of it must not
+     pad by it a second time — that was the dead band. (The base rule keeps the
+     inset for wide screens, where #tabs is hidden and the composer is the
+     bottom-most thing on the page.) */
+  .composer { padding-bottom: 10px; }
+  /* position:fixed (speech.js), so unlike the composer this does not sit on top of
+     #tabs in flow — it has to clear a tab bar whose own height grows with the
+     inset, which is why the inset belongs here too. `body ` outranks the module's
+     own rule, injected after this sheet. */
   body .speech-transport { bottom: calc(60px + env(safe-area-inset-bottom)); }
 }
 @media (hover: none) {

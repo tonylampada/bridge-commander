@@ -10,7 +10,10 @@
 // It never touches server/server.js or any real workspace state. It binds
 // loopback by default and a SPECIFIC address on request — never all interfaces.
 //
-//   node dev/ui-server.js [--port N] [--host ADDR] [--tts URL]   (default 4790)
+//   node dev/ui-server.js [--port N] [--host ADDR] [--tts URL] [--stt]  (default 4790)
+//
+// --stt makes /api/config claim a transcription engine, so the composer mounts its
+// microphone — enough to photograph the phone layout; nothing transcribes here.
 //
 // --tts is the one thing the playground cannot fake: speech needs a real engine,
 // so the fixture's config block points at one when it is given a url, and the
@@ -79,6 +82,7 @@ const MIME = {
 
 function createDevServer(opts) {
   const ttsUrl = (opts && opts.ttsUrl) || '';
+  const stt = !!(opts && opts.stt);
   const base = Date.now();
   const BOOT_ID = 'dev-' + process.pid + '-' + base;
 
@@ -436,6 +440,9 @@ function createDevServer(opts) {
       if (route === 'GET /api/config') {
         const cfg = { voices: null };
         if (ttsUrl) cfg.tts = { enabled: true, url: ttsUrl, lang: 'pt', voice: null, params: {} };
+        // --stt only claims an engine, which is all the composer's microphone reads;
+        // there is no transcription behind it here.
+        if (stt) cfg.stt = true;
         return sendJson(res, 200, cfg);
       }
       // playbooks — the playground serves the PACKAGED ids, which is what
@@ -853,11 +860,13 @@ if (require.main === module) {
   let port = 4790;
   let host = '';
   let ttsUrl = '';
+  let stt = false;
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') port = parseInt(argv[++i], 10);
     else if (argv[i] === '--host') host = String(argv[++i] || '').trim();
     else if (argv[i] === '--tts') ttsUrl = String(argv[++i] || '').trim();
+    else if (argv[i] === '--stt') stt = true;
   }
   if (!Number.isInteger(port) || port <= 0) { console.error('bad --port'); process.exit(1); }
   if (host && !/^[\w.:-]+$/.test(host)) { console.error('bad --host'); process.exit(1); }
@@ -866,7 +875,7 @@ if (require.main === module) {
   const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
   const BIND_HOST = host || '127.0.0.1';
   if (ttsUrl && !/^https?:\/\//.test(ttsUrl)) { console.error('bad --tts (want http://host:port)'); process.exit(1); }
-  const { server } = createDevServer({ ttsUrl });
+  const { server } = createDevServer({ ttsUrl, stt });
   server.on('error', (e) => { console.error('server error: ' + e.message); process.exit(1); });
   server.listen(port, BIND_HOST, () => {
     console.log('[dev-playground] http://' + BIND_HOST + ':' + port + '  (fixture board, nothing persists)');

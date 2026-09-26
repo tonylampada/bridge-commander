@@ -30,12 +30,13 @@ const LANG = 'pt';
 
 // form, input, errEl: the composer's <form>, its <textarea>, and the line under
 // it. stt: whether the board has a transcription engine at all (from
-// /api/config). Returns the button, or null when there is nothing to mount —
-// no engine, or a browser (or a plain-http origin) with no getUserMedia.
+// /api/config). Returns the button, or null only when the board has no engine.
+//
+// A browser with no `getUserMedia` still gets the button: it mounts, and the tap
+// says why it cannot record. Returning null there left the captain's home-screen
+// web app with a composer that silently had no microphone and no explanation.
 export function mountMic({ form, input, errEl, stt }) {
   if (!stt || !form || !input) return null;
-  const md = typeof navigator !== 'undefined' && navigator.mediaDevices;
-  if (!md || !md.getUserMedia) return null;
 
   const btn = document.createElement('button');
   btn.type = 'button';
@@ -75,13 +76,24 @@ export function mountMic({ form, input, errEl, stt }) {
 
   async function begin() {
     say('');
+    // Checked per tap rather than at mount: whether the browser hands out a
+    // microphone at all is the answer he is owed when he taps, and `mediaDevices`
+    // is simply absent — off https, and on some iOS home-screen web apps.
+    const md = typeof navigator !== 'undefined' && navigator.mediaDevices;
+    if (!md || !md.getUserMedia) {
+      return say(typeof isSecureContext !== 'undefined' && !isSecureContext
+        ? 'no microphone outside https — open the board over https to dictate'
+        : 'this browser gives no microphone here — open the board in Safari to dictate');
+    }
     paint('…', 'busy');
     let stream;
     try {
       stream = await md.getUserMedia({ audio: true });
     } catch (e) {
       idle();
-      return say('no microphone: ' + why(e));
+      return say(e && e.name === 'NotAllowedError'
+        ? 'microphone permission refused — allow it for this site, then tap again'
+        : 'no microphone: ' + why(e));
     }
     let rec;
     try {

@@ -69,6 +69,7 @@ function fakePage() {
     configurable: true,
     value: { mediaDevices: { getUserMedia: (c) => gum(c) } },
   });
+  global.isSecureContext = true;
   global.MediaRecorder = FakeRecorder;
   global.fetch = async (url, init) => {
     posted.push({ url, init });
@@ -97,13 +98,45 @@ test('no stt on the board: no button, nothing added to the composer', async () =
   assert.equal(c.form.children.length, 1);
 });
 
-test('no getUserMedia (old browser, plain-http origin): no button either', async () => {
+// The captain's home-screen web app: `stt` is true, `navigator.mediaDevices` is
+// not there. The button must still mount — a composer with no microphone and no
+// explanation is the bug this replaced.
+test('no getUserMedia: the button mounts, and the tap says why it cannot record', async () => {
   fakePage();
   Object.defineProperty(global, 'navigator', { configurable: true, value: {} });
+  global.isSecureContext = true;
   const { mountMic } = await import(MOD);
   const c = composer();
-  assert.equal(mountMic({ form: c.form, input: c.input, errEl: c.errEl, stt: true }), null);
-  assert.equal(c.form.children.length, 1);
+  const btn = mountMic({ form: c.form, input: c.input, errEl: c.errEl, stt: true });
+  assert.ok(btn);
+  assert.deepEqual(c.form.children, [btn, c.input]);
+  btn.onclick();
+  assert.match(c.errEl.textContent, /Safari/);
+  assert.equal(c.errEl.hidden, false);
+  assert.equal(recorders.length, 0);                  // nothing was opened
+});
+
+test('no getUserMedia off https: the tap blames the origin, not the browser', async () => {
+  fakePage();
+  Object.defineProperty(global, 'navigator', { configurable: true, value: {} });
+  global.isSecureContext = false;
+  const { mountMic } = await import(MOD);
+  const c = composer();
+  const btn = mountMic({ form: c.form, input: c.input, errEl: c.errEl, stt: true });
+  btn.onclick();
+  assert.match(c.errEl.textContent, /https/);
+});
+
+test('permission refused: the message says so', async () => {
+  fakePage();
+  gum = async () => { const e = new Error('The request is not allowed'); e.name = 'NotAllowedError'; throw e; };
+  const { mountMic } = await import(MOD);
+  const c = composer();
+  const btn = mountMic({ form: c.form, input: c.input, errEl: c.errEl, stt: true });
+  btn.onclick();
+  await tick();
+  assert.match(c.errEl.textContent, /permission refused/);
+  assert.equal(btn.textContent, '\u{1F3A4}');                  // back to idle
 });
 
 test('tap, speak, tap: the blob is posted as multipart and the text lands in the composer', async () => {
