@@ -45,6 +45,12 @@ body {
   overflow: hidden; display: flex; flex-direction: column;
   -webkit-font-smoothing: antialiased;
 }
+/* The home-screen web app (no URL bar, nothing dynamic about its viewport) is where
+   `100dvh` misreports on iOS: the column ends a status bar or two short of the
+   screen and a dead band opens under the tab bar. `100vh` is the full screen there. */
+@media (display-mode: standalone) {
+  body { height: 100vh; }
+}
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
 button { font: inherit; color: inherit; background: none; border: none; cursor: pointer; }
