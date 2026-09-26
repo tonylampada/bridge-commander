@@ -146,6 +146,9 @@
       <textarea id="chat-input" rows="1" placeholder="message your lieutenant…" autocomplete="off"></textarea>
       <button type="submit" title="send">➤</button>
     </form>
+    <!-- dictation's one line of bad news (microphone refused, engine down).
+         mic.js writes it; the next keystroke in the composer clears it. -->
+    <div id="chat-mic-err" hidden></div>
     <div class="pane-resize" id="chat-resize" title="drag to resize · double-click to reset"></div>
   </section>
 

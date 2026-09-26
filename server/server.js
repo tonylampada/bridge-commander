@@ -183,8 +183,9 @@ const DEFAULT_PORT = 4780;
 // The one prefix the TTS engine is served under, both ends of it: what the
 // browser is handed as its engine address, and what the proxy strips.
 const TTS_PREFIX = '/api/tts';
-// Same idea for the STT engine, http and websocket both. Nothing is handed to
-// the UI under this one — ui/stt-test.html is the only page that speaks it.
+// Same idea for the STT engine, http and websocket both. The UI is handed only
+// `stt: true` (see userConfig) and posts to the prefix; the engine's real
+// address stays the server's business.
 const STT_PREFIX = '/api/stt';
 // ---------- workspace config (.bridge-commander/config.json) ----------
 function readConfig() {
@@ -209,6 +210,10 @@ function userConfig() {
   // what it was before this feature existed.
   const t = ttsConfig();
   if (t) out.tts = Object.assign({ enabled: true }, t, { url: TTS_PREFIX });
+  // Dictation is the same story with nothing to configure: the browser posts to
+  // the board's own /api/stt prefix, so all the UI needs to know is whether
+  // there is an engine behind it. No stt config => no stt key => no microphone.
+  if (sttConfig()) out.stt = true;
   return out;
 }
 // External TTS engine (voxbench API), optional: config.json

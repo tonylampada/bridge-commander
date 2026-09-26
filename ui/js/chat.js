@@ -13,6 +13,7 @@ import { isEchoOf, addPending, pendingFor } from './pending.js';
 import { fileContextBlock } from './filectx.js';
 import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 import { slashOptions } from './slash.js';
+import { mountMic } from './mic.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -692,6 +693,15 @@ composerEl.addEventListener('drop', (e) => {
   const files = e.dataTransfer && e.dataTransfer.files;
   if (files && files.length) addPendingFiles([...files]);
 });
+// The microphone, if the board has an engine behind /api/stt. mic.js mounts
+// nothing when it does not — a board with no stt block is byte-for-byte the
+// composer it was before this feature existed.
+api.config().then((cfg) => mountMic({
+  form: composerEl,
+  input: inputEl,
+  errEl: document.getElementById('chat-mic-err'),
+  stt: !!(cfg && cfg.stt),
+}), () => {});
 // paste-image from the clipboard (screenshots)
 inputEl.addEventListener('paste', (e) => {
   const items = e.clipboardData && e.clipboardData.items;

@@ -276,6 +276,17 @@ body.resizing { user-select: none; cursor: col-resize; }
 }
 .composer-attach:hover { color: var(--accent); border-color: var(--accent2); }
 .composer-attach:disabled { opacity: .4; pointer-events: none; }
+/* the microphone wears the attach button's look until it is live, and then goes
+   red with the elapsed seconds beside the dot — the only thing on the composer
+   that is allowed to be wider than a circle. */
+.composer-mic.rec {
+  width: auto; min-width: 34px; padding: 0 10px; gap: 5px; font-size: 12px;
+  font-family: var(--mono); color: var(--danger); border-color: var(--danger);
+  animation: mic-pulse 1.4s ease-in-out infinite;
+}
+.composer-mic.busy { color: var(--accent); animation: send-pulse 1s ease-in-out infinite; }
+@keyframes mic-pulse { 50% { opacity: .5; } }
+#chat-mic-err { flex: none; padding: 0 12px 8px; font-size: 12px; color: var(--danger); }
 #chat-send-err {
   flex: none; padding: 6px 12px 0; font-size: 12px; color: var(--danger);
 }

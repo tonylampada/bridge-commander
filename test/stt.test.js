@@ -47,6 +47,18 @@ test('no stt block: the proxy path is a plain 404 and /api/config is untouched',
   } finally { await s.stop(); }
 });
 
+// The UI gets a flag and nothing else: the engine's address stays the server's,
+// and the browser posts to the board's own prefix. This is what puts the
+// microphone on the chat composer (ui/js/mic.js).
+test('stt configured: /api/config says stt, and never the engine address', async () => {
+  const s = await startServer({ seed: seedConfig({ stt: { url: 'http://127.0.0.1:8878' } }) });
+  try {
+    const cfg = (await s.api('GET', '/api/config')).body;
+    assert.equal(cfg.stt, true);
+    assert.ok(!JSON.stringify(cfg).includes('8878'));
+  } finally { await s.stop(); }
+});
+
 // Method, path, query, headers and body go up; status, headers and body come
 // back. The proxy knows none of the names involved.
 test('the passthrough relays the request up and the answer back, whole', async () => {
