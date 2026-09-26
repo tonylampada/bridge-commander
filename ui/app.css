@@ -50,6 +50,9 @@ body {
    screen and a dead band opens under the tab bar. `100vh` is the full screen there. */
 @media (display-mode: standalone) {
   body { height: 100vh; }
+  /* The home-indicator inset already keeps the labels clear of the gesture bar;
+     the buttons' own bottom padding on top of it reads as a dead strip. */
+  #tabs button { padding-bottom: 2px; }
 }
 a { color: var(--accent); text-decoration: none; }
 a:hover { text-decoration: underline; }
