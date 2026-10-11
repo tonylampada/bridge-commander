@@ -1455,6 +1455,14 @@ function readAttachmentMeta(id) {
 }
 // Persist an uploaded file + sidecar; returns the public meta. `data` is the
 // decoded Buffer (size already enforced by the caller).
+// The Content-Type an attachment is served with: what was uploaded, except a
+// `.pdf` that arrived untyped — served as octet-stream it downloads instead of
+// opening in the viewer.
+function attachmentMime(meta) {
+  const m = meta.mime || '';
+  if ((!m || m === 'application/octet-stream') && /\.pdf$/i.test(meta.name || '')) return 'application/pdf';
+  return m || 'application/octet-stream';
+}
 function storeAttachment(name, mime, data) {
   const id = newAttachmentId();
   const safe = safeUploadName(name);
@@ -4456,7 +4464,7 @@ const server = http.createServer(async (req, res) => {
         // the gate that writes hooks a way to run script on the board's origin.
         const isHtml = !am && !hook && (ext === '.html' || ext === '.htm');
         const ctype = isHtml ? 'text/html; charset=utf-8'
-          : am ? (attMime || 'application/octet-stream')
+          : am ? attachmentMime({ name, mime: attMime })
           : (ARTIFACT_MIME[ext] || 'application/octet-stream');
         // Images, video, audio, pdf, and rendered html show inline in the browser;
         // other binaries download. nosniff pins the Content-Type; the sandbox CSP
@@ -4464,7 +4472,10 @@ const server = http.createServer(async (req, res) => {
         // (inline <img>/<video> subresources unaffected). A curated .html artifact
         // is exempt — it is the captain's own deliverable, and sandboxing it against
         // a board anyone on the tailnet can drive defends nothing.
-        const inline = isHtml || /^(image|video|audio)\//.test(ctype) || ctype === 'application/pdf';
+        // A PDF is exempt too: browsers refuse to start their PDF viewer in a
+        // sandboxed document (see the attachment route).
+        const isPdf = ctype === 'application/pdf';
+        const inline = isHtml || isPdf || /^(image|video|audio)\//.test(ctype);
         let data;
         try { data = fs.readFileSync(file); }
         catch (e) { return sendJson(res, 404, { error: 'unreadable: ' + e.message }); }
@@ -4472,7 +4483,7 @@ const server = http.createServer(async (req, res) => {
           'Content-Type': ctype,
           'Cache-Control': 'private, max-age=31536000, immutable',
           'X-Content-Type-Options': 'nosniff',
-          ...(isHtml ? {} : { 'Content-Security-Policy': 'sandbox' }),
+          ...(isHtml || isPdf ? {} : { 'Content-Security-Policy': 'sandbox' }),
           'Content-Disposition': (inline ? 'inline' : 'attachment') + '; filename="' + name.replace(/["\\\r\n]/g, '_') + '"',
         });
       }
@@ -4645,11 +4656,18 @@ const server = http.createServer(async (req, res) => {
       // nosniff pins the stored Content-Type (no MIME sniffing into executable
       // types); the sandbox CSP neutralizes scripts if an HTML/SVG upload is
       // navigated to as a document — inline <img>/<video> subresources are unaffected.
+      // A PDF is the exception to the sandbox: Chrome and Safari refuse to start
+      // their PDF viewer inside a sandboxed document, so the viewer's iframe would
+      // show "blocked" instead of the pages. The viewer runs the PDF's own script
+      // in its isolated plugin context, never on the board's origin.
+      const ctype = attachmentMime(meta);
+      const isPdf = ctype === 'application/pdf';
       return sendBytes(req, res, data, {
-        'Content-Type': meta.mime || 'application/octet-stream',
+        'Content-Type': ctype,
         'Cache-Control': 'private, max-age=31536000, immutable',
         'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': 'sandbox',
+        ...(isPdf ? { 'Content-Disposition': 'inline; filename="' + meta.name.replace(/["\\\r\n]/g, '_') + '"' }
+          : { 'Content-Security-Policy': 'sandbox' }),
       });
     }
 

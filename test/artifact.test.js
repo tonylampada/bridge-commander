@@ -173,6 +173,24 @@ test('raw=1 for a listed .html → 200, text/html inline, no sandbox CSP', async
   }
 });
 
+test('raw=1 for a listed .pdf → application/pdf inline, no sandbox (the viewer renders it)', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    const pdf = path.join(s.dir, 'spec.pdf');
+    fs.writeFileSync(pdf, '%PDF-1.4\n%%EOF\n');
+    const { uri } = await cardWithArtifact(s, pdf, 'the spec');
+    const res = await fetch(s.base + '/api/artifact?uri=' + encodeURIComponent(uri) + '&raw=1');
+    assert.strictEqual(res.status, 200);
+    assert.strictEqual(res.headers.get('content-type'), 'application/pdf');
+    assert.match(res.headers.get('content-disposition') || '', /^inline; filename="spec\.pdf"/);
+    // a sandboxed document gets "blocked" instead of the browser's PDF viewer
+    assert.strictEqual(res.headers.get('content-security-policy'), null);
+    assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
+  } finally {
+    await s.stop();
+  }
+});
+
 test('non-image binary served as bytes with attachment disposition', async () => {
   const s = await startServerWithLieutenant();
   try {

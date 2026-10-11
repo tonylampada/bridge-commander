@@ -288,6 +288,7 @@ const avVideo = document.getElementById('av-video');
 const avAudioWrap = document.getElementById('av-audio-wrap');
 const avAudio = document.getElementById('av-audio');
 const avFrame = document.getElementById('av-frame');
+const avPdf = document.getElementById('av-pdf');
 const avExpand = document.getElementById('av-expand');
 const avDownload = document.getElementById('av-download');
 const avSrcBtn = document.getElementById('av-src');
@@ -313,6 +314,9 @@ function avReset(name, uri) {
   avAudio.load(); // actually drop the previous stream (removeAttribute alone doesn't)
   avFrame.hidden = true;
   avFrame.removeAttribute('src'); // drop the previous page so it can't linger
+  avPdf.hidden = true;
+  avPdf.textContent = '';
+  pdfRun++; // a pdf.js render still in flight stops at its next page
   avBody.hidden = false;
   avBody.className = '';
   avDownload.hidden = true;
@@ -646,6 +650,10 @@ export async function openArtifact(uri) { // exported for the test; the UI reach
     avModal.classList.add('expanded');
     return;
   }
+  if (PDF_EXT.test(name)) {
+    avDownload.href = rawUrl; avDownload.setAttribute('download', name); avDownload.hidden = false;
+    return showPdf(rawUrl);
+  }
   if (BIN_EXT.test(name)) return offerDownload('No inline preview for this file type. Use ⬇ to download.');
   // Text / markdown (or unknown) → the existing text preview. A genuine binary
   // (null bytes → 415) or over-cap text (413, "too large") falls through to a
@@ -674,9 +682,11 @@ const VIDEO_EXT = /\.(mp4|mov|webm|m4v)$/i;
 const isVideoMime = (m) => /^video\//.test(String(m || ''));
 const AUDIO_EXT = /\.(mp3|wav|m4a|aac|ogg|oga|opus|flac)$/i;
 const isAudioMime = (m) => /^audio\//.test(String(m || ''));
+const PDF_EXT = /\.pdf$/i;
+const isPdfMime = (m) => /^application\/pdf\b/.test(String(m || ''));
 const TEXT_EXT = /\.(md|markdown|txt|log|json|ya?ml|csv|js|ts|py|sh|css|html?)$/i;
 // Known binaries — never worth a text preview; offer a download straight away.
-const BIN_EXT = /\.(pdf|zip|gz|tgz|tar|xlsx?|docx?|pptx?|bin|exe|dmg|iso|woff2?|ttf|otf|parquet|pkl|npz|so|dll|wasm|class|jar)$/i;
+const BIN_EXT = /\.(zip|gz|tgz|tar|xlsx?|docx?|pptx?|bin|exe|dmg|iso|woff2?|ttf|otf|parquet|pkl|npz|so|dll|wasm|class|jar)$/i;
 export async function openAttachment(att) {
   const url = '/api/attachments/' + encodeURIComponent(att.id);
   const name = att.name || '';
@@ -698,6 +708,7 @@ export async function openAttachment(att) {
   if (isImageMime(mime) || (!mime && IMG_EXT.test(name))) return showImage();
   if (isVideoMime(mime) || (!mime && VIDEO_EXT.test(name))) return showVideo();
   if (isAudioMime(mime) || (!mime && AUDIO_EXT.test(name))) return showAudio();
+  if (isPdfMime(mime) || PDF_EXT.test(name)) return showPdf(url);
   if (TEXTY_MIME.test(mime) || (!mime && TEXT_EXT.test(name))) {
     avBody.textContent = 'loading…';
     try {
@@ -718,16 +729,59 @@ export async function openAttachment(att) {
     if (isImageMime(ct)) return showImage();
     if (isVideoMime(ct)) return showVideo();
     if (isAudioMime(ct)) return showAudio();
+    if (isPdfMime(ct)) return showPdf(url);
     if (TEXTY_MIME.test(ct)) return showText(await r.text());
     avBody.textContent = 'No inline preview for this file type. Use ⬇ to download.';
   } catch (e) { avBody.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)'; }
+}
+// A PDF opens rendered, every page, in the expanded viewer. The browser's own
+// viewer does it in an iframe — except on iOS, where an iframe shows page 1 and
+// nothing else, so there pdf.js (vendored, loaded on first use) paints each page
+// onto a canvas the width of the column.
+let pdfRun = 0; // bumped by avReset; a render whose run is stale stops
+const isIOS = () => /iP(hone|ad|od)/.test(navigator.userAgent)
+  || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1); // iPadOS says it is a Mac
+function showPdf(url) {
+  avBody.hidden = true;
+  avModal.classList.add('expanded');
+  if (!isIOS()) { avFrame.hidden = false; avFrame.src = url; return; }
+  avPdf.hidden = false;
+  return renderPdf(url, pdfRun);
+}
+async function renderPdf(url, run) {
+  const note = document.createElement('div');
+  note.className = 'av-pdf-note';
+  note.textContent = 'loading…';
+  avPdf.appendChild(note);
+  try {
+    const pdfjs = await import('/ui/vendor/pdfjs/pdf.min.js');
+    pdfjs.GlobalWorkerOptions.workerSrc = '/ui/vendor/pdfjs/pdf.worker.min.js';
+    const doc = await pdfjs.getDocument({ url }).promise;
+    if (run !== pdfRun) return doc.destroy();
+    note.remove();
+    // Paint at the column's width in device pixels (capped at 2x: iOS kills a
+    // tab whose canvases pass its memory budget, and a long PDF is many canvases).
+    const px = Math.min(avPdf.clientWidth, 900) * Math.min(window.devicePixelRatio || 1, 2);
+    for (let n = 1; n <= doc.numPages; n++) {
+      const page = await doc.getPage(n);
+      if (run !== pdfRun) return doc.destroy();
+      const viewport = page.getViewport({ scale: px / page.getViewport({ scale: 1 }).width });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.floor(viewport.width);
+      canvas.height = Math.floor(viewport.height);
+      avPdf.appendChild(canvas);
+      await page.render({ canvas, viewport }).promise;
+    }
+  } catch (e) {
+    if (run === pdfRun) note.textContent = '⚠ no preview — ' + e.message + ' (use ⬇ to download)';
+  }
 }
 // A close hook lets main.js run one deferred render when the viewer closes
 // (renders are skipped while it's open — see the reading-mode guard). Mirrors
 // state.js onRender: a setter avoids a circular import back into main.js.
 let onCloseFn = () => {};
 export function onArtifactClose(fn) { onCloseFn = fn; }
-export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); avAudio.pause(); onCloseFn(); }
+export function closeArtifact() { avOverlay.hidden = true; avVideo.pause(); avAudio.pause(); pdfRun++; onCloseFn(); }
 export function artifactOpen() { return !avOverlay.hidden; }
 document.getElementById('av-close').onclick = closeArtifact;
 // Maximize / restore the viewer (pure CSS class toggle — see #av-modal.expanded).
