@@ -41,6 +41,31 @@ test('upload → stored + served with the right Content-Type and correct size', 
   }
 });
 
+test('pdf attachment serves application/pdf inline and unsandboxed, also when uploaded untyped', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    for (const mime of ['application/pdf', '']) {
+      const up = await s.api('POST', '/api/attachments', { name: 'deck.pdf', mime, dataBase64: b64('%PDF-1.4\n%%EOF\n') });
+      assert.strictEqual(up.status, 200);
+      for (const url of ['/api/attachments/' + up.body.id, '/api/artifact?raw=1&uri=' + encodeURIComponent(up.body.uri)]) {
+        if (url.startsWith('/api/artifact')) {
+          // the raw artifact serve takes an attachment only once it is on a card
+          const cr = await s.api('POST', '/api/cards', { owner: LT, title: 'pdf' });
+          await s.api('POST', '/api/cards/' + cr.body.card.id + '/artifacts', { uri: up.body.uri });
+        }
+        const res = await fetch(s.base + url);
+        assert.strictEqual(res.status, 200, url);
+        assert.strictEqual(res.headers.get('content-type'), 'application/pdf', url + ' (mime ' + JSON.stringify(mime) + ')');
+        assert.match(res.headers.get('content-disposition') || '', /^inline; filename="deck\.pdf"/, url);
+        assert.strictEqual(res.headers.get('content-security-policy'), null, url);
+        assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff', url);
+      }
+    }
+  } finally {
+    await s.stop();
+  }
+});
+
 test('video attachment serve honors Range (206 slice) for <video> playback', async () => {
   const s = await startServerWithLieutenant();
   try {

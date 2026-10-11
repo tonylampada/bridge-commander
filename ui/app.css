@@ -1420,6 +1420,10 @@ a.a-uri { color: var(--accent); }
 /* rendered html artifact (shares the av-overlay) — fills the body; white backdrop
    so a self-contained page renders on its own canvas, not the board's dark bg */
 #av-frame { flex: 1; min-height: 60px; width: 100%; border: 0; background: #fff; }
+/* pdf.js pages (iOS): one canvas per page, stacked, each the column's width */
+#av-pdf { flex: 1; min-height: 60px; overflow: auto; -webkit-overflow-scrolling: touch; padding: 8px; display: flex; flex-direction: column; align-items: center; gap: 8px; background: var(--bg); }
+#av-pdf canvas { width: 100%; max-width: 900px; height: auto; background: #fff; border-radius: 2px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+#av-pdf .av-pdf-note { color: var(--dim); font-size: 12px; font-family: var(--mono); }
 #av-download { flex: none; color: var(--dim); font-size: 15px; padding: 2px 6px; text-decoration: none; }
 #av-download:hover { color: var(--accent); }
 
