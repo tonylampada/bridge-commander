@@ -107,6 +107,27 @@ retries on its own.
   pristine Docker container; `--demo` also populates a demo board on port 4790 (the fixture
   behind the README screenshot) and keeps the container running.
 
+## Token usage (📊) — keeping it warm
+
+The 📊 mode indexes on demand: opening it on a store older than 5 min starts a run in a child
+process (`BC_USAGE_STALE_MS` changes the window). To keep the numbers and the quota trail fresh
+while nobody looks, fire the same command from a schedule — a named hook is an executable file in
+`<workspace>/.bridge-commander/hooks/`:
+
+```
+cat > .bridge-commander/hooks/usage-index <<'SH'
+#!/bin/sh
+exec node <tool checkout>/server/usage.js index --workspace "$PWD"   # hooks run in the workspace root
+SH
+chmod +x .bridge-commander/hooks/usage-index
+bc-axi schedule add usage-index --hook usage-index --when 15m --owner <lieutenant-id>
+```
+
+The first run reads every transcript once (~3 GB in ~7 s here); later runs read only new lines.
+The store is `<state>/usage/` (self-ignoring); delete it to rebuild from scratch. Rates live in
+`server/usage.js` (`PRICES`); `<state>/usage/prices.json` (`{"model": [in, out, cache read,
+cache write 5m, cache write 1h]}` per MTok) overrides them per workspace.
+
 ## `bin/nm-clerk.sh` — the no-mistakes clerk
 
 Not part of the server. It drives `no-mistakes axi` through its gates with no model in the
