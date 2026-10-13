@@ -50,6 +50,7 @@ Per-workspace config lives in `.bridge-commander/config.json`:
 | `harness` | `claude` | default agent harness (`claude` \| `codex`) |
 | `voices` | — | UI text-to-speech voice filter |
 | `tts` | — | speak agent messages through an external TTS engine: `{"url": "http://127.0.0.1:8883", "lang": "pt", "voice": null, "params": {}}` (voxbench API). Absent = the board stays silent. The **server** reaches the engine: the browser talks to `/api/tts/*` on the board's own origin and the url only has to be reachable from the machine running the server (no CORS, no tailnet on the phone) |
+| `push` | — | Web Push contact: `{"subject": "mailto:you@example.com"}` (the VAPID `sub` claim; must be `mailto:` or `https:`). Absent = the project URL. Push itself needs no config — see below |
 
 Env knobs (set on the server process):
 
@@ -69,6 +70,19 @@ Env knobs (set on the server process):
 | `BC_TEARDOWN_TIMEOUT_MS` | `300000` / `60000` | timeout for a playbook's `teardown` command — 5 min at the handoff and archive (un-awaited), 60s at a rework restart (awaited inside `card start`); set, it overrides both |
 | `BC_TTS_IDLE_MS` | `20000` | how long the TTS passthrough waits for the next byte from the engine before hanging up — a gap between bytes, not a cap on the request |
 | `BC_SYSLOAD_MS` | `2000` | monitoring panel (⚙️ → machine load) sample interval; the sampler runs only while the panel is open |
+
+### Push notifications to a phone
+
+⚙️ → **📲** turns on Web Push for that device: level-1 events (the bell), worker done / stopped,
+and cards entering 👀 Your review arrive as system notifications with the board closed; a tap
+opens the board on the card. Needs a secure context (https, or `localhost`); on iPhone, open the
+board from its home-screen icon first (Safari in a tab has no Web Push). The VAPID keypair and
+device subscriptions live in `.bridge-commander/push/`, which git-ignores itself.
+
+Behind an auth proxy (e.g. Cloudflare Access) delivery still works with an expired login — the
+push service talks to the device directly — but turning push on/off, the **test** button and a
+rotated subscription (`pushsubscriptionchange`) need a live login: reload the board, log in,
+toggle again.
 
 ### Network exposure
 
