@@ -11,7 +11,9 @@
 
 const DONE_KINDS = new Set(['worker-done', 'landed', 'handoff', 'done']);
 const CHAT_KINDS = new Set(['reply', 'question', 'message']);
-const ERROR_KINDS = new Set(['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled']);
+// Failures land here too — in-tab and on the phone, the same 💥 row.
+const ERROR_KINDS = new Set(['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled',
+  'ci-failed', 'hook-failed', 'worker-kill-failed', 'schedule-failed', 'stale-base']);
 
 // Maps a kind (+ level, currently unused but kept for symmetry with the old
 // per-kind API and in case a future kind needs level to disambiguate) to one

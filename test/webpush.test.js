@@ -90,6 +90,8 @@ test('categories: defaults are everything but other — worker-stopped included 
   assert.strictEqual(P('needs-captain', 1), 'error');
   assert.strictEqual(P('question', 1), 'chat');
   assert.strictEqual(P('signal', 2), 'other');
+  for (const k of ['ci-failed', 'hook-failed', 'worker-kill-failed', 'schedule-failed', 'stale-base']) assert.strictEqual(P(k, 1), 'error', k);
+  assert.strictEqual(P(undefined, 1), 'other', 'a kindless bell stays in other');
   assert.strictEqual(wp.defaultPushCategories()[P('worker-stopped', 2)], false, 'a stopped worker does not buzz by default');
 });
 
