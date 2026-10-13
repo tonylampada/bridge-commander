@@ -78,6 +78,7 @@ const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.jo
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
 const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
+const webpush = require(path.join(__dirname, 'webpush.js'));
 const { proxyTts } = require(path.join(__dirname, 'ttsproxy.js'));
 const { proxyStt, proxySttUpgrade } = require(path.join(__dirname, 'sttproxy.js'));
 const { execFile, execFileSync } = require('child_process');
@@ -406,6 +407,56 @@ function saveBoard() {
   const tmp = BOARD_FILE + '.tmp';
   fs.writeFileSync(tmp, JSON.stringify(storedBoard(), null, 2));
   fs.renameSync(tmp, BOARD_FILE);
+  schedulePushScan();
+}
+
+// ---------- web push (the captain's phone) ----------
+// Every event lands on the board through a save, so the save is the one place
+// that sees them all: after it, the events past the last seq scanned go through
+// webpush.pushFor and out to every subscribed device. Starts at the seq the
+// board booted with — a restart never replays history into his pocket.
+const pushStore = webpush.createPushStore(STATE_DIR);
+let pushSeq = board.seq;
+let pushScanQueued = false;
+function pushSubject() {
+  const p = readConfig().push;
+  const s = p && typeof p === 'object' && typeof p.subject === 'string' ? p.subject.trim() : '';
+  return /^(mailto:|https:\/\/)\S+$/.test(s) ? s : 'https://github.com/tonylampada/bridge-commander';
+}
+function schedulePushScan() {
+  if (pushScanQueued) return;
+  pushScanQueued = true;
+  setImmediate(() => { pushScanQueued = false; pushScan(); });
+}
+function pushScan() {
+  const from = pushSeq;
+  pushSeq = board.seq;
+  if (pushSeq <= from) return;
+  let subs;
+  try { subs = pushStore.list(); } catch (e) { return; }
+  if (!subs.length) return;
+  const fresh = [];
+  for (const e of board.events) if (e.seq > from) fresh.push(e);
+  for (const c of board.cards) {
+    for (const e of c.events || []) if (e.seq > from) fresh.push(Object.assign({ card: c.id, cardTitle: c.title }, e));
+  }
+  fresh.sort((a, b) => a.seq - b.seq);
+  const kinds = effectiveKinds();
+  const ctx = { emoji: (k) => (kinds[k] && kinds[k].emoji) || '', reviewTitle: columnTitle('review') };
+  for (const e of fresh) {
+    const msg = webpush.pushFor(e, ctx);
+    if (msg) sendPushAll(Object.assign({ seq: e.seq }, msg));
+  }
+}
+function sendPushAll(msg) {
+  return webpush.broadcastPush(pushStore, msg, pushSubject()).then((rows) => {
+    for (const r of rows) {
+      if (r.error || (r.status >= 300 && !r.gone)) {
+        console.error(now() + ' push to ' + r.endpoint.slice(0, 60) + ' failed: ' + (r.error || r.status + ' ' + r.text));
+      }
+    }
+    return rows;
+  });
 }
 
 // One-time migration, at boot: the charter used to be a board field. Move what
@@ -4371,6 +4422,41 @@ const server = http.createServer(async (req, res) => {
       const off = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
       const all = readArchive().reverse();
       return sendJson(res, 200, { archive: all.slice(off, off + n), total: all.length });
+    }
+    // ----- web push: the service worker and the device subscriptions -----
+    // sw.js is served from the root so its scope is the whole board.
+    if (route === 'GET /sw.js') {
+      let data;
+      try { data = fs.readFileSync(path.join(UI_DIR, 'sw.js')); } catch (e) { return sendJson(res, 404, { error: 'not found' }); }
+      res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8', 'Cache-Control': 'no-store' });
+      return res.end(data);
+    }
+    if (route === 'GET /api/push') {
+      return sendJson(res, 200, { publicKey: pushStore.vapid().publicKey, devices: pushStore.list().length });
+    }
+    if (route === 'POST /api/push/subscribe') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      // pushsubscriptionchange hands over the endpoint it replaces
+      if (typeof body.old === 'string') pushStore.remove(body.old);
+      const r = pushStore.add(body.subscription, { ua: req.headers['user-agent'] });
+      if (r.error) return sendJson(res, 400, r);
+      return sendJson(res, 200, r);
+    }
+    if (route === 'POST /api/push/unsubscribe') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      return sendJson(res, 200, { ok: true, removed: pushStore.remove(String(body.endpoint || '')), devices: pushStore.list().length });
+    }
+    // A test notification to every device — the toggle's "send test" and the
+    // local check. Answers per device, so a dead or rejected one is visible.
+    if (route === 'POST /api/push/test') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const c = body.card ? findCard(String(body.card)) : null;
+      const rows = await sendPushAll({
+        title: '🔔 ' + (c ? c.id : 'Bridge Commander') + ' · test',
+        body: c ? c.title : 'push notifications are on',
+        card: c ? c.id : null, url: c ? '/?card=' + encodeURIComponent(c.id) : '/',
+      });
+      return sendJson(res, 200, { ok: true, results: rows.map((r) => ({ endpoint: r.endpoint, status: r.status, gone: r.gone, error: r.error })) });
     }
     if (route === 'GET /api/notifications') {
       const items = notificationItems(url.searchParams.get('user'));

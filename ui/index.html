@@ -99,6 +99,12 @@
     </div>
     <div id="ns-list"></div>
   </div>
+  <!-- Web Push: reaches this device with the board closed (ui/js/push.js) -->
+  <div class="sp-row">
+    <button id="push-btn" title="push notifications to this device, even with the board closed — L1 bell, worker done/stopped, cards entering your review">📲 n/a</button>
+    <button id="push-test" title="send a test notification to every subscribed device" hidden>test</button>
+  </div>
+  <div id="push-hint" class="dim" hidden></div>
   <div class="sp-title">monitoring</div>
   <div class="sp-row">
     <button id="mon-open" title="live machine & per-agent load (samples only while open)">📈 machine load</button>
