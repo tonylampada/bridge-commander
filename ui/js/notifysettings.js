@@ -5,6 +5,7 @@ import { S, kindEmoji, lieutenantByActor } from './state.js';
 import { defaultCategoryPolicy, policyFor, selectNewEvents, selectNewMessages, shouldSuppressChat } from './notifypolicy.js';
 import * as sound from './sound.js';
 import * as toast from './toast.js';
+import { onPushChange, pushCategories, setPushCategory } from './push.js';
 
 // Mirrors ui/app.css's mobile breakpoint (`@media (max-width: 760px)`) that
 // collapses the board/chat columns into tabs. Below it, the chat panel is only
@@ -142,15 +143,53 @@ function rowFor(cat) {
   prev.textContent = '▶';
   prev.onclick = () => sound.play(sel.value);
 
-  row.append(em, name, cb, sel, prev);
+  row.append(em, name, cb);
+  // 📲: this device's phone push, kept server-side per subscription (push.js).
+  // Not under the 🔔 master switch — that one is the tab's toast + sound.
+  const pc = pushCategories();
+  if (pc) {
+    const pb = document.createElement('input');
+    pb.type = 'checkbox';
+    pb.className = 'ns-push';
+    pb.title = 'push to this device';
+    pb.checked = !!pc[cat.key];
+    pb.onchange = () => setPushCategory(cat.key, pb.checked);
+    row.append(pb);
+  }
+  row.append(sel, prev);
+  return row;
+}
+
+// The column heads: 🔊 the tab's toast + sound, 📲 this device's push.
+function headRow() {
+  const row = document.createElement('div');
+  row.className = 'ns-row ns-head';
+  const em = document.createElement('span');
+  em.className = 'ns-em';
+  const gap = document.createElement('span');
+  gap.className = 'ns-name';
+  const col = (emoji, title, cls) => {
+    const s = document.createElement('span');
+    s.className = 'ns-col' + (cls ? ' ' + cls : '');
+    s.textContent = emoji;
+    s.title = title;
+    return s;
+  };
+  row.append(em, gap, col('🔊', 'in this tab: toast + sound'));
+  if (pushCategories()) row.append(col('📲', 'phone push to this device', 'ns-push'));
   return row;
 }
 
 function renderList() {
   if (listEl.contains(document.activeElement)) return; // don't clobber an in-progress edit
   listEl.textContent = '';
+  listEl.appendChild(headRow());
   for (const cat of CATEGORIES) listEl.appendChild(rowFor(cat));
 }
+onPushChange(() => {
+  if (listEl.contains(document.activeElement)) document.activeElement.blur(); // the column itself is changing
+  renderList();
+});
 
 export function renderNotifSettings() {
   renderMaster();
