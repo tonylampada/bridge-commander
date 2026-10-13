@@ -89,6 +89,9 @@ export const api = {
     + '&before=' + encodeURIComponent(before) + '&limit=' + (limit || 50)),
   // archived (frozen) card snapshots, newest first, paged over the append-only
   // log: {archive: [...], total}; restore resurrects one
+  // 📊 usage: the summarized index for a window; usageIndex starts a run now
+  usage: (q) => j('GET', '/api/usage?' + new URLSearchParams(q).toString()),
+  usageIndex: () => j('POST', '/api/usage/index'),
   archive: (limit, offset) => j('GET', '/api/archive?limit=' + (limit || 20) + '&offset=' + (offset || 0)),
   restoreCard: (id) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/restore', { actor: 'user' }),
   config: () => j('GET', '/api/config'),

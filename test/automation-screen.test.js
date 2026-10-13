@@ -21,13 +21,13 @@ const autoSrc = fs.readFileSync(ui('js', 'automation.js'), 'utf8');
 test('the ⚡ sits in the switcher beside ▦ ☰ 🧊', () => {
   const seg = /<span id="view-seg"[\s\S]*?<\/span>/.exec(html)[0];
   const ids = [...seg.matchAll(/<button id="(vs-[^"]+)"/g)].map((m) => m[1]);
-  assert.deepStrictEqual(ids, ['vs-board', 'vs-table', 'vs-arch', 'vs-auto'], 'fourth, after the three');
+  assert.deepStrictEqual(ids.slice(0, 4), ['vs-board', 'vs-table', 'vs-arch', 'vs-auto'], 'fourth, after the three');
   assert.match(seg, /id="vs-auto"[^>]*>⚡</, 'an icon that reads as automation at 16px');
   assert.match(seg, /id="vs-auto" title="hooks &amp; schedules"/, 'saying what it opens');
 });
 
 test('it is a switcher mode, so it is remembered and it is in the mobile dropdown', () => {
-  assert.match(mainSrc, /const MODE_BTN = \{ board: 'vs-board', table: 'vs-table', archive: 'vs-arch', auto: 'vs-auto' \};/);
+  assert.match(mainSrc, /const MODE_BTN = \{ board: 'vs-board', table: 'vs-table', archive: 'vs-arch', auto: 'vs-auto'[,}]/);
   // MODE_BTN is the whole rule for what localStorage keeps, so the entry above
   // is also what makes a reload come back here.
   assert.match(mainSrc, /if \(MODE_BTN\[mode\]\) try \{ localStorage\.setItem\('bc-board-mode', mode\)/);

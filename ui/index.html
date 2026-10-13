@@ -48,6 +48,7 @@
     <button id="vs-table" title="table view">☰</button>
     <button id="vs-arch" title="archived cards">🧊</button>
     <button id="vs-auto" title="hooks &amp; schedules">⚡</button>
+    <button id="vs-usage" title="token usage">📊</button>
   </span>
   <span id="status-dot" title="connecting…"></span>
   <button id="bell" title="notifications">🔔<span id="bell-n" class="badge-n" hidden></span></button>
@@ -238,6 +239,8 @@
          names what fires it) instead of being inferred across a tab switch.
          Anything red is what this screen is opened for, so it sorts to the top
          of its column and the masthead counts it. -->
+    <!-- 📊 usage: where the tokens go (ui/js/usage.js paints all of it) -->
+    <div id="usage-screen"></div>
     <div id="auto-screen">
       <div class="au-masthead">
         <div class="au-head">automation</div>
