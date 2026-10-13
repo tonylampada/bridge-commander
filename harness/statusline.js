@@ -72,6 +72,39 @@ function writeSidecar(payload, opts = {}) {
   }
 }
 
+// recordQuota — append the account's 5h/7d used% to the usage store's quota
+// trail (<ws>/.bridge-commander/usage/quota.jsonl, read by the 📊 usage view)
+// when it differs from the last sample written. Every session's statusline
+// sees the same account numbers, so the trail is one line per CHANGE, not per
+// render. Best-effort like the sidecar: returns true when a line was written.
+function recordQuota(payload, opts = {}) {
+  const rl = payload && payload.rate_limits;
+  if (!rl) return false;
+  const windows = {};
+  if (rl.five_hour && rl.five_hour.used_percentage != null) windows['5h'] = Number(rl.five_hour.used_percentage);
+  if (rl.seven_day && rl.seven_day.used_percentage != null) windows['7d'] = Number(rl.seven_day.used_percentage);
+  if (!Object.keys(windows).length) return false;
+  const ws = opts.workspace || findWorkspace(payload && payload.cwd);
+  if (!ws) return false;
+  const dir = opts.usageDir || path.join(ws, STATE_DIR_NAME, 'usage');
+  const sig = JSON.stringify(windows);
+  const lastFile = path.join(dir, 'quota.last.claude');
+  try {
+    let last = '';
+    try { last = fs.readFileSync(lastFile, 'utf8'); } catch { /* first sample */ }
+    if (last === sig) return false;
+    fs.mkdirSync(dir, { recursive: true });
+    const gi = path.join(dir, '.gitignore');
+    if (!fs.existsSync(gi)) fs.writeFileSync(gi, '# token usage index: machine-local, rebuildable\n*\n');
+    fs.writeFileSync(lastFile, sig);
+    const ts = opts.now || new Date().toISOString();
+    fs.appendFileSync(path.join(dir, 'quota.jsonl'), JSON.stringify({ ts, src: 'claude', windows }) + '\n');
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // ---------- render helpers ----------
 
 // bar — a 20-char block progress bar for a used-percentage (0..100).
@@ -177,7 +210,7 @@ function main() {
   } catch {
     payload = null;
   }
-  if (payload) writeSidecar(payload);
+  if (payload) { writeSidecar(payload); recordQuota(payload); }
   process.stdout.write(render(payload || {}));
 }
 
@@ -186,6 +219,7 @@ if (require.main === module) main();
 module.exports = {
   findWorkspace,
   writeSidecar,
+  recordQuota,
   bar,
   pctColor,
   fmtK,

@@ -1632,6 +1632,10 @@ a.a-uri { color: var(--accent); }
 #board-wrap.file-mode #board, #board-wrap.settings-mode #board { display: none; }
 #board-wrap.table-mode #table, #board-wrap.archive-mode #archive, #board-wrap.auto-mode #auto-screen,
 #board-wrap.file-mode #filepane, #board-wrap.settings-mode #settings-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+/* 📊 takes the region the same way */
+#usage-screen { display: none; }
+#board-wrap.usage-mode #board { display: none; }
+#board-wrap.usage-mode #usage-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 
 .tv-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
 table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 820px; }
@@ -1820,3 +1824,76 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 #mode-menu button { text-align: left; font-size: 13px; padding: 8px 12px; border-radius: 7px; }
 #mode-menu button:hover { background: var(--panel2); }
 #mode-menu button.cur { color: var(--accent); }
+
+/* ---------------------------------------------------------------------------
+   usage (📊): where the tokens go. Three category colours, fixed order
+   (lieutenants / workers / non-BC), validated for CVD separation on --panel;
+   numbers stay in text ink, the colour only marks identity.
+--------------------------------------------------------------------------- */
+:root { --u-lt: #3987e5; --u-worker: #d95926; --u-other: #9085e9; }
+#usage-screen { overflow: auto; padding: 18px 16px 28px; gap: 14px; }
+.us-masthead { display: flex; align-items: baseline; gap: 12px; flex: none; }
+.us-status { color: var(--faint); font-size: 12px; font-family: var(--mono); margin-left: auto; }
+.us-err { color: var(--danger); }
+#us-refresh { color: var(--dim); font-size: 15px; padding: 2px 8px; border: 1px solid var(--line); border-radius: 6px; }
+#us-refresh:hover { color: var(--accent); border-color: var(--accent2); }
+.us-controls { display: flex; flex-wrap: wrap; gap: 8px; flex: none; }
+.us-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.us-seg button { padding: 5px 11px; font-size: 12.5px; color: var(--faint); line-height: 1.2; }
+.us-seg button + button { border-left: 1px solid var(--line); }
+.us-seg button:hover { color: var(--accent); }
+.us-seg button.on { color: var(--accent); background: var(--accent-soft); }
+.us-empty { color: var(--faint); font-size: 13px; padding: 24px 0; }
+.us-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; flex: none; }
+.us-tile, .us-card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.us-tile { padding: 10px 12px; min-width: 0; }
+.us-k { font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .8px; color: var(--faint); }
+.us-big { font-size: 24px; font-weight: 700; color: var(--text); font-variant-numeric: tabular-nums; margin-top: 2px; }
+.us-sub { font-size: 11.5px; color: var(--dim); margin-top: 1px; }
+.us-card { padding: 10px 12px; flex: none; }
+.us-cardhead { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin-bottom: 6px; }
+.us-cardhead .us-k { margin-right: auto; }
+.us-lg { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--dim); }
+.us-lg i, .us-sw { display: inline-block; width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.us-chart { display: block; max-width: 100%; }
+.us-grid { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.us-ax { fill: var(--faint); font-size: 10.5px; font-family: var(--mono); }
+.us-hit { fill: transparent; }
+.us-bar { cursor: pointer; }
+.us-bar:hover .us-hit { fill: var(--accent-soft); }
+.us-bar.dim path, .us-bar.dim rect:not(.us-hit) { opacity: .35; }
+.us-bar.on .us-hit { fill: var(--accent-soft); }
+.us-chip { font-size: 12px; color: var(--accent); background: var(--accent-soft); border-radius: 999px; padding: 2px 10px; }
+.us-tablecard { padding: 10px 0 4px; }
+.us-tablecard .us-cardhead { padding: 0 12px; }
+.us-scroll { overflow-x: auto; }
+.us-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.us-table th { text-align: left; font-size: 10.5px; font-weight: 650; text-transform: uppercase; letter-spacing: .4px;
+  color: var(--faint); padding: 4px 8px; border-bottom: 1px solid var(--line); }
+.us-table td { padding: 5px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.us-num { text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text); }
+.us-table td.us-num.us-wide { color: var(--dim); }
+.us-row.us-can { cursor: pointer; }
+.us-row.us-can:hover { background: var(--panel2); }
+.us-d0 .us-label { font-weight: 700; }
+.us-d1 .us-label { font-weight: 600; }
+.us-name { min-width: 0; color: var(--text); }
+.us-caret { display: inline-block; width: 14px; color: var(--faint); }
+.us-sw { margin-right: 6px; vertical-align: -1px; }
+.us-id { font-family: var(--mono); color: var(--accent); font-size: 11.5px; }
+.us-subline { color: var(--faint); font-size: 11px; margin-left: 14px; overflow-wrap: anywhere; }
+.us-split { display: none; color: var(--faint); font-size: 11px; margin-left: 14px; font-family: var(--mono); }
+.us-unp { color: var(--warn); }
+.us-note { color: var(--dim); font-size: 12px; flex: none; }
+.us-note summary { cursor: pointer; color: var(--faint); }
+.us-note p { line-height: 1.5; max-width: 70ch; }
+.us-note code { font-family: var(--mono); font-size: 11.5px; }
+.us-prices { border-collapse: collapse; font-size: 11.5px; }
+.us-prices td, .us-prices th { padding: 2px 8px; border-bottom: 1px solid var(--line); text-align: left; }
+@media (max-width: 760px) {
+  #usage-screen { padding: 12px 16px 80px; }
+  .us-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .us-big { font-size: 20px; }
+  .us-wide { display: none; }
+  .us-split { display: block; }
+}

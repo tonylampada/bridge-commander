@@ -72,6 +72,7 @@ const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns
 const { parseWhen, nextAfter, dueWindows, pickWindows, describeWhen, normalizeSchedules,
   NAME_RE: SCHEDULE_NAME_RE, OVERLAP, CATCHUP } = require(path.join(__dirname, 'schedules.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
+const usage = require(path.join(__dirname, 'usage.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
@@ -1382,6 +1383,62 @@ function paneStream(req, res, ref, reason) {
     panes.delete(key); // last subscriber gone: release the harness feed
     try { hub.handle && typeof hub.handle.close === 'function' && hub.handle.close(); }
     catch (e) { /* closing a dead pane is a no-op */ }
+  });
+}
+
+// ---------- usage (📊: where the tokens go) ----------
+// The indexer reads gigabytes of transcripts, so it never runs in this
+// process: a child (`node server/usage.js index`) folds the new transcript
+// tails into <state>/usage/, and GET /api/usage summarizes what is there.
+// Looking is what keeps it fresh: a GET on a store older than USAGE_STALE_MS
+// starts a run in the background and answers from the store as it stands.
+// A board schedule can fire the same command as a named hook to keep the
+// quota trail and the numbers warm while nobody looks.
+const USAGE_STALE_MS = parseInt(process.env.BC_USAGE_STALE_MS, 10) >= 0 && process.env.BC_USAGE_STALE_MS
+  ? parseInt(process.env.BC_USAGE_STALE_MS, 10) : 5 * 60 * 1000;
+const USAGE_DIR = usage.storeDir(WORKSPACE);
+const usageRun = { running: null, error: '' };
+function startUsageIndex() {
+  if (usageRun.running) return usageRun.running;
+  const args = [path.join(__dirname, 'usage.js'), 'index', '--workspace', WORKSPACE];
+  if (process.env.BC_USAGE_CLAUDE_DIR) args.push('--claude', process.env.BC_USAGE_CLAUDE_DIR);
+  if (process.env.BC_USAGE_CODEX_DIR) args.push('--codex', process.env.BC_USAGE_CODEX_DIR);
+  usageRun.running = new Promise((resolve) => {
+    execFile(process.execPath, args, { timeout: 15 * 60 * 1000, maxBuffer: 1 << 20 }, (err, stdout, stderr) => {
+      usageRun.error = err ? String(stderr || err.message).slice(0, 500) : '';
+      usageRun.running = null;
+      resolve();
+    });
+  });
+  return usageRun.running;
+}
+// parsed store, re-read only when the indexer rewrote it
+let usageCache = { mtime: -1, store: null };
+function usageStore() {
+  let mtime = 0;
+  try { mtime = fs.statSync(path.join(USAGE_DIR, 'state.json')).mtimeMs; } catch (e) {}
+  if (mtime !== usageCache.mtime) usageCache = { mtime, store: usage.loadStore(USAGE_DIR) };
+  return usageCache.store;
+}
+function usageReport(q) {
+  const store = usageStore();
+  const lastAt = store.last ? Date.parse(store.last.at) : 0;
+  if (!usageRun.running && Date.now() - lastAt > USAGE_STALE_MS) startUsageIndex();
+  const days = Math.min(Math.max(parseInt(q.get('days') || '14', 10) || 14, 1), 366);
+  const tz = Math.max(-840, Math.min(840, parseInt(q.get('tz') || '0', 10) || 0));
+  const src = q.get('src') === 'codex' ? 'codex' : 'claude';
+  const by = q.get('by') === 'week' ? 'week' : 'day';
+  // the window starts at local midnight `days - 1` days ago, so "14 days" is 14 whole bars
+  const nowLocal = Date.now() + tz * 60000;
+  const from = Math.floor(nowLocal / 864e5) * 864e5 - (days - 1) * 864e5 - tz * 60000;
+  const focus = /^\d{4}-\d\d-\d\d$/.test(q.get('focus') || '') ? q.get('focus') : '';
+  const sum = usage.summarize(store.facts, store.ctx, { src, from, tz, by, focus, prices: store.prices });
+  const prices = {};
+  for (const m of sum.models) prices[m.model] = usage.priceOf(m.model, store.prices);
+  return Object.assign(sum, {
+    days, from: new Date(from).toISOString(), prices,
+    quota: usage.readQuota(USAGE_DIR, from).filter((s) => s.src === src),
+    index: { last: store.last, running: !!usageRun.running, error: usageRun.error },
   });
 }
 
@@ -4411,6 +4468,13 @@ const server = http.createServer(async (req, res) => {
       board.onboarding = next;
       saveBoard(); broadcast();
       return sendJson(res, 200, { ok: true, onboarding: board.onboarding });
+    }
+    if (route === 'GET /api/usage') return sendJson(res, 200, usageReport(url.searchParams));
+    if (route === 'POST /api/usage/index') {
+      // ?wait=1 answers when the run is over (the CLI and the tests); the UI fires and polls
+      const run = startUsageIndex();
+      if (/^(1|true)$/.test(url.searchParams.get('wait') || '')) await run;
+      return sendJson(res, 200, { ok: true, running: !!usageRun.running, last: usageStore().last, error: usageRun.error });
     }
     if (route === 'GET /api/archive') {
       // Paginated read over the append-only log, newest first: a limit+offset

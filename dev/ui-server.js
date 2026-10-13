@@ -10,7 +10,11 @@
 // It never touches server/server.js or any real workspace state. It binds
 // loopback by default and a SPECIFIC address on request — never all interfaces.
 //
-//   node dev/ui-server.js [--port N] [--host ADDR] [--tts URL] [--stt]  (default 4790)
+//   node dev/ui-server.js [--port N] [--host ADDR] [--tts URL] [--stt] [--usage DIR]  (default 4790)
+//
+// --usage points 📊 at an index a real run built (`node server/usage.js index`
+// writes <ws>/.bridge-commander/usage/): the page then shows real numbers. Read
+// only — the playground never indexes. Without it the usage screen is empty.
 //
 // --stt makes /api/config claim a transcription engine, so the composer mounts its
 // microphone — enough to photograph the phone layout; nothing transcribes here.
@@ -389,6 +393,26 @@ function createDevServer(opts) {
     };
   }
 
+  // ----- 📊 usage: a read-only summary of an existing index (--usage DIR) -----
+  function usageReport(q) {
+    const usage = require(path.join(__dirname, '..', 'server', 'usage.js'));
+    const usageDir = (opts && opts.usageDir) || "";
+    const store = usageDir ? usage.loadStore(usageDir)
+      : { facts: {}, ctx: { workspaces: [], lts: {}, cards: {}, ltSessions: {}, workerSessions: {} }, last: null, prices: usage.PRICES };
+    const days = Math.min(Math.max(parseInt(q.get('days') || '14', 10) || 14, 1), 366);
+    const tz = parseInt(q.get('tz') || '0', 10) || 0;
+    const src = q.get('src') === 'codex' ? 'codex' : 'claude';
+    const by = q.get('by') === 'week' ? 'week' : 'day';
+    const from = Math.floor((Date.now() + tz * 60000) / 864e5) * 864e5 - (days - 1) * 864e5 - tz * 60000;
+    const focus = /^\d{4}-\d\d-\d\d$/.test(q.get('focus') || '') ? q.get('focus') : '';
+    const sum = usage.summarize(store.facts, store.ctx, { src, from, tz, by, focus, prices: store.prices });
+    const prices = {};
+    for (const m of sum.models) prices[m.model] = usage.priceOf(m.model, store.prices);
+    return Object.assign(sum, { days, from: new Date(from).toISOString(), prices,
+      quota: usageDir ? usage.readQuota(usageDir, from).filter((s) => s.src === src) : [],
+      index: { last: store.last, running: false, error: '' } });
+  }
+
   // ----- http plumbing -----
   const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
   function sendJson(res, code, obj) {
@@ -467,6 +491,8 @@ function createDevServer(opts) {
         return sendJson(res, 200, { target, harness: 'claude', commands: COMMANDS });
       }
       if (route === 'GET /api/notifications') return sendJson(res, 200, { items: [], unread: 0 });
+      if (route === 'GET /api/usage') return sendJson(res, 200, usageReport(url.searchParams));
+      if (route === 'POST /api/usage/index') return sendJson(res, 200, { ok: true, running: false });
       if (route === 'GET /api/archive') {
         // paginated read over the append-only log, newest first: limit+offset
         // window plus the total, so the UI can "load more" instead of slurping
@@ -861,12 +887,14 @@ if (require.main === module) {
   let host = '';
   let ttsUrl = '';
   let stt = false;
+  let usageDir = '';
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     if (argv[i] === '--port') port = parseInt(argv[++i], 10);
     else if (argv[i] === '--host') host = String(argv[++i] || '').trim();
     else if (argv[i] === '--tts') ttsUrl = String(argv[++i] || '').trim();
     else if (argv[i] === '--stt') stt = true;
+    else if (argv[i] === '--usage') usageDir = path.resolve(String(argv[++i] || ''));
   }
   if (!Number.isInteger(port) || port <= 0) { console.error('bad --port'); process.exit(1); }
   if (host && !/^[\w.:-]+$/.test(host)) { console.error('bad --host'); process.exit(1); }
@@ -875,7 +903,7 @@ if (require.main === module) {
   const LOOPBACKS = ['127.0.0.1', 'localhost', '::1'];
   const BIND_HOST = host || '127.0.0.1';
   if (ttsUrl && !/^https?:\/\//.test(ttsUrl)) { console.error('bad --tts (want http://host:port)'); process.exit(1); }
-  const { server } = createDevServer({ ttsUrl, stt });
+  const { server } = createDevServer({ ttsUrl, stt, usageDir });
   server.on('error', (e) => { console.error('server error: ' + e.message); process.exit(1); });
   server.listen(port, BIND_HOST, () => {
     console.log('[dev-playground] http://' + BIND_HOST + ':' + port + '  (fixture board, nothing persists)');

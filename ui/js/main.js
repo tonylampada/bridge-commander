@@ -24,6 +24,7 @@ import { renderPlaybooks } from './pbmanager.js';
 import { renderProjects } from './projmanager.js';
 import { renderLieutenants } from './ltmanager.js';
 import { renderAutomation } from './automation.js';
+import { renderUsage } from './usage.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 import { onOpenCard as pushOnOpenCard } from './push.js'; // phone push: the switch + the notification tap
@@ -136,15 +137,17 @@ for (const b of document.querySelectorAll('#ss-tabs button')) {
 // 'file' and 'settings' are the screens: not in the switcher (you enter them by
 // opening a file, or from the gear), and never remembered — MODE_BTN is the
 // whole rule, so a reload comes back to the last switcher mode.
-const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch', auto: 'vs-auto' };
+const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch', auto: 'vs-auto', usage: 'vs-usage' };
 const SCREENS = ['file', 'settings'];
 // Entering ⚡ is a fresh look at the clock, not last visit's answer — the same
 // contract setWsTab gives a config section. The render loop below hands this to
 // renderAutomation once and clears it, so the board events that follow repaint
 // without re-entering.
 let enteringAuto = false;
+let enteringUsage = false; // same contract for 📊: entering asks the server again
 function setBoardMode(mode) {
   if (mode === 'auto' && S.boardMode !== 'auto') enteringAuto = true;
+  if (mode === 'usage' && S.boardMode !== 'usage') enteringUsage = true;
   // The ⚡ screen's panel belongs to that screen: leaving the mode takes it with
   // us rather than leaving a schedule floating over the kanban.
   if (mode !== S.boardMode && auxDetailKey()) closeDetail();
@@ -156,6 +159,7 @@ function setBoardMode(mode) {
   wrap.classList.toggle('table-mode', mode === 'table');
   wrap.classList.toggle('archive-mode', mode === 'archive');
   wrap.classList.toggle('auto-mode', mode === 'auto');
+  wrap.classList.toggle('usage-mode', mode === 'usage');
   wrap.classList.toggle('file-mode', mode === 'file');
   wrap.classList.toggle('settings-mode', mode === 'settings');
   for (const [m, id] of Object.entries(MODE_BTN)) {
@@ -188,7 +192,7 @@ onQuoteSource(fileQuote);     // …and is where every message's file context co
 // where clicking the active one was always a no-op — so the dropdown branch
 // can never fire there.
 const modeMenuEl = document.getElementById('mode-menu');
-const MODE_LABEL = { board: '▦ kanban', table: '☰ table', archive: '🧊 archived', auto: '⚡ automation' };
+const MODE_LABEL = { board: '▦ kanban', table: '☰ table', archive: '🧊 archived', auto: '⚡ automation', usage: '📊 usage' };
 function modeMenuIsOpen() { return !modeMenuEl.hidden; }
 function closeModeMenu() { modeMenuEl.hidden = true; }
 function openModeMenu(anchor) {
@@ -302,6 +306,7 @@ onRender(() => {
   if (S.boardMode === 'file') { /* nothing to repaint */ }
   else if (S.boardMode === 'settings') WS_RENDER[wsTab]();
   else if (S.boardMode === 'auto') { renderAutomation(enteringAuto); enteringAuto = false; }
+  else if (S.boardMode === 'usage') { renderUsage(enteringUsage); enteringUsage = false; }
   else if (S.boardMode === 'archive') renderArchive();
   else if (S.boardMode === 'table') renderTable();
   else renderBoard();
