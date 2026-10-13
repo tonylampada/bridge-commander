@@ -567,6 +567,9 @@ body.resizing { user-select: none; cursor: col-resize; }
 #ns-body.dim { opacity: .5; }
 #ns-master-btn { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 9px; font-size: 13px; }
 #ns-master-btn.on { color: var(--accent); border-color: var(--accent2); }
+#push-btn, #push-test { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 9px; font-size: 13px; }
+#push-btn.on { color: var(--accent); border-color: var(--accent2); }
+#push-hint { font-size: 12px; margin: 4px 0 2px; max-width: 260px; }
 #ns-volume { flex: 1; min-width: 0; accent-color: var(--accent); cursor: pointer; }
 #ns-list { display: flex; flex-direction: column; gap: 4px; max-height: 40vh; overflow-y: auto; }
 .ns-row { display: flex; gap: 6px; align-items: center; font-size: 12px; }

@@ -26,6 +26,7 @@ import { renderLieutenants } from './ltmanager.js';
 import { renderAutomation } from './automation.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
+import { onOpenCard as pushOnOpenCard } from './push.js'; // phone push: the switch + the notification tap
 
 chatOnOpenCard(openDetail);
 // a notification is about a conversation — clicking it lands IN the chat,
@@ -33,6 +34,7 @@ chatOnOpenCard(openDetail);
 // stays behind the filtered header's explicit "open card" button
 notifOnOpenCard(openCardConversation);
 toastOnOpenCard(openDetail);
+pushOnOpenCard(openDetail);
 toastOnOpenLieutenant(openLieutenantChat); // card-less chat toast → the lieutenant's main chat
 
 // ---------- header: filter ----------
@@ -332,12 +334,22 @@ let es = null;
 let lastEventAt = Date.now();
 let serverBoot = null;
 
+// `/?card=ID` — the URL a push notification opens when no board is open. Taken
+// once, on the first board, then dropped from the address bar so a reload is
+// a plain reload.
+let deepCard = new URLSearchParams(location.search).get('card');
 function applyBoard(doc) {
   serverBoot = doc.boot || serverBoot;
   S.doc = doc;
   trackMessages(S.doc);
   trackEvents(S.doc);
   render();
+  if (deepCard) {
+    const id = deepCard;
+    deepCard = null;
+    history.replaceState(null, '', location.pathname);
+    if ((doc.cards || []).some((c) => c.id === id)) openDetail(id);
+  }
 }
 function refetchBoard() {
   api.board().then(applyBoard).catch(() => {}); // still down — the watchdog retries
