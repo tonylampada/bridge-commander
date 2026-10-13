@@ -8,12 +8,28 @@
 //   - the store: VAPID keypair + subscriptions in <stateDir>/push/, a directory
 //     that git-ignores itself (the workspace commits .bridge-commander/, and a
 //     private key in git history is a private key forever)
-//   - the policy: pushFor(event) — which board events reach the phone, and what
-//     they say there
+//   - the policy: pushFor(event) / pushForMessage(msg) — what a board event or
+//     a chat message says on the phone, and which notification category it is.
+//     Each device picks its categories (the 📲 column in Settings → Notifications).
 'use strict';
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+// The in-tab toasts' classifier, shared so a kind lands in the same row of the
+// settings panel for both columns. An ES module, loaded through require(esm).
+const { categorize } = require(path.join(__dirname, '..', 'ui', 'js', 'notifypolicy.js'));
+
+// ---------- categories: which pushes a device takes ----------
+// Same four rows as the in-tab notifications. Out of the box a new device gets
+// everything but 'other' — the level-2 chatter, worker-stopped included.
+const PUSH_CATEGORIES = ['done', 'chat', 'error', 'other'];
+function defaultPushCategories() { return { done: true, chat: true, error: true, other: false }; }
+// Booleans for the known categories laid over `base`; anything else is dropped.
+function mergeCategories(base, patch) {
+  const out = Object.assign({}, base);
+  for (const k of PUSH_CATEGORIES) if (patch && typeof patch[k] === 'boolean') out[k] = patch[k];
+  return out;
+}
 
 // ---------- base64url ----------
 function b64u(buf) { return Buffer.from(buf).toString('base64url'); }
@@ -163,14 +179,34 @@ function createPushStore(stateDir) {
     return Array.isArray(s) ? s.filter(validSubscription) : [];
   }
   // Same endpoint again = the same device re-subscribing: replace, never duplicate.
+  // meta: { ua, old, categories }. `old` is the endpoint this one replaces (a
+  // rotation): its record goes and its categories carry over. The device's
+  // categories, first that exists: this endpoint's record, the old one's, what
+  // the device remembers (meta.categories — survives a prune or an off/on), the
+  // defaults.
   function add(sub, meta) {
+    const m = meta || {};
     if (!validSubscription(sub)) return { error: 'subscription needs endpoint (https URL) and keys {p256dh, auth}' };
+    const all = list();
+    const prev = all.find((s) => s.endpoint === sub.endpoint) || (m.old && all.find((s) => s.endpoint === m.old));
+    const categories = prev && prev.categories ? mergeCategories(defaultPushCategories(), prev.categories)
+      : mergeCategories(defaultPushCategories(), m.categories);
     const rec = { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth },
-      ua: String((meta && meta.ua) || '').slice(0, 300), added: new Date().toISOString() };
-    const all = list().filter((s) => s.endpoint !== rec.endpoint);
-    all.push(rec);
+      ua: String(m.ua || '').slice(0, 300), added: new Date().toISOString(), categories };
+    const kept = all.filter((s) => s.endpoint !== rec.endpoint && s.endpoint !== m.old);
+    kept.push(rec);
+    writeJson(SUBS, kept);
+    return { ok: true, count: kept.length, categories };
+  }
+  function categoriesOf(rec) { return mergeCategories(defaultPushCategories(), rec && rec.categories); }
+  // One device's categories, patched. null = no such device.
+  function setCategories(endpoint, patch) {
+    const all = list();
+    const rec = all.find((s) => s.endpoint === endpoint);
+    if (!rec) return null;
+    rec.categories = mergeCategories(categoriesOf(rec), patch);
     writeJson(SUBS, all);
-    return { ok: true, count: all.length };
+    return rec.categories;
   }
   function remove(endpoint) {
     const all = list();
@@ -178,7 +214,7 @@ function createPushStore(stateDir) {
     if (kept.length !== all.length) writeJson(SUBS, kept);
     return kept.length !== all.length;
   }
-  return { dir, vapid, list, add, remove };
+  return { dir, vapid, list, add, remove, setCategories, categoriesOf };
 }
 
 function validSubscription(s) {
@@ -191,11 +227,14 @@ function validSubscription(s) {
     && typeof k.auth === 'string' && unb64u(k.auth).length === 16;
 }
 
-// Fan one payload out to every stored subscription; prune the dead ones.
-// Resolves [{endpoint, status?, gone?, error?}] — one row per device.
+// Fan one payload out to every stored subscription that takes its category
+// (payload.category; none = every device, the test push); prune the dead ones.
+// Resolves [{endpoint, status?, gone?, error?}] — one row per device sent to.
 async function broadcastPush(store, payload, subject, opts) {
   const vapid = store.vapid();
-  return Promise.all(store.list().map(async (sub) => {
+  const cat = payload && payload.category;
+  const subs = store.list().filter((s) => !cat || store.categoriesOf(s)[cat]);
+  return Promise.all(subs.map(async (sub) => {
     try {
       const r = await sendPush(sub, payload, vapid, subject, opts);
       if (r.gone) store.remove(sub.endpoint);
@@ -206,14 +245,14 @@ async function broadcastPush(store, payload, subject, opts) {
   }));
 }
 
-// ---------- policy: which events reach the phone ----------
+// ---------- policy: what an event or a message says on the phone ----------
 // ev: a board event (card events carry `card`/`cardTitle` once flattened);
 // ctx: { emoji(kind) → string, reviewTitle }.
-// The captain's own clicks never buzz his pocket (actor 'user'). Otherwise:
-//   a card entering Your review · worker done · worker stopped · any level-1
-//   event (the bell — that is what "rings the captain" means on this board).
-// Returns null or { title, body, card, url } — title + one line + the card id,
-// the url opening the board on that card.
+// The captain's own clicks never buzz his pocket (actor 'user'). Every other
+// event is a candidate; its category (categorize, the in-tab classifier)
+// decides which devices take it.
+// Returns null or { title, body, card, url, category } — title + one line + the
+// card id, the url opening the board on that card.
 function oneLine(s, max) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();
   return t.length > max ? t.slice(0, max - 1) + '…' : t;
@@ -238,17 +277,34 @@ function pushFor(ev, ctx) {
   } else if (ev.kind === 'worker-stopped') {
     title = '⏸️ ' + where + ' · worker stopped';
     body = text;
-  } else if (ev.level === 1) {
+  } else {
     const em = (c.emoji && ev.kind && c.emoji(ev.kind)) || '🔔';
     title = em + ' ' + where + (ev.kind ? ' · ' + ev.kind : '');
     body = text;
-  } else {
-    return null;
   }
-  return { title: oneLine(title, 80), body: oneLine(body, 160), card: cardId, url };
+  return { title: oneLine(title, 80), body: oneLine(body, 160), card: cardId, url, category: categorize(ev.kind, ev.level) };
+}
+
+// A chat message (lieutenant main chat or card thread). The in-tab toasts
+// classify every message as kind 'reply'; so does this. The captain's own
+// messages and slash-command transcripts (msg.cmd) stay off the phone.
+function pushForMessage(target, msg) {
+  if (!msg || msg.author === 'user' || msg.cmd) return null;
+  const m = /^card:(.+)$/.exec(target || '');
+  const cardId = m ? m[1] : null;
+  const author = String(msg.author || 'agent');
+  const text = String(msg.text || '') || ((msg.attachments || []).length ? '📎 attachment' : '');
+  return {
+    title: oneLine('💬 ' + (cardId ? cardId + ' · ' + author : author), 80),
+    body: oneLine(text, 160),
+    card: cardId,
+    url: cardId ? '/?card=' + encodeURIComponent(cardId) : '/',
+    category: categorize('reply', 1),
+  };
 }
 
 module.exports = {
   generateVapidKeys, vapidAuthorization, encrypt, decrypt, sendPush,
-  createPushStore, validSubscription, broadcastPush, pushFor,
+  createPushStore, validSubscription, broadcastPush, pushFor, pushForMessage,
+  PUSH_CATEGORIES, defaultPushCategories,
 };

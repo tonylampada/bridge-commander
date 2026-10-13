@@ -25,7 +25,8 @@ test('categorize: lieutenant-message kinds map to chat', () => {
 });
 
 test('categorize: needs-captain-now kinds map to error', () => {
-  for (const kind of ['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled']) {
+  for (const kind of ['needs-captain', 'needs-you', 'failed', 'blocked', 'worker-died', 'worker-stalled',
+    'ci-failed', 'hook-failed', 'worker-kill-failed', 'schedule-failed', 'stale-base']) {
     assert.strictEqual(categorize(kind, 1), 'error');
   }
 });

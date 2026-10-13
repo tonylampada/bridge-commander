@@ -73,9 +73,11 @@ Env knobs (set on the server process):
 
 ### Push notifications to a phone
 
-⚙️ → **📲** turns on Web Push for that device: level-1 events (the bell), worker done / stopped,
-and cards entering 👀 Your review arrive as system notifications with the board closed; a tap
-opens the board on the card. Needs a secure context (https, or `localhost`); on iPhone, open the
+⚙️ → **📲** turns on Web Push for that device: board events and lieutenant chat messages arrive
+as system notifications with the board closed; a tap opens the board on the card. While it is on,
+the notification rows grow a 📲 column next to the 🔊 one: each device picks which categories it
+takes (default: card finished, chat, something went wrong — not "everything else"), kept
+server-side per subscription. Needs a secure context (https, or `localhost`); on iPhone, open the
 board from its home-screen icon first (Safari in a tab has no Web Push). The VAPID keypair and
 device subscriptions live in `.bridge-commander/push/`, which git-ignores itself.
 

@@ -414,11 +414,15 @@ function saveBoard() {
 // ---------- web push (the captain's phone) ----------
 // Every event lands on the board through a save, so the save is the one place
 // that sees them all: after it, the events past the last seq scanned go through
-// webpush.pushFor and out to every subscribed device. Starts at the seq the
+// webpush.pushFor and out to every device that takes the event's category.
+// Chat messages go out from appendMessage, their one door. Starts at the seq the
 // board booted with — a restart never replays history into his pocket.
 const pushStore = webpush.createPushStore(STATE_DIR);
 let pushSeq = board.seq;
 let pushScanQueued = false;
+// Events that shadow a chat message (a lieutenant's main-chat post rings the bell
+// as a level-1 event too): the message already pushed as 💬, so the scan skips them.
+const pushShadowSeqs = new Set();
 function pushSubject() {
   const p = readConfig().push;
   const s = p && typeof p === 'object' && typeof p.subject === 'string' ? p.subject.trim() : '';
@@ -433,9 +437,9 @@ function pushScan() {
   const from = pushSeq;
   pushSeq = board.seq;
   if (pushSeq <= from) return;
-  let subs;
-  try { subs = pushStore.list(); } catch (e) { return; }
-  if (!subs.length) return;
+  let subs = [];
+  try { subs = pushStore.list(); } catch (e) {}
+  if (!subs.length) { pushShadowSeqs.clear(); return; } // scanned past: never looked at again
   const fresh = [];
   for (const e of board.events) if (e.seq > from) fresh.push(e);
   for (const c of board.cards) {
@@ -445,9 +449,16 @@ function pushScan() {
   const kinds = effectiveKinds();
   const ctx = { emoji: (k) => (kinds[k] && kinds[k].emoji) || '', reviewTitle: columnTitle('review') };
   for (const e of fresh) {
+    if (pushShadowSeqs.delete(e.seq)) continue;
     const msg = webpush.pushFor(e, ctx);
     if (msg) sendPushAll(Object.assign({ seq: e.seq }, msg));
   }
+}
+function pushMessage(target, msg) {
+  const p = webpush.pushForMessage(target, msg);
+  let any = false;
+  try { any = pushStore.list().length > 0; } catch (e) {}
+  if (p && any) sendPushAll(p).catch(() => {});
 }
 function sendPushAll(msg) {
   return webpush.broadcastPush(pushStore, msg, pushSubject()).then((rows) => {
@@ -1624,13 +1635,17 @@ function appendMessage(target, msg) {
   let m = /^lieutenant:(.+)$/.exec(target || '');
   if (m) {
     const lt = findLieutenant(m[1]);
-    return lt ? chatAppend(lt.id, msg) : null;
+    if (!lt) return null;
+    chatAppend(lt.id, msg);
+    pushMessage(target, msg);
+    return msg;
   }
   m = /^card:(.+)$/.exec(target || '');
   if (m) {
     const card = findCard(m[1]);
     if (!card) return null;
     (card.thread = card.thread || []).push(msg);
+    pushMessage(target, msg);
     return msg;
   }
   return null;
@@ -4500,11 +4515,19 @@ const server = http.createServer(async (req, res) => {
     }
     if (route === 'POST /api/push/subscribe') {
       const body = JSON.parse(await readBody(req) || '{}');
-      // pushsubscriptionchange hands over the endpoint it replaces
-      if (typeof body.old === 'string') pushStore.remove(body.old);
-      const r = pushStore.add(body.subscription, { ua: req.headers['user-agent'] });
+      // pushsubscriptionchange hands over the endpoint it replaces (its
+      // categories carry over); `categories` is what the device remembers
+      const r = pushStore.add(body.subscription, { ua: req.headers['user-agent'],
+        old: typeof body.old === 'string' ? body.old : null, categories: body.categories });
       if (r.error) return sendJson(res, 400, r);
       return sendJson(res, 200, r);
+    }
+    // One device's categories — the 📲 column. Saved per toggle, a patch.
+    if (route === 'POST /api/push/prefs') {
+      const body = JSON.parse(await readBody(req) || '{}');
+      const cats = pushStore.setCategories(String(body.endpoint || ''), body.categories);
+      if (!cats) return sendJson(res, 404, { error: 'this device is not subscribed' });
+      return sendJson(res, 200, { ok: true, categories: cats });
     }
     if (route === 'POST /api/push/unsubscribe') {
       const body = JSON.parse(await readBody(req) || '{}');
@@ -5505,6 +5528,7 @@ const server = http.createServer(async (req, res) => {
         // A free-form lieutenant message in its main chat is a level-1 notification.
         const ev = mkEvent({ text: text.slice(0, 200), actor: msg.author, level: body.level, kind: body.kind }, { level: 1 });
         board.events.push(ev);
+        pushShadowSeqs.add(ev.seq);
         // A PEER's message into another lieutenant's main chat must also be
         // DELIVERED to that lieutenant: the chat append alone notifies nobody
         // (same rule as the non-owner card-thread say above). Without this,

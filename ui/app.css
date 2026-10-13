@@ -564,7 +564,8 @@ body.resizing { user-select: none; cursor: col-resize; }
 #ka-voice.dim { opacity: .5; }
 #ka-voice:hover { border-color: var(--accent2); color: var(--accent); }
 #ns-body { display: flex; flex-direction: column; gap: 8px; transition: opacity .2s; }
-#ns-body.dim { opacity: .5; }
+/* master off dims the tab's own controls; the 📲 column is not under it */
+#ns-body.dim #ns-volume, #ns-body.dim .ns-row > :not(.ns-push) { opacity: .5; }
 #ns-master-btn { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 9px; font-size: 13px; }
 #ns-master-btn.on { color: var(--accent); border-color: var(--accent2); }
 #push-btn, #push-test { border: 1px solid var(--line); border-radius: 7px; color: var(--dim); padding: 3px 9px; font-size: 13px; }
@@ -575,13 +576,16 @@ body.resizing { user-select: none; cursor: col-resize; }
 .ns-row { display: flex; gap: 6px; align-items: center; font-size: 12px; }
 .ns-row .ns-em { flex: none; width: 16px; text-align: center; }
 .ns-row .ns-name { flex: 1; min-width: 0; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ns-row input[type=checkbox] { accent-color: var(--accent); cursor: pointer; flex: none; }
+.ns-row input[type=checkbox] { accent-color: var(--accent); cursor: pointer; flex: none; width: 16px; height: 16px; margin: 0; }
+.ns-head { font-size: 13px; }
+.ns-head .ns-col { flex: none; width: 16px; text-align: center; cursor: default; }
+.ns-head::after { content: ''; flex: none; width: 106px; } /* the sound picker + ▶ under no head */
 .ns-row select {
   background: var(--panel); border: 1px solid var(--line); border-radius: 6px; color: var(--dim);
   font-size: 11px; padding: 2px 4px; flex: none; width: 76px; cursor: pointer; outline: none;
 }
 .ns-row select:hover { border-color: var(--accent2); color: var(--accent); }
-.ns-row .ns-prev { border: 1px solid var(--line); border-radius: 6px; color: var(--faint); font-size: 11px; padding: 1px 6px; flex: none; }
+.ns-row .ns-prev { border: 1px solid var(--line); border-radius: 6px; color: var(--faint); font-size: 11px; padding: 1px 0; width: 24px; flex: none; }
 .ns-row .ns-prev:hover { color: var(--accent); border-color: var(--accent2); }
 
 /* ---------- selection mode + bulk action bar ----------
