@@ -141,7 +141,7 @@ test('a fan switched on mid-call is learned within seconds, not held as one long
   assert.deepStrictEqual(quiet.filter((e) => e.type === 'start'), []);
 });
 
-test('barge mode: the echo of the reply does not trigger, his voice does', () => {
+test('barge mode: the echo of the reply, or a passing noise, does not trigger; his sustained voice does', () => {
   const vad = C.createVad();
   drive(vad, [[-70, 1000]]);
   vad.setBarge(true);
@@ -149,9 +149,9 @@ test('barge mode: the echo of the reply does not trigger, his voice does', () =>
   const echo = drive(vad, [[-42, 200], [-70, 60], [-42, 200], [-70, 60], [-40, 150]], 1000);
   assert.deepStrictEqual(echo.evs, []);
   // him, close to the mic, sustained
-  const him = drive(vad, [[-22, 400]], echo.t);
+  const him = drive(vad, [[-22, 700]], echo.t);
   assert.strictEqual(him.evs[0].type, 'start');
-  assert.ok(him.evs[0].t - echo.t >= 260, 'held for bargeHoldMs');
+  assert.ok(him.evs[0].t - echo.t >= C.VAD_DEFAULTS.bargeHoldMs, 'held for bargeHoldMs');
 });
 
 test('rmsDb', () => {
@@ -305,10 +305,10 @@ test('syllabic speech — short gaps between bursts — still counts as one run'
   const { t } = drive(vad, [[-70, 1000]]);
   vad.setBarge(true);
   // the real "Espera, para" envelope: 100ms bursts with 40-80ms dips
-  const him = drive(vad, [[-25, 100], [-60, 60], [-22, 180], [-60, 80], [-20, 240], [-70, 1000]], t);
+  const him = drive(vad, [[-25, 100], [-60, 60], [-22, 180], [-60, 80], [-20, 400], [-70, 1000]], t);
   assert.strictEqual(him.evs[0].type, 'start');
   assert.strictEqual(him.evs[0].at, t, 'the run starts at the first burst');
-  assert.ok(him.evs[0].t - t <= 360, 'detected inside the second burst: ' + (him.evs[0].t - t));
+  assert.ok(him.evs[0].t - t <= C.VAD_DEFAULTS.bargeHoldMs + 40, 'gaps did not reset the hold: ' + (him.evs[0].t - t));
 });
 
 test('bursts further apart than gapMs do not add up', () => {
@@ -317,4 +317,47 @@ test('bursts further apart than gapMs do not add up', () => {
   vad.setBarge(true);
   const echo = drive(vad, [[-25, 140], [-70, 200], [-25, 140], [-70, 200], [-25, 140], [-70, 400]], t);
   assert.deepStrictEqual(echo.evs, []);
+});
+
+// ── the keyword ──────────────────────────────────────────────────────────────
+
+test('takeKeyword: the STT variants of "câmbio" all end the turn', () => {
+  const kw = 'câmbio';
+  for (const [inp, out] of [
+    ['qual o status do deploy câmbio', 'qual o status do deploy'],
+    ['Qual o status do deploy? Câmbio.', 'Qual o status do deploy?'],
+    ['qual o status do deploy, cambio', 'qual o status do deploy'],
+    ['qual o status câmbio, câmbio.', 'qual o status'],
+    ['qual o status CÂMBIO!', 'qual o status'],
+    ['qual o status cam bio', 'qual o status'],
+    ['Câmbio.', ''],
+  ]) {
+    assert.deepStrictEqual(C.takeKeyword(inp, kw), { hit: true, text: out }, inp);
+  }
+});
+
+test('takeKeyword: the keyword anywhere but the end does not end the turn', () => {
+  assert.deepStrictEqual(C.takeKeyword('o câmbio do dólar subiu', 'câmbio'), { hit: false, text: 'o câmbio do dólar subiu' });
+  assert.deepStrictEqual(C.takeKeyword('', 'câmbio'), { hit: false, text: '' });
+  assert.strictEqual(C.takeKeyword('faz isso câmbio', '').hit, false);
+});
+
+test('takeKeyword: a multi-word keyword, and "cancela"', () => {
+  assert.deepStrictEqual(C.takeKeyword('faz o deploy over and out', 'over and out'), { hit: true, text: 'faz o deploy' });
+  assert.strictEqual(C.takeKeyword('não, cancela', 'cancela').hit, true);
+  assert.strictEqual(C.takeKeyword('Cancela.', 'cancela').hit, true);
+});
+
+test('hasWords: noise transcribed as punctuation is not words', () => {
+  assert.strictEqual(C.hasWords('...'), false);
+  assert.strictEqual(C.hasWords('—'), false);
+  assert.strictEqual(C.hasWords('espera'), true);
+});
+
+test('keyword mode: a chunk drops back, the keyword commits, a commit mid-speech waits', () => {
+  assert.deepStrictEqual(run(['start', 'speech', 'drop', 'speech', 'drop', 'commit', 'sent', 'reply', 'done']),
+    ['idle', 'listening', 'capturing', 'listening', 'capturing', 'listening', 'sending', 'thinking', 'speaking', 'listening']);
+  assert.strictEqual(C.nextCallState('thinking', 'commit'), 'sending');
+  assert.strictEqual(C.nextCallState('capturing', 'commit'), 'capturing');
+  assert.strictEqual(C.nextCallState('sending', 'failed', { awaiting: true }), 'thinking');
 });

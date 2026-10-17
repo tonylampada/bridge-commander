@@ -1934,7 +1934,10 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .call-view[data-state="speaking"] .call-meter span { background: var(--faint); }
 .call-lines { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 10px; text-align: center; font-size: 15px; line-height: 1.45; }
 .call-heard { color: var(--text); }
-.call-heard:empty, .call-said:empty { display: none; }
+.call-heard.buffer { background: var(--panel); border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; cursor: pointer; text-align: left; }
+.call-hint { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; text-align: center; }
+.call-mic { color: var(--faint); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-said:empty { display: none; }
 .call-said { color: var(--dim); max-height: 7.5em; overflow: hidden; }
 .call-note { max-width: 520px; text-align: center; color: var(--warn); font-size: 13.5px; }
 .call-stats { color: var(--faint); font: 11px var(--mono, ui-monospace, Menlo, monospace); text-align: center; max-width: 520px; min-height: 1em; }

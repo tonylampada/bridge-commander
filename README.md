@@ -89,18 +89,24 @@ toggle again.
 ### Call mode
 
 📞 in a lieutenant's chat header (shown when both `tts` and `stt` are configured) starts a
-hands-free call: the mic stays open, a client VAD cuts each utterance, STT turns it into a
-captain message posted with `via: "call"` (drain shows **ON A CALL**; the thread shows 📞), and
-every reply from that lieutenant is spoken back sentence by sentence while the next sentence
-synthesizes. Talking over a reply stops it. After 3s without an answer a short pre-synthesized
-filler plays once. A hidden page or locked screen ends the call (iOS gives a hidden page no
-microphone). Code: `ui/js/call.js` (audio + screen), `ui/js/callcore.js` (decisions, tested in
-`test/call.test.js`).
+hands-free call. The mic stays open. **His turn ends when he says the keyword** — "câmbio" by
+default: a client VAD only cuts the audio into chunks, the whole turn is re-transcribed at each
+chunk end (so a lone "câmbio" is heard in context), and the live transcript shows in the call
+view until it ends with the keyword. The keyword is stripped and the rest is posted as a captain
+message with `via: "call"` (drain shows **ON A CALL**; the thread shows 📞). Tapping the
+transcript, or ending with "cancela", clears it. Every reply from that lieutenant is spoken back
+sentence by sentence while the next sentence synthesizes. Talking over a reply ducks it at once
+and stops it only when a quick STT finds words, so noise never kills playback. After 3s without
+an answer a short pre-synthesized filler plays once. A hidden page or screen-off (proximity at
+the ear) pauses the call and resumes it on return; past 60s away it ends, and says so. A change
+of input device (AirPods in) re-takes the mic. Code: `ui/js/call.js` (audio + screen),
+`ui/js/callcore.js` (decisions, tested in `test/call.test.js`).
 
-Tuning per browser, no deploy: `localStorage['bc-call'] = '{"hangMs":700,"fillerMs":2500,"debug":true}'`
-— any key of `VAD_DEFAULTS` in `callcore.js` (`hangMs` trailing silence, `bargeMarginDb` /
-`bargeMinDb` / `bargeHoldMs` for barge-in over the speaker), plus `fillerMs` and `debug` (state
-transitions and per-turn latency in the console; `window.bcCallTurns` holds the last 50 turns).
+Tuning per browser, no deploy: `localStorage['bc-call'] = '{"keyword":"câmbio","cancelWord":"cancela","debug":true}'`
+— also `endMode: "silence"` (the old end-of-turn on trailing silence, off by default),
+`fillerMs`, and any key of `VAD_DEFAULTS` in `callcore.js` (`hangMs`, `maxUtteranceMs`,
+`bargeMarginDb` / `bargeMinDb` / `bargeHoldMs`). `debug` logs state transitions and per-turn
+latency to the console; `window.bcCallTurns` holds the last 50 turns.
 
 ### Network exposure
 

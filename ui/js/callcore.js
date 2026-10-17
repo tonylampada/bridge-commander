@@ -116,9 +116,9 @@ export const VAD_DEFAULTS = {
   minUtteranceMs: 350,  // voiced total under this is a cough, a click, a door: dropped
   marginDb: 12,         // over the noise floor
   minDb: -50,           // and never quieter than this, whatever the floor says
-  bargeMarginDb: 22,    // while the reply plays
-  bargeMinDb: -38,
-  bargeHoldMs: 260,     // sustained, so a plosive in the echo is not him
+  bargeMarginDb: 24,    // while the reply plays
+  bargeMinDb: -36,
+  bargeHoldMs: 450,     // sustained, so a plosive in the echo or a passing voice is not him
   gapMs: 120,           // a gap this short inside a run is a consonant, not the end of the run
   floorInit: -60,
   calibrateMs: 300,     // the first stretch of the call IS the floor; nothing starts inside it
@@ -220,6 +220,10 @@ export function rmsDb(samples) {
 //                                     └─drop→ listening, or thinking if an answer is still owed
 //   any ─hangup→ ended
 //
+// Keyword mode: a chunk ending is 'drop' (back to listening while it
+// transcribes), and the keyword arriving later is 'commit' → sending. A commit
+// that lands while he is already talking again leaves 'capturing' alone.
+//
 // A pure reducer. `awaiting` says whether the lieutenant still owes an answer;
 // it decides where a dropped utterance or a finished reply lands. Events that
 // mean nothing in a state leave it where it is.
@@ -234,6 +238,7 @@ export function nextCallState(state, event, { awaiting = false } = {}) {
     case 'listening':
       if (event === 'speech') return 'capturing';
       if (event === 'reply') return 'speaking';
+      if (event === 'commit') return 'sending';
       return state;
     case 'capturing':
       if (event === 'end') return 'sending';
@@ -246,6 +251,7 @@ export function nextCallState(state, event, { awaiting = false } = {}) {
       return state;
     case 'thinking':
       if (event === 'speech') return 'capturing';
+      if (event === 'commit') return 'sending';
       if (event === 'reply') return 'speaking';
       return state;
     case 'speaking':
@@ -354,4 +360,41 @@ export function spokenReply(cleaned, nth, { maxLater = 300 } = {}) {
   if (!cleaned) return '';
   if (nth === 0 || cleaned.length <= maxLater) return cleaned;
   return 'Mandei mais detalhes no chat.';
+}
+
+// ── "câmbio": the end of his turn, said out loud ────────────────────────────
+// In a noisy place silence never comes, so the turn ends on a WORD. The VAD
+// only chunks; each chunk's transcript is appended to a buffer, and nothing is
+// sent until the buffer ends with the keyword. Matching is on letters only,
+// accent- and case-blind, over the last few words joined — so "Câmbio.",
+// "cambio", "câmbio, câmbio" and a chunk boundary through it ("…cam" + "bio")
+// all count. A multi-word keyword works the same way.
+export function letters(s) {
+  return String(s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
+// The text with the keyword (repeated any number of times) taken off its end:
+// {hit, text}. hit=false leaves the text alone.
+export function takeKeyword(text, keyword) {
+  const kw = letters(keyword);
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  if (!kw) return { hit: false, text: words.join(' ') };
+  let hit = false;
+  for (;;) {
+    while (words.length && !letters(words[words.length - 1])) words.pop();   // a lone "." or "—"
+    let took = 0;
+    for (let n = 1; n <= Math.min(4, words.length); n++) {
+      if (letters(words.slice(-n).join('')) === kw) { took = n; break; }
+    }
+    if (!took) break;
+    words.splice(words.length - took, took);
+    hit = true;
+  }
+  const rest = words.join(' ').replace(/[\s,;:–—-]+$/, '').trim();
+  return { hit, text: hit ? rest : words.join(' ') };
+}
+
+// Something with words in it, as opposed to noise the engine wrote down.
+export function hasWords(text) {
+  return /\p{L}{2,}/u.test(String(text || ''));
 }

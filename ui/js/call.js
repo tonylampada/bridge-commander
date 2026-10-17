@@ -27,7 +27,7 @@ import { push as toast } from './toast.js';
 import { speechEngine, voiceFor, setAutoSpeakGate, stopSpeaking } from './voice.js';
 import {
   cleanForCall, splitSentences, createVad, rmsDb, nextCallState, createFillerPolicy,
-  FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply,
+  FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply, takeKeyword, hasWords,
 } from './callcore.js';
 
 const STT_ROUTE = '/api/stt/transcribe';
@@ -42,7 +42,8 @@ function tuning() {
 }
 
 let call = null;          // the live call, or null
-let endedHidden = false;  // the last call was ended by the page going away
+let endedAway = false;    // the last call was ended by a long absence
+const AWAY_MAX_MS = 60000; // hidden longer than this ends the call; shorter pauses and resumes
 const turns = [];         // every finished turn's legs, newest last (window.bcCallTurns)
 if (typeof window !== 'undefined') window.bcCallTurns = turns;
 
@@ -145,6 +146,10 @@ function createPlayer(ctx, out) {
     P.srcs.clear();
     P.nextAt = 0;
   };
+  // Turned down, not off: a barge-in on probation (see onVad).
+  P.duck = (on) => {
+    try { out.gain.setTargetAtTime(on ? 0.15 : 1, ctx.currentTime, 0.03); } catch (e) { out.gain.value = on ? 0.15 : 1; }
+  };
   P.hold = (on) => { P.held = !!on; if (!on && P.queue.length) pump(); };
   return P;
 }
@@ -199,7 +204,7 @@ function buildView(lt) {
   v.setAttribute('aria-label', 'call with ' + (lt.name || lt.id));
   const av = avatarHtml(lieutenantAvatar(lt.id), 'call-avatar');
   v.innerHTML =
-    '<div class="call-top"><span class="call-clock">00:00</span><span class="call-tag">📞 call</span></div>' +
+    '<div class="call-top"><span class="call-clock">00:00</span><span class="call-mic"></span><span class="call-tag">📞 call</span></div>' +
     '<div class="call-who">' + (av || '<span class="call-avatar call-avatar-none">' + esc((lt.name || lt.id).slice(0, 1).toUpperCase()) + '</span>') +
     '<div class="call-name">' + esc(lt.name || lt.id) + '</div></div>' +
     '<div class="call-state" aria-live="polite"><span class="call-dot"></span><span class="call-label">connecting…</span></div>' +
@@ -212,6 +217,7 @@ function buildView(lt) {
   return {
     root: v,
     clock: v.querySelector('.call-clock'),
+    mic: v.querySelector('.call-mic'),
     label: v.querySelector('.call-label'),
     meter: v.querySelector('.call-meter span'),
     heard: v.querySelector('.call-heard'),
@@ -243,32 +249,50 @@ export function startCall(ltId) {
     s.connect(ctx.destination);
     s.start(0);
   } catch (e) {}
-  endedHidden = false;
+  endedAway = false;
   stopSpeaking();     // the board's own reader goes quiet for the call
 
   const tune = tuning();
+  // How his turn ends. 'keyword' (default): the VAD only chunks, and the turn
+  // is over when what he said ends with the keyword. 'silence': the VAD's
+  // trailing silence ends it, as in the first version — useless in a noisy room.
+  const mode = tune.endMode === 'silence' ? 'silence' : 'keyword';
+  // Keyword mode chunks short and never holds a chunk long, so in a room the
+  // VAD can never call quiet the keyword still gets transcribed within seconds.
+  const vadOpts = Object.assign(mode === 'keyword' ? { hangMs: 600, maxUtteranceMs: 6000 } : {}, tune);
   const out = ctx.createGain();
   out.connect(ctx.destination);
   const c = call = {
     ltId, target: 'lieutenant:' + ltId, ctx, out, state: 'idle',
+    mode,
+    keyword: tune.keyword || 'câmbio',
+    cancelWord: tune.cancelWord || 'cancela',
+    buffer: '',           // keyword mode: what he has said this turn, not yet sent
+    turnFrames: [], turnVoiced: 0, frozen: '', turnGen: 0,   // …and the audio it was heard from
+    chain: Promise.resolve(),   // segment transcripts are handled in the order spoken
     view: buildView(lt),
-    vad: createVad(tune),
+    vad: createVad(vadOpts),
     filler: createFillerPolicy({ delayMs: tune.fillerMs || 3000 }),
     fillers: [],          // decoded AudioBuffers
     player: null,
     engine: null, voice: '',
-    stream: null, src: null, proc: null, sink: null,
+    stream: null, src: null, proc: null, sink: null, frameMs: 21,
     pre: [], take: null,  // pre-roll frames; the take being captured
     awaiting: false,
     turn: null,           // the turn being timed
     nth: 0,               // replies seen in this turn
     seen: new Set(), started: Date.now(), timer: null,
+    paused: false, hiddenAt: 0, awayTimer: null,
     debug: !!tune.debug,
     note(msg) { c.view.note.textContent = msg || ''; c.view.note.hidden = !msg; },
   };
   c.player = createPlayer(ctx, out);
   c.player.onIdle = () => { if (call === c && c.state === 'speaking') go('done'); };
-  c.view.hangup.onclick = () => endCall('hangup');
+  c.view.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
+  // the buffered transcript is his to throw away with a tap
+  c.view.heard.onclick = (e) => { e.stopPropagation(); if (c.mode === 'keyword') clearBuffer(c, 'cleared'); };
+  // any tap on the call view also wakes an audio session iOS left interrupted
+  c.view.root.addEventListener('click', () => { try { c.ctx.resume(); } catch (e) {} });
   c.timer = setInterval(() => {
     const s = Math.floor((Date.now() - c.started) / 1000);
     c.view.clock.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
@@ -279,6 +303,7 @@ export function startCall(ltId) {
   setAutoSpeakGate((who) => call === c && isFrom(who, c.ltId));
   document.body.classList.add('in-call');
   syncButton();
+  showBuffer(c);
   open(c);
 }
 
@@ -290,16 +315,14 @@ async function open(c) {
       : 'this browser gives no microphone here — open the board in Safari to call');
   }
   c.view.label.textContent = 'allow the microphone…';
-  let stream;
   try {
-    stream = await md.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 } });
+    await attachMic(c);
   } catch (e) {
     return fail(c, e && e.name === 'NotAllowedError'
       ? 'microphone permission refused — allow it for this site, then call again'
       : 'no microphone: ' + why(e));
   }
-  if (call !== c) { stream.getTracks().forEach((t) => t.stop()); return; }
-  c.stream = stream;
+  if (call !== c) return;
   const [eng, voice] = await Promise.all([speechEngine(), voiceFor(c.ltId)]);
   if (call !== c) return;
   c.engine = eng;
@@ -307,31 +330,82 @@ async function open(c) {
   if (!eng) c.note('no speech engine — replies will not be spoken');
   else if (!voice) c.note('no voice chosen for this lieutenant — pick one in settings');
   try { await c.ctx.resume(); } catch (e) {}
-
-  c.src = c.ctx.createMediaStreamSource(stream);
-  // ScriptProcessor, not a worklet: deprecated, but it is the one that runs on
-  // every Safari the captain might have, and 1024 frames is ~21ms of VAD grain.
-  c.proc = c.ctx.createScriptProcessor(1024, 1, 1);
-  c.sink = c.ctx.createGain();
-  c.sink.gain.value = 0;
-  c.src.connect(c.proc);
-  c.proc.connect(c.sink);
-  c.sink.connect(c.ctx.destination);   // a processor nobody listens to is never run
-  const frameMs = 1024 / c.ctx.sampleRate * 1000;
-  const preMax = Math.ceil(PREROLL_MS / frameMs);
-  c.proc.onaudioprocess = (e) => {
-    if (call !== c) return;
-    const f = new Float32Array(e.inputBuffer.getChannelData(0));
-    const db = rmsDb(f);
-    meter(c, db);
-    if (c.take) c.take.frames.push(f);
-    else { c.pre.push(f); if (c.pre.length > preMax) c.pre.shift(); }
-    c.vad.setBarge(c.player.busy());
-    const ev = c.vad.frame(db, performance.now());
-    if (ev) onVad(c, ev, frameMs);
-  };
+  if (md.addEventListener) md.addEventListener('devicechange', c.onDevices = () => deviceChanged(c));
   go('start');
   if (voice && eng) cacheFillers(c);
+}
+
+// The microphone into the graph. Called again whenever the input may have
+// changed under us (AirPods put in, the track ended, back from a screen-off):
+// a new stream, the old one let go, the processor kept.
+async function attachMic(c) {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true, channelCount: 1 },
+  });
+  if (call !== c) { stream.getTracks().forEach((t) => t.stop()); return; }
+  const old = c.stream, oldSrc = c.src;
+  c.stream = stream;
+  c.src = c.ctx.createMediaStreamSource(stream);
+  if (!c.proc) {
+    // ScriptProcessor, not a worklet: deprecated, but it is the one that runs on
+    // every Safari the captain might have, and 1024 frames is ~21ms of VAD grain.
+    c.proc = c.ctx.createScriptProcessor(1024, 1, 1);
+    c.sink = c.ctx.createGain();
+    c.sink.gain.value = 0;
+    c.proc.connect(c.sink);
+    c.sink.connect(c.ctx.destination);   // a processor nobody listens to is never run
+    c.frameMs = 1024 / c.ctx.sampleRate * 1000;
+    const preMax = Math.ceil(PREROLL_MS / c.frameMs);
+    c.proc.onaudioprocess = (e) => {
+      if (call !== c || c.paused) return;
+      const f = new Float32Array(e.inputBuffer.getChannelData(0));
+      const db = rmsDb(f);
+      meter(c, db);
+      if (c.take) c.take.frames.push(f);
+      else { c.pre.push(f); if (c.pre.length > preMax) c.pre.shift(); }
+      c.vad.setBarge(c.player.busy() && !(c.take && c.take.confirmed));
+      const ev = c.vad.frame(db, performance.now());
+      if (ev) onVad(c, ev);
+    };
+  }
+  c.src.connect(c.proc);
+  if (oldSrc) { try { oldSrc.disconnect(); } catch (e) {} }
+  if (old) old.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
+  const track = stream.getAudioTracks()[0];
+  if (track) track.addEventListener('ended', () => { if (call === c && c.stream === stream) remic(c, 'the microphone went away'); });
+  c.view.mic.textContent = track && track.label ? '🎙 ' + track.label : '';
+  c.take = null; c.pre = [];
+  c.vad.reset();
+}
+
+let remicking = null;
+async function remic(c, why_) {
+  if (remicking) return remicking;
+  remicking = attachMic(c).then(
+    () => { if (c.debug) console.info('[call] mic re-acquired:', why_); },
+    (e) => { if (call === c) c.note('microphone lost: ' + why(e)); },
+  ).finally(() => { remicking = null; });
+  return remicking;
+}
+
+// AirPods in or out: the OS moves the default input, but a stream already open
+// keeps the old one. Settle for a moment (a Bluetooth handover fires several
+// events), then take a fresh stream if the default input is not the one we hold.
+function deviceChanged(c) {
+  clearTimeout(c.devTimer);
+  c.devTimer = setTimeout(async () => {
+    if (call !== c || c.paused) return;
+    const held = c.stream && c.stream.getAudioTracks()[0];
+    let label = '';
+    try {
+      const ins = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === 'audioinput');
+      const def = ins.find((d) => d.deviceId === 'default') || ins[0];
+      label = def ? def.label : '';
+    } catch (e) {}
+    const heldLabel = held ? held.label : '';
+    if (held && held.readyState === 'live' && label && (label === heldLabel || label.endsWith(heldLabel))) return;
+    remic(c, 'input device changed');
+  }, 600);
 }
 
 function fail(c, msg) {
@@ -348,60 +422,189 @@ function go(ev) {
   c.state = nextCallState(c.state, ev, { awaiting: c.awaiting });
   if (c.state === was) return;
   c.view.root.dataset.state = c.state;
-  c.view.label.textContent = LABEL[c.state] || c.state;
+  c.view.label.textContent = c.paused ? 'paused' : LABEL[c.state] || c.state;
   // a reply that landed while he was talking (held) starts when he stops
   c.player.hold(c.state === 'capturing' || c.state === 'sending');
   if ((c.state === 'listening' || c.state === 'thinking') && c.player.queue.length) go('reply');
   if (c.debug) console.info('[call]', was, '--' + ev + '->', c.state);
 }
 
-function onVad(c, ev, frameMs) {
+function onVad(c, ev) {
+  const frameMs = c.frameMs;
   if (ev.type === 'start') {
-    // barge-in: whatever is playing stops now and what is queued is dropped
-    if (c.player.busy()) c.player.stop();
     c.filler.cancel();
     const keep = Math.ceil((performance.now() - ev.at) / frameMs) + Math.ceil(150 / frameMs);
-    c.take = { frames: c.pre.slice(-keep), rate: c.ctx.sampleRate };
+    c.take = { frames: c.pre.slice(-keep), rate: c.ctx.sampleRate, barge: false, confirmed: false };
     c.pre = [];
-    go('speech');
+    if (c.player.busy()) {
+      // Barge-in, on probation: in a noisy room a burst of sound is not him.
+      // The reply ducks at once, and only words stop it — a quick STT of the
+      // first second confirms, or the whole segment does if it ends first.
+      c.take.barge = true;
+      c.player.duck(true);
+      if (c.debug) console.info('[call] barge-in on probation: ducked');
+      const take = c.take;
+      take.probe = setTimeout(() => probeBarge(c, take), BARGE_PROBE_MS);
+    } else {
+      go('speech');
+    }
     return;
   }
   const take = c.take;
   c.take = null;
   if (!take) return;
-  if (ev.type === 'drop') { go('drop'); return; }
+  clearTimeout(take.probe);
+  // a barge still on probation never left 'speaking'; words decide later
+  take.probation = take.barge && !take.confirmed;
+  if (ev.type === 'drop') {
+    if (take.probation) c.player.duck(false);
+    else go('drop');
+    return;
+  }
   // end: cut the dead air the VAD had to wait through, keep a breath of it
   const extra = Math.floor((performance.now() - ev.lastVoice - TAIL_KEEP_MS) / frameMs);
   if (extra > 0) take.frames.splice(Math.max(0, take.frames.length - extra), extra);
-  c.turn = { lastVoice: ev.lastVoice, vadEnd: performance.now() };
-  go('end');
-  deliver(c, take, ev.voicedMs, c.turn);
+  const timing = { lastVoice: ev.lastVoice, vadEnd: performance.now() };
+  // The state moves NOW, not when the words come back: by then he may be
+  // talking again, and that newer take owns the state. Silence mode: the turn
+  // is over. Keyword mode: back to listening while this chunk transcribes.
+  if (!take.probation) go(c.mode === 'silence' ? 'end' : 'drop');
+  // Keyword mode re-hears the whole turn (below); a lone chunk is all the
+  // other cases need. Either way, handled in the order spoken.
+  if (c.mode === 'keyword' && !take.probation) {
+    c.chain = c.chain.then(() => turnHeard(c, take, ev.voicedMs, timing));
+    return;
+  }
+  const heard = transcribe(take.frames, take.rate);
+  c.chain = c.chain.then(() => heard).then(
+    (text) => segment(c, take, text, ev.voicedMs, timing),
+    (e) => {
+      if (call !== c) return;
+      c.note('transcription failed: ' + why(e));
+      if (take.probation && !take.confirmed) c.player.duck(false);
+      else if (c.mode === 'silence') go('failed');
+    },
+  );
 }
 
-async function deliver(c, take, voicedMs, turn) {
+const BARGE_PROBE_MS = 700;
+// Words in the first second of the barge → it is him: stop the reply.
+async function probeBarge(c, take) {
+  if (call !== c || take.confirmed || c.take !== take) return;
   let text = '';
-  try {
-    const wav = encodeWav16k(take.frames, take.rate);
-    const fd = new FormData();
-    fd.append('file', new Blob([wav], { type: 'audio/wav' }), 'call.wav');
-    fd.append('language', LANG);
-    const r = await fetch(STT_ROUTE, { method: 'POST', body: fd });
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    const d = await r.json();
-    text = typeof d.text === 'string' ? d.text.trim() : '';
-  } catch (e) {
-    if (call !== c) return;
-    c.note('transcription failed: ' + why(e));
-    return go('failed');
-  }
+  try { text = await transcribe(take.frames.slice(), take.rate); } catch (e) { return; }
+  if (call !== c || take.confirmed) return;
+  if (hasWords(text) && !isPhantom(text, 0)) confirmBarge(c, take);
+}
+function confirmBarge(c, take) {
+  if (take.confirmed) return;
+  take.confirmed = true;
+  c.player.stop();
+  c.player.duck(false);
+  if (c.debug) console.info('[call] barge-in confirmed');
+  go('speech');
+}
+function unprobe(c, take) {
+  if (take.barge && !take.confirmed) c.player.duck(false);
+}
+
+async function transcribe(frames, rate) {
+  const wav = encodeWav16k(frames, rate);
+  const fd = new FormData();
+  fd.append('file', new Blob([wav], { type: 'audio/wav' }), 'call.wav');
+  fd.append('language', LANG);
+  const r = await fetch(STT_ROUTE, { method: 'POST', body: fd });
+  if (!r.ok) throw new Error('STT HTTP ' + r.status);
+  const d = await r.json();
+  return typeof d.text === 'string' ? d.text.trim() : '';
+}
+
+// One segment's words, in order. Noise is dropped (and a barge on probation
+// is let go); words confirm a barge; then the mode decides what words mean.
+function segment(c, take, text, voicedMs, timing) {
   if (call !== c) return;
-  turn.sttDone = performance.now();
-  if (isPhantom(text, voicedMs)) {
-    if (c.debug) console.info('[call] dropped phantom', JSON.stringify(text));
-    return go('failed');
+  timing.sttDone = performance.now();
+  const words = hasWords(text) && !isPhantom(text, voicedMs);
+  if (take.probation) {
+    if (!words && !take.confirmed) {
+      if (c.debug) console.info('[call] barge-in was noise: back to full volume', JSON.stringify(text));
+      c.player.duck(false);
+      return;
+    }
+    confirmBarge(c, take);                    // idempotent: the probe may have got there first
+    go(c.mode === 'silence' ? 'end' : 'drop');
   }
-  c.view.heard.textContent = '“' + text + '”';
-  c.note('');
+  if (!words) {
+    if (c.debug) console.info('[call] dropped noise', JSON.stringify(text));
+    if (c.mode === 'silence') go('failed');
+    return;
+  }
+  if (c.mode === 'silence') return deliver(c, text, timing);
+  return turnHeard(c, take, voicedMs, timing);
+}
+
+// Keyword mode. Each chunk's audio joins the turn's, and the WHOLE turn is
+// transcribed again: a lone "Câmbio." is under a second of sound and Whisper,
+// with no context, hears "Quem viu?"; at the end of the sentence it belongs to
+// it is heard right, and a word cut across two chunks is whole again. A turn
+// longer than TURN_WINDOW_MS freezes its text and starts a fresh window, so
+// the re-hearing never grows without bound.
+const TURN_WINDOW_MS = 25000;
+async function turnHeard(c, take, voicedMs, timing) {
+  const gen = c.turnGen;
+  for (const f of take.frames) c.turnFrames.push(f);
+  c.turnVoiced += voicedMs;
+  let text = '';
+  try { text = await transcribe(c.turnFrames.slice(), take.rate); } catch (e) {
+    if (call === c) c.note('transcription failed: ' + why(e));
+    return;
+  }
+  if (call !== c || gen !== c.turnGen) return;     // cleared or sent while the engine listened
+  timing.sttDone = performance.now();
+  if (!hasWords(text) || isPhantom(text, c.turnVoiced)) text = '';
+  const full = [c.frozen, text].filter(Boolean).join(' ');
+  if (takeKeyword(full, c.cancelWord).hit) return clearBuffer(c, 'cancelled');
+  const k = takeKeyword(full, c.keyword);
+  if (k.hit) {
+    resetTurn(c);
+    showBuffer(c);
+    if (!k.text) return;                    // "câmbio" with nothing before it
+    go('commit');
+    return deliver(c, k.text, timing);
+  }
+  c.buffer = full;
+  showBuffer(c);
+  const ms = c.turnFrames.reduce((a, f) => a + f.length, 0) / take.rate * 1000;
+  if (ms > TURN_WINDOW_MS) { const keep = c.buffer; resetTurn(c); c.frozen = c.buffer = keep; }
+}
+function resetTurn(c) {
+  c.turnGen++;
+  c.turnFrames = [];
+  c.turnVoiced = 0;
+  c.frozen = '';
+  c.buffer = '';
+}
+
+function clearBuffer(c, how) {
+  resetTurn(c);
+  showBuffer(c);
+  c.note(how === 'cancelled' ? 'cancelled — nothing sent' : '');
+}
+
+function showBuffer(c) {
+  if (c.mode !== 'keyword') return;
+  const h = c.view.heard;
+  h.classList.toggle('buffer', !!c.buffer);
+  h.innerHTML = c.buffer
+    ? esc(c.buffer) + '<span class="call-hint">say “' + esc(c.keyword) + '” to send · tap or say “' + esc(c.cancelWord) + '” to clear</span>'
+    : '<span class="call-hint">end with “' + esc(c.keyword) + '” to send</span>';
+}
+
+async function deliver(c, text, timing) {
+  c.turn = timing;
+  if (c.mode === 'silence') c.view.heard.textContent = '“' + text + '”';
+  else c.view.said.textContent = '';
+  c.note(c.mode === 'keyword' ? 'sent: “' + text + '”' : '');
   try {
     await api.feedback(c.target, text, [], 'call');
   } catch (e) {
@@ -410,18 +613,18 @@ async function deliver(c, take, voicedMs, turn) {
     return go('failed');
   }
   if (call !== c) return;
-  turn.posted = performance.now();
+  timing.posted = performance.now();
   addPending(c.target, text, []);
   render();
   c.awaiting = true;
   c.nth = 0;
   c.filler.sent(performance.now());
-  if (c.state === 'sending') go('sent');
+  go('sent');
 }
 
 function tickFiller() {
   const c = call;
-  if (!c || c.state !== 'thinking' || !c.fillers.length) return;
+  if (!c || c.paused || c.state !== 'thinking' || !c.fillers.length) return;
   if (!c.filler.due(performance.now())) return;
   if (c.player.busy()) return;
   c.player.playBuffer(c.fillers[c.filler.pick(c.fillers.length)]);
@@ -520,7 +723,11 @@ export function endCall(reason) {
   call = null;
   c.state = 'ended';
   clearInterval(c.timer);
+  clearTimeout(c.awayTimer);
+  clearTimeout(c.devTimer);
+  if (c.take) clearTimeout(c.take.probe);
   try { c.player.stop(); } catch (e) {}
+  if (c.onDevices && navigator.mediaDevices.removeEventListener) navigator.mediaDevices.removeEventListener('devicechange', c.onDevices);
   if (c.proc) { c.proc.onaudioprocess = null; try { c.proc.disconnect(); } catch (e) {} }
   try { c.src && c.src.disconnect(); } catch (e) {}
   if (c.stream) c.stream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
@@ -528,21 +735,52 @@ export function endCall(reason) {
   c.view.root.remove();
   document.body.classList.remove('in-call');
   setAutoSpeakGate(null);
-  endedHidden = reason === 'hidden';
+  endedAway = reason === 'away';
   syncButton();
+  if (endedAway && !document.hidden) awayToast();
+}
+function awayToast() {
+  endedAway = false;
+  toast({ emoji: '📞', text: 'the call ended — the screen was off for over ' + AWAY_MAX_MS / 1000 + 's. Tap 📞 to call again' });
 }
 
-// iOS gives a hidden page no microphone. End the call rather than sit on a
-// dead one, and say why the moment he is back.
+// ── screen off, page hidden ─────────────────────────────────────────────────
+// Holding the phone to his ear blanks the screen (proximity) and iOS hides the
+// page, which takes the microphone with it. A short absence PAUSES the call —
+// nothing heard is acted on — and coming back resumes it, re-taking the mic if
+// iOS let go of it. Only a long absence ends the call, and he is told so.
+function pause(c) {
+  if (c.paused) return;
+  c.paused = true;
+  c.hiddenAt = Date.now();
+  if (c.take) { clearTimeout(c.take.probe); if (c.take.barge && !c.take.confirmed) c.player.duck(false); }
+  c.take = null; c.pre = [];
+  c.view.label.textContent = 'paused';
+  c.awayTimer = setTimeout(() => { if (call === c && c.paused) endCall('away'); }, AWAY_MAX_MS);
+  if (c.debug) console.info('[call] paused');
+}
+async function resume(c) {
+  if (!c.paused) return;
+  clearTimeout(c.awayTimer);
+  if (Date.now() - c.hiddenAt > AWAY_MAX_MS) return endCall('away');
+  c.paused = false;
+  try { await c.ctx.resume(); } catch (e) {}
+  const t = c.stream && c.stream.getAudioTracks()[0];
+  if (!t || t.readyState !== 'live' || t.muted) await remic(c, 'back from a pause');
+  if (call !== c) return;
+  c.vad.reset();
+  c.view.label.textContent = LABEL[c.state] || c.state;
+  c.note(c.ctx.state === 'running' ? '' : 'tap anywhere to bring the sound back');
+  if (c.debug) console.info('[call] resumed after', Date.now() - c.hiddenAt, 'ms; audio', c.ctx.state);
+}
+
 if (typeof document !== 'undefined' && document.addEventListener) {
   document.addEventListener('visibilitychange', () => {
-    if (document.hidden) { if (call) endCall('hidden'); return; }
-    if (endedHidden) {
-      endedHidden = false;
-      toast({ emoji: '📞', text: 'the call ended when the screen locked — tap 📞 to call again' });
-    }
+    if (document.hidden) { if (call) pause(call); return; }
+    if (call) resume(call);
+    else if (endedAway) awayToast();
   });
-  window.addEventListener('pagehide', () => { if (call) endCall('hidden'); });
+  window.addEventListener('pagehide', (e) => { if (call) { if (e.persisted) pause(call); else endCall('hangup'); } });
 }
 
 // ── the header button ───────────────────────────────────────────────────────
