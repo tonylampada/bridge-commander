@@ -5869,7 +5869,9 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/events') {
       sseOpen(req, res, { pingMs: SSE_PING_MS });
       res.write('event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n');
-      res.write('event: activity\ndata: ' + JSON.stringify(activitySnapshot()) + '\n\n');
+      // a turn already running: the newcomer hears about it now (none running:
+      // nothing to say — the browser cleared its own map when it connected)
+      if (Object.keys(activityMap).length) res.write('event: activity\ndata: ' + JSON.stringify(activitySnapshot()) + '\n\n');
       sseClients.add(res);
       req.on('close', () => sseClients.delete(res));
       return;

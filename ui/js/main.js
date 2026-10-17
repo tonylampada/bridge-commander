@@ -387,6 +387,7 @@ function connect() {
   es.addEventListener('ping', () => { lastEventAt = Date.now(); });
   es.onopen = () => {
     lastEventAt = Date.now();
+    setActivity({}); // whatever was running may have ended while we were away — the server resends what still is
     S.connected = true;
     renderStatusDot();
     refetchBoard(); // anything pushed while we were away is unrecoverable — resync
