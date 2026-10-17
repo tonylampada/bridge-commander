@@ -3,6 +3,7 @@ import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, 
 import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
+import { callBoard } from './call.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard, onOpenLieutenant as toastOnOpenLieutenant } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
@@ -347,6 +348,7 @@ function applyBoard(doc) {
   serverBoot = doc.boot || serverBoot;
   S.doc = doc;
   trackMessages(S.doc);
+  callBoard(S.doc);
   trackEvents(S.doc);
   render();
   if (deepCard) {

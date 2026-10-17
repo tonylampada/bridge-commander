@@ -14,12 +14,14 @@ import { fileContextBlock } from './filectx.js';
 import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 import { slashOptions } from './slash.js';
 import { mountMic } from './mic.js';
+import { mountCallButton, syncButton as syncCallButton } from './call.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
 const ltBtn = document.getElementById('chat-lt'); // switcher trigger (ltswitcher.js owns its click)
 const ltPeekBtn = document.getElementById('chat-lt-peek'); // current lt's 👁/⋯ (ltswitcher.js owns clicks)
 const ltMenuBtn = document.getElementById('chat-lt-menu');
+const callBtn = document.getElementById('chat-call');
 const backBtn = document.getElementById('chat-back');
 const openBtn = document.getElementById('chat-card-open');
 const inputEl = document.getElementById('chat-input');
@@ -220,7 +222,7 @@ function msgHtml(m, promote, avatarIdx) {
   // an optimistic (pending) send renders as a normal captain bubble, dimmed,
   // with a clock on the timestamp — provisional, but never error-looking
   return '<div class="msg ' + (mine ? 'user' : 'agent') + (m._pending ? ' pending' : '') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
-    '<span class="ts">' + (m._pending ? '🕓 ' : '') + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
+    '<span class="ts">' + (m._pending ? '🕓 ' : '') + (m.via === 'call' ? '📞 ' : '') + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
 // same fallback rule as everywhere else) above the "no messages yet" text
@@ -420,6 +422,7 @@ export function renderChat() {
   // switcher lives); lieutenant chat: the switcher trigger IS the header
   ltBtn.hidden = isCard || !lt;
   ltPeekBtn.hidden = ltMenuBtn.hidden = ltBtn.hidden; // current lt's 👁/⋯ ride with the trigger
+  syncCallButton(!ltBtn.hidden); // 📞 too — a call is with a lieutenant, never a card thread
   titleEl.hidden = !ltBtn.hidden;
   if (isCard || !lt) setHtmlIfChanged(titleEl, esc(cardEmoji(c) + ' ' + (c.title || c.id)));
   else setHtmlIfChanged(ltBtn, ltTriggerHtml(lt));
@@ -693,6 +696,8 @@ composerEl.addEventListener('drop', (e) => {
   const files = e.dataTransfer && e.dataTransfer.files;
   if (files && files.length) addPendingFiles([...files]);
 });
+// 📞 call mode (call.js): shown only where the board has both STT and TTS.
+if (callBtn) mountCallButton(callBtn, currentLieutenant);
 // The microphone, if the board has an engine behind /api/stt. mic.js mounts
 // nothing when it does not — a board with no stt block is byte-for-byte the
 // composer it was before this feature existed.

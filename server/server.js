@@ -5586,9 +5586,16 @@ const server = http.createServer(async (req, res) => {
       // the file paths to the agent.
       // `via: 'line'` rides the ENVELOPE, never the captain's words: a lieutenant
       // that reads channel information back to him got it glued into the text.
+      // `via: 'call'` is the same envelope from the board's call mode: he is on
+      // a hands-free call, the reply will be spoken back to him at once. It is
+      // also stamped on the chat message, so the thread shows which words were
+      // spoken rather than typed.
+      const overCall = !overLine && body.via === 'call';
+      const via = overLine ? 'line' : overCall ? 'call' : undefined;
       const item = queuePush(lt.id, Object.assign({ kind: 'message', target, text, attachments },
-        overLine ? { via: 'line' } : null));
+        via ? { via } : null));
       const msg = { author: 'user', text, ts: now() };
+      if (overCall) msg.via = 'call';
       if (attachments.length) msg.attachments = attachments;
       appendMessage(target, msg);
       const m = /^card:(.+)$/.exec(target);
@@ -5597,7 +5604,7 @@ const server = http.createServer(async (req, res) => {
         if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
       }
       saveBoard(); broadcast(); // a captain message flips derived owed via broadcast
-      return sendJson(res, 200, { ok: true, seq: item.seq, target, via: overLine ? 'line' : undefined });
+      return sendJson(res, 200, { ok: true, seq: item.seq, target, via });
     }
 
     // ----- the line -----

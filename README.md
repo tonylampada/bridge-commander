@@ -86,6 +86,22 @@ push service talks to the device directly — but turning push on/off, the **tes
 rotated subscription (`pushsubscriptionchange`) need a live login: reload the board, log in,
 toggle again.
 
+### Call mode
+
+📞 in a lieutenant's chat header (shown when both `tts` and `stt` are configured) starts a
+hands-free call: the mic stays open, a client VAD cuts each utterance, STT turns it into a
+captain message posted with `via: "call"` (drain shows **ON A CALL**; the thread shows 📞), and
+every reply from that lieutenant is spoken back sentence by sentence while the next sentence
+synthesizes. Talking over a reply stops it. After 3s without an answer a short pre-synthesized
+filler plays once. A hidden page or locked screen ends the call (iOS gives a hidden page no
+microphone). Code: `ui/js/call.js` (audio + screen), `ui/js/callcore.js` (decisions, tested in
+`test/call.test.js`).
+
+Tuning per browser, no deploy: `localStorage['bc-call'] = '{"hangMs":700,"fillerMs":2500,"debug":true}'`
+— any key of `VAD_DEFAULTS` in `callcore.js` (`hangMs` trailing silence, `bargeMarginDb` /
+`bargeMinDb` / `bargeHoldMs` for barge-in over the speaker), plus `fillerMs` and `debug` (state
+transitions and per-turn latency in the console; `window.bcCallTurns` holds the last 50 turns).
+
 ### Network exposure
 
 The board has **no application-level auth** — whoever reaches the bind address fully controls
