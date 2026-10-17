@@ -92,6 +92,15 @@ if (voiceSelect) voiceSelect.onchange = () => {
 function voiceForAuthor(who) {
   return pickVoice((lieutenantByActor(who) || {}).voice, boardVoice(), voiceList);
 }
+// For call mode (call.js), which speaks through its own pipelined player but
+// with this board's engine and this board's voice rule. Both wait for the one
+// config load above.
+export function speechEngine() { return voicesReady.then(() => engine); }
+export function voiceFor(who) { return voicesReady.then(() => voiceForAuthor(who)); }
+// While a call is live its lieutenant's messages are the call's to speak; the
+// board's auto-speak skips anything the gate claims, so nothing is said twice.
+let autoGate = null;
+export function setAutoSpeakGate(fn) { autoGate = fn || null; }
 function stripEmoji(s) { // spoken text only
   return s
     .replace(/[\u{1F1E6}-\u{1F1FF}]/gu, ' ')
@@ -284,6 +293,7 @@ async function drain() {
 }
 export function speak(text, who) {
   if (!voiceOn) return;
+  if (autoGate && autoGate(who)) return;
   const plain = stripForSpeech(text);
   if (!plain) return;
   manualSpeakingKey = null;                  // an auto-speak supersedes any manual toggle state

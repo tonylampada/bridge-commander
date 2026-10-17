@@ -14,12 +14,15 @@ import { fileContextBlock } from './filectx.js';
 import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 import { slashOptions } from './slash.js';
 import { mountMic } from './mic.js';
+import { mountCallButton, syncButton as syncCallButton } from './call.js';
+import { activityHtml, onActivity } from './activity.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
 const ltBtn = document.getElementById('chat-lt'); // switcher trigger (ltswitcher.js owns its click)
 const ltPeekBtn = document.getElementById('chat-lt-peek'); // current lt's 👁/⋯ (ltswitcher.js owns clicks)
 const ltMenuBtn = document.getElementById('chat-lt-menu');
+const callBtn = document.getElementById('chat-call');
 const backBtn = document.getElementById('chat-back');
 const openBtn = document.getElementById('chat-card-open');
 const inputEl = document.getElementById('chat-input');
@@ -220,7 +223,7 @@ function msgHtml(m, promote, avatarIdx) {
   // an optimistic (pending) send renders as a normal captain bubble, dimmed,
   // with a clock on the timestamp — provisional, but never error-looking
   return '<div class="msg ' + (mine ? 'user' : 'agent') + (m._pending ? ' pending' : '') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
-    '<span class="ts">' + (m._pending ? '🕓 ' : '') + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
+    '<span class="ts">' + (m._pending ? '🕓 ' : '') + (m.via === 'call' ? '📞 ' : '') + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
 // same fallback rule as everywhere else) above the "no messages yet" text
@@ -232,7 +235,7 @@ function emptyFeedHtml(lt) {
     : '<span class="chat-empty-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span>';
   return '<div class="empty">' + face + 'no messages yet</div>';
 }
-function typingHtml(state, name, chip) {
+function typingHtml(state, name, chip, act) {
   // the "owes you a reply" balloon (card.status.owedState / the main-chat rule),
   // one visual per state so queued-unseen never masquerades as being worked on:
   // 'stale'  = owed past the threshold: a DISTINCT "may be stuck" state, static
@@ -251,9 +254,18 @@ function typingHtml(state, name, chip) {
       '<span class="tcheck">⏳</span>' +
       '<span class="lbl">delivered — waiting for ' + esc(name) + ' to pick it up</span>' + src + '</div>';
   }
+  // 'seen' with a turn running: what it is doing right now, instead of "owes you"
+  if (act) return workingHtml(name, act, src);
   return '<div class="msg agent typing" title="' + esc(name) + ' owes you a reply here">' +
     '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
     '<span class="lbl">' + esc(name) + ' owes you a reply…</span>' + src + '</div>';
+}
+// The live activity line (activity.js): the lieutenant's turn is running, and
+// this is the tool in flight — owed reply or not.
+function workingHtml(name, act, chip) {
+  return '<div class="msg agent typing working" title="' + esc(name) + ' is working">' +
+    '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
+    '<span class="lbl act">' + act + '</span>' + (chip || '') + '</div>';
 }
 function mainFeedMsgs() {
   // the UNIFIED stream: the lieutenant's main-chat messages PLUS every thread
@@ -420,6 +432,7 @@ export function renderChat() {
   // switcher lives); lieutenant chat: the switcher trigger IS the header
   ltBtn.hidden = isCard || !lt;
   ltPeekBtn.hidden = ltMenuBtn.hidden = ltBtn.hidden; // current lt's 👁/⋯ ride with the trigger
+  syncCallButton(!ltBtn.hidden); // 📞 too — a call is with a lieutenant, never a card thread
   titleEl.hidden = !ltBtn.hidden;
   if (isCard || !lt) setHtmlIfChanged(titleEl, esc(cardEmoji(c) + ' ' + (c.title || c.id)));
   else setHtmlIfChanged(ltBtn, ltTriggerHtml(lt));
@@ -488,7 +501,9 @@ export function renderChat() {
     }
   }
   const owedState = targetOwedState(target);
-  if (owedState) tail += typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName);
+  const act = lt ? activityHtml(lt.id) : '';
+  if (owedState) tail += typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName, '', act);
+  if (act && owedState !== 'seen') tail += workingHtml(ltName, act);
 
   const prev = feed;
   feed = { key: target, blocks, tail };
@@ -500,8 +515,7 @@ export function renderChat() {
   } else if (prefixOk && prev.blocks.length) {
     // append-only delta: swap the typing indicator, add the new blocks at the
     // end; the earlier DOM — scroll, selection, focus — is never touched
-    const typingEl = feedEl.querySelector('.msg.typing');
-    if (typingEl) typingEl.remove();
+    for (const el of feedEl.querySelectorAll('.msg.typing')) el.remove();
     const fresh = blocks.slice(prev.blocks.length);
     feedEl.insertAdjacentHTML('beforeend', fresh.map((b) => b.html).join('') + tail);
     mdEnhance(feedEl);
@@ -693,6 +707,8 @@ composerEl.addEventListener('drop', (e) => {
   const files = e.dataTransfer && e.dataTransfer.files;
   if (files && files.length) addPendingFiles([...files]);
 });
+// 📞 call mode (call.js): shown only where the board has both STT and TTS.
+if (callBtn) mountCallButton(callBtn, currentLieutenant);
 // The microphone, if the board has an engine behind /api/stt. mic.js mounts
 // nothing when it does not — a board with no stt block is byte-for-byte the
 // composer it was before this feature existed.
@@ -938,3 +954,6 @@ inputEl.onkeydown = (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
 };
 document.getElementById('chat-form').onsubmit = (e) => { e.preventDefault(); send(); };
+
+// a lieutenant started, switched or finished a tool: the working line follows
+onActivity(() => renderChat());

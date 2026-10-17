@@ -65,6 +65,7 @@ const crypto = require('crypto');
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
+const { labelAt } = require(path.join(__dirname, '..', 'harness', 'activity.js'));
 const { createWorktree, releaseWorktree, worktreeToolFor } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
   hooksDir, namedHookFile, cancelNamedHook, traceSkip, lastRunsFor,
@@ -3760,6 +3761,90 @@ async function superviseTick() {
 }
 if (Number.isInteger(SUPERVISE_MS) && SUPERVISE_MS > 0) setInterval(superviseTick, SUPERVISE_MS).unref();
 
+// ---------- live activity (what each lieutenant is doing right now) ----------
+// The port's OPTIONAL activity(ref): turn running since when, the tool in
+// flight, read from the transcript the harness already writes — no tokens, the
+// agent is never asked. Polled only while a board is open, stat-gated in the
+// port so a quiet session costs one stat a tick. Pushed as its own small SSE
+// event (`activity`, the whole map) when anything changed — never a board
+// broadcast, never persisted. `agoMs` is the turn's age at send time, so the
+// browser times it on its own clock.
+const ACTIVITY_MS = process.env.BC_ACTIVITY_MS !== undefined ? parseInt(process.env.BC_ACTIVITY_MS, 10) : 1000;
+// A turn whose transcript has not moved in this long is not "running": an
+// interrupted turn writes no end line.
+const ACTIVITY_QUIET_MS = 30 * 60 * 1000;
+let activityJson = '{}';
+let activityMap = {};
+function readActivity(lt) {
+  if (!lt || !isHarnessRef(lt.ref)) return null;
+  let impl;
+  try { impl = getHarness(lt.ref.harness); } catch { return null; }
+  if (typeof impl.activity !== 'function') return null;
+  let a;
+  try { a = impl.activity(lt.ref); } catch { return null; }
+  if (!a || !a.running) return null;
+  const since = Date.parse(a.since);
+  // the turn-end hook is the server's own word that the turn is over
+  if (lt.lastTurnEnd && Number.isFinite(since) && Date.parse(lt.lastTurnEnd) > since) return null;
+  if (a.mtime && Date.now() - a.mtime > ACTIVITY_QUIET_MS) return null;
+  // held past its end (activity.labelAt), so a sub-second tool is still seen
+  const tool = labelAt(a.tool, Date.now());
+  return { since: Number.isFinite(since) ? since : null, tool: tool ? { kind: tool.kind, label: tool.label } : null };
+}
+function activitySnapshot() {
+  const out = {};
+  for (const [id, a] of Object.entries(activityMap)) {
+    out[id] = { tool: a.tool, agoMs: a.since ? Math.max(0, Date.now() - a.since) : null };
+  }
+  return out;
+}
+// A tool starting writes the transcript; the board watches each lieutenant's
+// (port activityFile) and reads it at once, so the poll is only the backstop —
+// and the clock that lets a finished tool's hold run out. Watches live only
+// while a board is open, and follow a session to its new file.
+const activityWatches = new Map();   // file -> fs.FSWatcher
+let activitySoon = null;
+function activityKick() {
+  if (activitySoon) return;
+  activitySoon = setTimeout(() => { activitySoon = null; activityTick(); }, 40);
+}
+function syncActivityWatches(files) {
+  for (const [f, w] of activityWatches) {
+    if (files.has(f)) continue;
+    try { w.close(); } catch {}
+    activityWatches.delete(f);
+  }
+  for (const f of files) {
+    if (activityWatches.has(f)) continue;
+    try {
+      const w = fs.watch(f, { persistent: false }, activityKick);
+      w.on('error', () => { try { w.close(); } catch {} activityWatches.delete(f); });
+      activityWatches.set(f, w);
+    } catch { /* not there yet: the next tick tries again */ }
+  }
+}
+function activityTick() {
+  if (!sseClients.size) { if (activityWatches.size) syncActivityWatches(new Set()); return; }
+  const next = {};
+  const files = new Set();
+  for (const lt of board.lieutenants) {
+    const a = readActivity(lt);
+    if (a) next[lt.id] = a;
+    try {
+      const impl = isHarnessRef(lt.ref) && getHarness(lt.ref.harness);
+      const f = impl && typeof impl.activityFile === 'function' && impl.activityFile(lt.ref);
+      if (f) files.add(f);
+    } catch {}
+  }
+  syncActivityWatches(files);
+  const json = JSON.stringify(next);
+  if (json === activityJson) return;
+  activityJson = json;
+  activityMap = next;
+  sseSend('activity', activitySnapshot());
+}
+if (Number.isInteger(ACTIVITY_MS) && ACTIVITY_MS > 0) setInterval(activityTick, ACTIVITY_MS).unref();
+
 // ---------- PR watch (F6: merged PR ⇒ archive + release, no agent turn) ----------
 // Every ~2min: for every card whose `prs` attribute holds an open URL, ask gh.
 // MERGED -> a pr-merged event + owner item per PR that landed; then, ONLY when
@@ -5586,9 +5671,16 @@ const server = http.createServer(async (req, res) => {
       // the file paths to the agent.
       // `via: 'line'` rides the ENVELOPE, never the captain's words: a lieutenant
       // that reads channel information back to him got it glued into the text.
+      // `via: 'call'` is the same envelope from the board's call mode: he is on
+      // a hands-free call, the reply will be spoken back to him at once. It is
+      // also stamped on the chat message, so the thread shows which words were
+      // spoken rather than typed.
+      const overCall = !overLine && body.via === 'call';
+      const via = overLine ? 'line' : overCall ? 'call' : undefined;
       const item = queuePush(lt.id, Object.assign({ kind: 'message', target, text, attachments },
-        overLine ? { via: 'line' } : null));
+        via ? { via } : null));
       const msg = { author: 'user', text, ts: now() };
+      if (overCall) msg.via = 'call';
       if (attachments.length) msg.attachments = attachments;
       appendMessage(target, msg);
       const m = /^card:(.+)$/.exec(target);
@@ -5597,7 +5689,7 @@ const server = http.createServer(async (req, res) => {
         if (card) { card.updated = now(); if (!card.threadStart) card.threadStart = msg.ts; }
       }
       saveBoard(); broadcast(); // a captain message flips derived owed via broadcast
-      return sendJson(res, 200, { ok: true, seq: item.seq, target, via: overLine ? 'line' : undefined });
+      return sendJson(res, 200, { ok: true, seq: item.seq, target, via });
     }
 
     // ----- the line -----
@@ -5812,6 +5904,9 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/events') {
       sseOpen(req, res, { pingMs: SSE_PING_MS });
       res.write('event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n');
+      // a turn already running: the newcomer hears about it now (none running:
+      // nothing to say — the browser cleared its own map when it connected)
+      if (Object.keys(activityMap).length) res.write('event: activity\ndata: ' + JSON.stringify(activitySnapshot()) + '\n\n');
       sseClients.add(res);
       req.on('close', () => sseClients.delete(res));
       return;

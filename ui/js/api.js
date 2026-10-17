@@ -51,8 +51,8 @@ export const api = {
       Object.assign({ column, actor: 'user' }, text ? { text } : {}))),
   patchCard: (id, patch) => j('PATCH', '/api/cards/' + encodeURIComponent(id), patch),
   archiveCard: (id, reason) => j('POST', '/api/cards/' + encodeURIComponent(id) + '/archive', { actor: 'user', reason }),
-  feedback: (target, text, attachments) => j('POST', '/api/feedback',
-    Object.assign({ target, text }, attachments && attachments.length ? { attachments } : {})),
+  feedback: (target, text, attachments, via) => j('POST', '/api/feedback',
+    Object.assign({ target, text }, attachments && attachments.length ? { attachments } : {}, via ? { via } : {})),
   // upload a File → {id, uri, name, mime, size}. base64 is the zero-dep transport.
   uploadAttachment: (file) => new Promise((resolve, reject) => {
     const fr = new FileReader();
