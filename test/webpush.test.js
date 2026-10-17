@@ -170,12 +170,12 @@ test('policy: what events and messages say on the phone, and their category', ()
   const P = (ev) => wp.pushFor(Object.assign({ seq: 1, actor: 'ada' }, ev), ctx);
 
   assert.deepStrictEqual(P(Object.assign({ kind: 'handoff', level: 1, text: '🔨 Working → 👀 Your review' }, card)),
-    { title: '👀 MNC-9 · in your review', body: 'Fix the thing', card: 'MNC-9', url: '/?card=MNC-9', category: 'done' });
+    { title: '👀 MNC-9 · in your review', body: 'Fix the thing', card: 'MNC-9', url: '/?card=MNC-9', category: 'done', icon: '/ui/img/icon-192.png' });
   assert.deepStrictEqual(P(Object.assign({ kind: 'worker-done', level: 2, text: 'worker done: PR open\nmore' }, card)),
-    { title: '✅ MNC-9 · worker done', body: 'PR open more', card: 'MNC-9', url: '/?card=MNC-9', category: 'done' });
+    { title: '✅ MNC-9 · worker done', body: 'PR open more', card: 'MNC-9', url: '/?card=MNC-9', category: 'done', icon: '/ui/img/icon-192.png' });
   assert.strictEqual(P(Object.assign({ kind: 'worker-stopped', level: 2, text: 'stopped' }, card)).title, '⏸️ MNC-9 · worker stopped');
   assert.deepStrictEqual(P({ kind: 'needs-captain', level: 1, text: 'help' }),
-    { title: '🚨 ada · needs-captain', body: 'help', card: null, url: '/', category: 'error' });
+    { title: '🚨 ada · needs-captain', body: 'help', card: null, url: '/', category: 'error', icon: '/ui/img/icon-192.png' });
   assert.strictEqual(P({ level: 1, text: 'plain bell' }).title, '🔔 ada');
 
   const sig = P(Object.assign({ kind: 'signal', level: 2, text: 'tests green' }, card));
@@ -185,11 +185,54 @@ test('policy: what events and messages say on the phone, and their category', ()
   assert.ok(P({ level: 1, text: 'x'.repeat(500) }).body.length <= 160);
 
   assert.deepStrictEqual(wp.pushForMessage('card:MNC-9', { author: 'ada', text: 'look at this' }),
-    { title: '💬 MNC-9 · ada', body: 'look at this', card: 'MNC-9', url: '/?card=MNC-9', category: 'chat' });
+    { title: '💬 MNC-9 · ada', body: 'look at this', card: 'MNC-9', url: '/?card=MNC-9', category: 'chat', icon: '/ui/img/icon-192.png' });
   assert.deepStrictEqual(wp.pushForMessage('lieutenant:ada', { author: 'ada', text: 'hi' }),
-    { title: '💬 ada', body: 'hi', card: null, url: '/', category: 'chat' });
+    { title: '💬 ada', body: 'hi', card: null, url: '/', category: 'chat', icon: '/ui/img/icon-192.png' });
   assert.strictEqual(wp.pushForMessage('lieutenant:ada', { author: 'user', text: 'mine' }), null);
   assert.strictEqual(wp.pushForMessage('card:MNC-9', { author: 'ada', text: 'ctx 40%', cmd: { name: '/status', reply: true } }), null);
+});
+
+// The lieutenant behind a push: its avatar is the icon wherever one is known;
+// its name leads the card id on event titles only — chat titles already carry
+// the author, so they stay as they were.
+test('policy: lieutenant avatar as icon, name ahead of the card id on events', () => {
+  const lts = { monica: { id: 'monica', name: 'Monica', avatar: 7 }, bare: { id: 'bare', name: 'Bare' } };
+  const owner = { 'MNC-9': 'monica', 'BAR-1': 'bare' };
+  const ctx = {
+    emoji: () => '', reviewTitle: '👀 Your review',
+    lieutenant: (q) => lts[q.card ? owner[q.card] : q.id] || null,
+  };
+  const P = (ev) => wp.pushFor(Object.assign({ seq: 1, actor: 'ada' }, ev), ctx);
+
+  const done = P({ kind: 'worker-done', level: 2, text: 'worker done: PR open', card: 'MNC-9' });
+  assert.strictEqual(done.title, '✅ Monica · MNC-9 · worker done');
+  assert.strictEqual(done.icon, '/ui/img/avatars/7.png');
+  assert.strictEqual(P({ kind: 'handoff', level: 1, text: 'x → 👀 Your review', card: 'MNC-9', cardTitle: 'T' }).title,
+    '👀 Monica · MNC-9 · in your review');
+  assert.strictEqual(P({ kind: 'ci-failed', level: 1, text: 'red', card: 'MNC-9' }).title, '🔔 Monica · MNC-9 · ci-failed');
+
+  const bare = P({ kind: 'worker-done', level: 2, text: 'ok', card: 'BAR-1' });
+  assert.strictEqual(bare.title, '✅ Bare · BAR-1 · worker done', 'name without an avatar still leads');
+  assert.strictEqual(bare.icon, '/ui/img/icon-192.png', 'no avatar: the board icon');
+
+  const orphan = P({ kind: 'worker-done', level: 2, text: 'ok', card: 'ZZZ-1' });
+  assert.strictEqual(orphan.title, '✅ ZZZ-1 · worker done');
+  assert.strictEqual(orphan.icon, '/ui/img/icon-192.png');
+  assert.strictEqual(P({ level: 1, text: 'board bell' }).icon, '/ui/img/icon-192.png', 'no card: no lieutenant');
+
+  const chat = wp.pushForMessage('card:MNC-9', { author: 'worker', text: 'hi' }, ctx);
+  assert.strictEqual(chat.title, '💬 MNC-9 · worker', 'chat titles untouched');
+  assert.strictEqual(chat.icon, '/ui/img/avatars/7.png', "a card thread wears its owner's avatar");
+  const main = wp.pushForMessage('lieutenant:monica', { author: 'Monica', text: 'hi' }, ctx);
+  assert.strictEqual(main.title, '💬 Monica');
+  assert.strictEqual(main.icon, '/ui/img/avatars/7.png');
+  assert.strictEqual(wp.pushForMessage('lieutenant:ghost', { author: 'x', text: 'hi' }, ctx).icon, '/ui/img/icon-192.png');
+});
+
+test('every avatar index has its icon on disk', () => {
+  for (let i = 0; i < 64; i++) {
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'ui', 'img', 'avatars', i + '.png')), 'avatar ' + i);
+  }
 });
 
 // A push service on loopback: records each delivery, decrypts it, answers 201
@@ -240,7 +283,8 @@ test('server: subscribe → a handoff to review and a level-1 event push; level 
     assert.ok(await until(() => ps.got.length >= 2), 'two pushes arrive');
     await sleep(200);
     assert.strictEqual(ps.got.length, 2, 'and only two');
-    assert.deepStrictEqual(ps.got[0].payload.title, '👀 pushy · in your review');
+    assert.deepStrictEqual(ps.got[0].payload.title, '👀 Ada · pushy · in your review', "the owner's name leads the card id");
+    assert.strictEqual(ps.got[0].payload.icon, '/ui/img/icon-192.png', 'no avatar set: the board icon');
     assert.strictEqual(ps.got[0].payload.url, '/?card=pushy');
     assert.strictEqual(ps.got[1].payload.title, '🚨 ada · needs-captain');
     assert.strictEqual(ps.got[0].headers['content-encoding'], 'aes128gcm');

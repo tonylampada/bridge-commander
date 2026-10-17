@@ -2,7 +2,7 @@
 // whole board. Push only: no fetch handler, so it never stands between the
 // page and the server (nothing cached, nothing stale).
 //
-// Payload (server/webpush.js pushFor): { title, body, card, url }.
+// Payload (server/webpush.js pushFor): { title, body, card, url, icon }.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
@@ -13,7 +13,7 @@ self.addEventListener('push', (e) => {
   // nothing, so a notification goes up for every push, whatever it carried.
   e.waitUntil(self.registration.showNotification(d.title || 'Bridge Commander', {
     body: d.body || '',
-    icon: '/ui/img/icon-192.png',
+    icon: d.icon || '/ui/img/icon-192.png', // the lieutenant's avatar; iOS ignores it
     badge: '/ui/img/icon-192.png',
     tag: d.seq != null ? 'bc-' + d.seq : undefined,
     data: { url: d.url || '/', card: d.card || null },

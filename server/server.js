@@ -448,15 +448,20 @@ function pushScan() {
   }
   fresh.sort((a, b) => a.seq - b.seq);
   const kinds = effectiveKinds();
-  const ctx = { emoji: (k) => (kinds[k] && kinds[k].emoji) || '', reviewTitle: columnTitle('review') };
+  const ctx = { emoji: (k) => (kinds[k] && kinds[k].emoji) || '', reviewTitle: columnTitle('review'), lieutenant: pushLieutenant };
   for (const e of fresh) {
     if (pushShadowSeqs.delete(e.seq)) continue;
     const msg = webpush.pushFor(e, ctx);
     if (msg) sendPushAll(Object.assign({ seq: e.seq }, msg));
   }
 }
+// Who a push speaks for: the card's owner, or the lieutenant by id.
+function pushLieutenant(q) {
+  const card = q.card ? board.cards.find((c) => c.id === q.card) : null;
+  return findLieutenant(card ? card.owner : q.id) || null;
+}
 function pushMessage(target, msg) {
-  const p = webpush.pushForMessage(target, msg);
+  const p = webpush.pushForMessage(target, msg, { lieutenant: pushLieutenant });
   let any = false;
   try { any = pushStore.list().length > 0; } catch (e) {}
   if (p && any) sendPushAll(p).catch(() => {});
