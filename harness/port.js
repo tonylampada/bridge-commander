@@ -106,6 +106,9 @@
 //       tool in flight — tail-read from the same transcript, secrets in the
 //       label redacted (activity.js). Synchronous, stat-gated, so the board
 //       can ask every second. null when unknown.
+//   activityFile(ref) -> string | null
+//       the file activity() reads, for the board to WATCH: a change there
+//       (a tool starting) is read at once instead of at the next poll.
 
 const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnEnd'];
 

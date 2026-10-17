@@ -3798,13 +3798,45 @@ function activitySnapshot() {
   }
   return out;
 }
+// A tool starting writes the transcript; the board watches each lieutenant's
+// (port activityFile) and reads it at once, so the poll is only the backstop —
+// and the clock that lets a finished tool's hold run out. Watches live only
+// while a board is open, and follow a session to its new file.
+const activityWatches = new Map();   // file -> fs.FSWatcher
+let activitySoon = null;
+function activityKick() {
+  if (activitySoon) return;
+  activitySoon = setTimeout(() => { activitySoon = null; activityTick(); }, 40);
+}
+function syncActivityWatches(files) {
+  for (const [f, w] of activityWatches) {
+    if (files.has(f)) continue;
+    try { w.close(); } catch {}
+    activityWatches.delete(f);
+  }
+  for (const f of files) {
+    if (activityWatches.has(f)) continue;
+    try {
+      const w = fs.watch(f, { persistent: false }, activityKick);
+      w.on('error', () => { try { w.close(); } catch {} activityWatches.delete(f); });
+      activityWatches.set(f, w);
+    } catch { /* not there yet: the next tick tries again */ }
+  }
+}
 function activityTick() {
-  if (!sseClients.size) return;
+  if (!sseClients.size) { if (activityWatches.size) syncActivityWatches(new Set()); return; }
   const next = {};
+  const files = new Set();
   for (const lt of board.lieutenants) {
     const a = readActivity(lt);
     if (a) next[lt.id] = a;
+    try {
+      const impl = isHarnessRef(lt.ref) && getHarness(lt.ref.harness);
+      const f = impl && typeof impl.activityFile === 'function' && impl.activityFile(lt.ref);
+      if (f) files.add(f);
+    } catch {}
   }
+  syncActivityWatches(files);
   const json = JSON.stringify(next);
   if (json === activityJson) return;
   activityJson = json;

@@ -155,13 +155,19 @@ function labelAt(tool, now) {
   return Number.isFinite(at) && now - at < TOOL_HOLD_MS ? tool : THINKING;
 }
 
+// The transcript a session writes (what the board watches for a change).
+function claudeTranscript(ref, opts = {}) {
+  if (!ref || !ref.cwd || !ref.resumeId) return null;
+  const projectsDir = opts.projectsDir || process.env.BC_CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
+  return path.join(projectsDir, claudeProjectSlug(ref.cwd), ref.resumeId + '.jsonl');
+}
+
 // claudeActivity(ref, opts?) -> activity | null. Stat-gated: an unchanged
 // file returns the cached reading without a read.
 const cache = new Map();
 function claudeActivity(ref, opts = {}) {
-  if (!ref || !ref.cwd || !ref.resumeId) return null;
-  const projectsDir = opts.projectsDir || process.env.BC_CLAUDE_PROJECTS_DIR || path.join(os.homedir(), '.claude', 'projects');
-  const file = path.join(projectsDir, claudeProjectSlug(ref.cwd), ref.resumeId + '.jsonl');
+  const file = claudeTranscript(ref, opts);
+  if (!file) return null;
   let st;
   try { st = fs.statSync(file); } catch (e) { return null; }
   const key = st.size + ':' + st.mtimeMs;
@@ -179,4 +185,4 @@ function claudeActivity(ref, opts = {}) {
   return value;
 }
 
-module.exports = { redact, shortCommand, toolLabel, claudeActivityFromLines, claudeActivity, labelAt, TOOL_HOLD_MS };
+module.exports = { redact, shortCommand, toolLabel, claudeActivityFromLines, claudeActivity, claudeTranscript, labelAt, TOOL_HOLD_MS };
