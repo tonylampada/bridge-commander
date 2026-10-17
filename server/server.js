@@ -3760,6 +3760,56 @@ async function superviseTick() {
 }
 if (Number.isInteger(SUPERVISE_MS) && SUPERVISE_MS > 0) setInterval(superviseTick, SUPERVISE_MS).unref();
 
+// ---------- live activity (what each lieutenant is doing right now) ----------
+// The port's OPTIONAL activity(ref): turn running since when, the tool in
+// flight, read from the transcript the harness already writes — no tokens, the
+// agent is never asked. Polled only while a board is open, stat-gated in the
+// port so a quiet session costs one stat a tick. Pushed as its own small SSE
+// event (`activity`, the whole map) when anything changed — never a board
+// broadcast, never persisted. `agoMs` is the turn's age at send time, so the
+// browser times it on its own clock.
+const ACTIVITY_MS = process.env.BC_ACTIVITY_MS !== undefined ? parseInt(process.env.BC_ACTIVITY_MS, 10) : 1000;
+// A turn whose transcript has not moved in this long is not "running": an
+// interrupted turn writes no end line.
+const ACTIVITY_QUIET_MS = 30 * 60 * 1000;
+let activityJson = '{}';
+let activityMap = {};
+function readActivity(lt) {
+  if (!lt || !isHarnessRef(lt.ref)) return null;
+  let impl;
+  try { impl = getHarness(lt.ref.harness); } catch { return null; }
+  if (typeof impl.activity !== 'function') return null;
+  let a;
+  try { a = impl.activity(lt.ref); } catch { return null; }
+  if (!a || !a.running) return null;
+  const since = Date.parse(a.since);
+  // the turn-end hook is the server's own word that the turn is over
+  if (lt.lastTurnEnd && Number.isFinite(since) && Date.parse(lt.lastTurnEnd) > since) return null;
+  if (a.mtime && Date.now() - a.mtime > ACTIVITY_QUIET_MS) return null;
+  return { since: Number.isFinite(since) ? since : null, tool: a.tool ? { kind: a.tool.kind, label: a.tool.label } : null };
+}
+function activitySnapshot() {
+  const out = {};
+  for (const [id, a] of Object.entries(activityMap)) {
+    out[id] = { tool: a.tool, agoMs: a.since ? Math.max(0, Date.now() - a.since) : null };
+  }
+  return out;
+}
+function activityTick() {
+  if (!sseClients.size) return;
+  const next = {};
+  for (const lt of board.lieutenants) {
+    const a = readActivity(lt);
+    if (a) next[lt.id] = a;
+  }
+  const json = JSON.stringify(next);
+  if (json === activityJson) return;
+  activityJson = json;
+  activityMap = next;
+  sseSend('activity', activitySnapshot());
+}
+if (Number.isInteger(ACTIVITY_MS) && ACTIVITY_MS > 0) setInterval(activityTick, ACTIVITY_MS).unref();
+
 // ---------- PR watch (F6: merged PR ⇒ archive + release, no agent turn) ----------
 // Every ~2min: for every card whose `prs` attribute holds an open URL, ask gh.
 // MERGED -> a pr-merged event + owner item per PR that landed; then, ONLY when
@@ -5819,6 +5869,7 @@ const server = http.createServer(async (req, res) => {
     if (route === 'GET /api/events') {
       sseOpen(req, res, { pingMs: SSE_PING_MS });
       res.write('event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n');
+      res.write('event: activity\ndata: ' + JSON.stringify(activitySnapshot()) + '\n\n');
       sseClients.add(res);
       req.on('close', () => sseClients.delete(res));
       return;

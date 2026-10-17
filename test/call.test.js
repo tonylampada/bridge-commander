@@ -389,3 +389,49 @@ test('keyword mode: a chunk drops back, the keyword commits, a commit mid-speech
   assert.strictEqual(C.nextCallState('capturing', 'commit'), 'capturing');
   assert.strictEqual(C.nextCallState('sending', 'failed', { awaiting: true }), 'thinking');
 });
+
+// ── spoken status ────────────────────────────────────────────────────────────
+
+test('status: nothing before firstMs, then the line for the tool in flight', () => {
+  const p = C.createStatusPolicy({ firstMs: 15000, gapMs: 20000 });
+  assert.strictEqual(p.due(0, 'bash', true), '', 'no turn yet');
+  p.sent(1000);
+  assert.strictEqual(p.due(15000, 'bash', true), '');
+  assert.strictEqual(p.due(16000, 'bash', true), 'Still running a command.');
+  assert.strictEqual(p.due(16000, 'agent', true), 'Waiting on a subagent.');
+  assert.strictEqual(p.due(16000, 'read', true), 'Reading some files.');
+  assert.strictEqual(p.due(16000, null, true), '', 'unknown activity says nothing');
+  assert.strictEqual(p.due(16000, 'reply', true), '', 'the answer is about to be heard');
+});
+
+test('status: at most one per gapMs, and only into silence', () => {
+  const p = C.createStatusPolicy({ firstMs: 15000, gapMs: 20000 });
+  p.sent(0);
+  assert.strictEqual(p.due(15000, 'bash', false), '', 'something is playing or he is talking');
+  assert.ok(p.due(15000, 'bash', true));
+  p.spoke(15000, 'bash');
+  assert.strictEqual(p.due(20000, 'bash', true), '');
+  assert.strictEqual(p.due(34999, 'edit', true), '');
+  assert.strictEqual(p.due(35000, 'bash', true), 'That command is still going.', 'same kind again: the next words');
+  p.spoke(35000, 'bash');
+  assert.strictEqual(p.due(55000, 'edit', true), 'Editing a file.', 'a new kind starts its list over');
+});
+
+test('status: the reply ends it; a new turn starts the clock over', () => {
+  const p = C.createStatusPolicy({ firstMs: 15000, gapMs: 20000 });
+  p.sent(0);
+  p.spoke(15000, 'bash');
+  p.replied();
+  assert.strictEqual(p.due(60000, 'bash', true), '');
+  assert.strictEqual(p.waiting, false);
+  p.sent(100000);
+  assert.strictEqual(p.due(110000, 'bash', true), '');
+  assert.strictEqual(p.due(115000, 'bash', true), 'Still running a command.', 'no gap carried over');
+});
+
+test('status phrases are English and short', () => {
+  for (const list of Object.values(C.STATUS_PHRASES)) for (const s of list) {
+    assert.match(s, /^[\x20-\x7e]+$/, s);
+    assert.ok(s.split(' ').length <= 7, s);
+  }
+});

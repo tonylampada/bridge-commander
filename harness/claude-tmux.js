@@ -48,6 +48,7 @@ const { execFile } = require('node:child_process');
 const t = require('./tmux.js');
 const s = require('./tmux-session.js');
 const { claudeStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
+const { claudeActivity } = require('./activity.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
 const TRUST_RE = /Yes, I trust this folder|Quick safety check/;
@@ -497,6 +498,9 @@ function commands(ref) {
 async function status(ref) {
   return claudeStatus(ref);
 }
+function activity(ref) {
+  return claudeActivity(ref);
+}
 async function runCommand(ref, command, opts = {}) {
   const line = String(command || '').trim();
   const name = line.split(/\s+/)[0];
@@ -543,7 +547,7 @@ const { onTurnEnd, openPane, paneSnapshot, paneInput, adoptWindow } = s;
 // turn-end POSTs by session_id). openPane/paneSnapshot/paneInput and
 // commands/runCommand/status are OPTIONAL capability verbs (port.js).
 module.exports = { spawn, send, alive, resumable, resume, kill, onTurnEnd, installHooks,
-  openPane, paneSnapshot, paneInput, commands, runCommand, status, adoptWindow,
+  openPane, paneSnapshot, paneInput, commands, runCommand, status, activity, adoptWindow,
   // Exported for the tests that pin the style list against a temp directory and
   // the built-ins against the binary.
   outputStyles, BUILTIN_OUTPUT_STYLES,

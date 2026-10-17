@@ -4,6 +4,7 @@ import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
 import { callBoard } from './call.js';
+import { setActivity } from './activity.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard, onOpenLieutenant as toastOnOpenLieutenant } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
@@ -376,6 +377,12 @@ function connect() {
   es.addEventListener('artifact', (e) => {
     lastEventAt = Date.now();
     try { artifactWritten(JSON.parse(e.data)); } catch (err) {}
+  });
+  // what each lieutenant is doing right now — a small event of its own, never
+  // a board render (activity.js)
+  es.addEventListener('activity', (e) => {
+    lastEventAt = Date.now();
+    try { setActivity(JSON.parse(e.data)); } catch (err) {}
   });
   es.addEventListener('ping', () => { lastEventAt = Date.now(); });
   es.onopen = () => {

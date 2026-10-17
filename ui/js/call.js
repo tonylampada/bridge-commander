@@ -28,7 +28,10 @@ import { speechEngine, voiceFor, setAutoSpeakGate, stopSpeaking } from './voice.
 import {
   cleanForCall, splitSentences, createVad, rmsDb, nextCallState, createFillerPolicy,
   FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply, takeKeyword, splitAtKeyword, hasWords,
+  createStatusPolicy,
 } from './callcore.js';
+import { activityOf, activityHtml, onActivity } from './activity.js';
+import { noSleepStart, noSleepStop } from './nosleep.js';
 
 const STT_ROUTE = '/api/stt/transcribe';
 const LANG = 'pt';
@@ -44,6 +47,7 @@ function tuning() {
 let call = null;          // the live call, or null
 let endedAway = false;    // the last call was ended by a long absence
 const AWAY_MAX_MS = 60000; // hidden longer than this ends the call; shorter pauses and resumes
+const DIM_MS = 30000;      // untouched this long, the call view darkens (OLED: dark pixels cost nothing)
 const turns = [];         // every finished turn's legs, newest last (window.bcCallTurns)
 if (typeof window !== 'undefined') window.bcCallTurns = turns;
 
@@ -136,6 +140,15 @@ function createPlayer(ctx, out) {
     P.nextAt = at + buf.duration;
     P.srcs.add(src);
     src.onended = () => { P.srcs.delete(src); idleCheck(); };
+    return src;
+  };
+  // One buffer out of the air (a status line the reply overtook).
+  P.cut = (src) => {
+    if (!P.srcs.has(src)) return;
+    src.onended = null;
+    try { src.stop(); } catch (e) {}
+    P.srcs.delete(src);
+    if (!P.srcs.size) P.nextAt = 0;
   };
   // Barge-in: silence now, drop everything queued, abort the synthesis.
   P.stop = () => {
@@ -206,11 +219,13 @@ function buildView(lt) {
   v.innerHTML =
     '<div class="call-top"><span class="call-clock">00:00</span><span class="call-mic"></span><span class="call-tag">📞 call</span></div>' +
     '<div class="call-who">' + (av || '<span class="call-avatar call-avatar-none">' + esc((lt.name || lt.id).slice(0, 1).toUpperCase()) + '</span>') +
-    '<div class="call-name">' + esc(lt.name || lt.id) + '</div></div>' +
+    '<div class="call-name">' + esc(lt.name || lt.id) + '</div>' +
+    '<div class="call-act" hidden></div></div>' +
     '<div class="call-state" aria-live="polite"><span class="call-dot"></span><span class="call-label">connecting…</span></div>' +
     '<div class="call-meter" aria-hidden="true"><span></span></div>' +
     '<div class="call-lines"><div class="call-heard"></div><div class="call-said"></div></div>' +
     '<div class="call-note" hidden></div>' +
+    '<div class="call-tip" hidden></div>' +
     '<div class="call-stats"></div>' +
     '<div class="call-actions">' +
     '<button type="button" class="call-send" disabled hidden>Send</button>' +
@@ -228,6 +243,8 @@ function buildView(lt) {
     stats: v.querySelector('.call-stats'),
     hangup: v.querySelector('.call-hangup'),
     send: v.querySelector('.call-send'),
+    act: v.querySelector('.call-act'),
+    tip: v.querySelector('.call-tip'),
   };
 }
 
@@ -277,6 +294,8 @@ export function startCall(ltId) {
     view: buildView(lt),
     vad: createVad(vadOpts),
     filler: createFillerPolicy({ delayMs: tune.fillerMs || 3000 }),
+    status: createStatusPolicy({ firstMs: tune.statusMs || 15000, gapMs: tune.statusGapMs || 20000 }),
+    statusAc: null, statusSrc: null,   // a status line synthesizing / playing
     fillers: [],          // decoded AudioBuffers
     player: null,
     engine: null, voice: '',
@@ -299,11 +318,33 @@ export function startCall(ltId) {
   c.view.heard.onclick = (e) => { e.stopPropagation(); if (c.mode === 'keyword') clearBuffer(c, 'cleared'); };
   // any tap on the call view also wakes an audio session iOS left interrupted
   c.view.root.addEventListener('click', () => { try { c.ctx.resume(); } catch (e) {} });
+  // Dimmed after DIM_MS untouched. The tap that wakes it only wakes it — a
+  // thumb feeling for a dark screen must not land on hang-up.
+  c.touched = Date.now();
+  c.view.root.addEventListener('pointerdown', () => {
+    c.swallow = c.view.root.classList.contains('dim');
+    c.touched = Date.now();
+    c.view.root.classList.remove('dim');
+  }, true);
+  c.view.root.addEventListener('click', (e) => {
+    if (!c.swallow) return;
+    c.swallow = false;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+  noSleepStart();     // primed in the tap — wakeLock() stops it if the real lock is granted
+  wakeLock(c);
   c.timer = setInterval(() => {
     const s = Math.floor((Date.now() - c.started) / 1000);
     c.view.clock.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
     tickFiller();
+    tickStatus();
+    if (!c.view.root.classList.contains('dim') && Date.now() - c.touched > DIM_MS) c.view.root.classList.add('dim');
   }, 250);
+  // what the lieutenant is doing, under the avatar (activity.js)
+  const showAct = () => { const h = activityHtml(c.ltId); c.view.act.innerHTML = h; c.view.act.hidden = !h; };
+  c.offActivity = onActivity(showAct);
+  showAct();
   // everything already in the chat is history, not something to say
   for (const m of lt.chat || []) c.seen.add(msgKey(m));
   setAutoSpeakGate((who) => call === c && isFrom(who, c.ltId));
@@ -619,6 +660,7 @@ function clearBuffer(c, how) {
   resetTurn(c);
   showBuffer(c);
   c.note(how === 'cancelled' ? 'cancelled — nothing sent' : '');
+  if (how === 'cancelled') earcon(c, 'cancel');
 }
 
 function showBuffer(c) {
@@ -632,6 +674,7 @@ function showBuffer(c) {
 }
 
 async function deliver(c, text, timing) {
+  earcon(c, 'sent');
   c.turn = timing;
   if (c.mode === 'silence') c.view.heard.textContent = '“' + text + '”';
   else c.view.said.textContent = '';
@@ -650,6 +693,7 @@ async function deliver(c, text, timing) {
   c.awaiting = true;
   c.nth = 0;
   c.filler.sent(performance.now());
+  c.status.sent(performance.now());
   go('sent');
 }
 
@@ -660,6 +704,47 @@ function tickFiller() {
   if (c.player.busy()) return;
   c.player.playBuffer(c.fillers[c.filler.pick(c.fillers.length)]);
   if (c.debug) console.info('[call] filler played');
+}
+
+// A long turn says what it is doing (callcore.createStatusPolicy). The line is
+// synthesized whole and played only if the moment is still right when it is
+// ready: still waiting, nothing playing, he is not talking. The reply landing
+// drops it, in synthesis or mid-air.
+function tickStatus() {
+  const c = call;
+  if (!c || c.paused || c.state !== 'thinking' || !c.awaiting || c.statusAc || !c.engine || !c.voice) return;
+  const a = activityOf(c.ltId);
+  const now = performance.now();
+  const text = c.status.due(now, a && a.kind, !c.player.busy());
+  if (!text) return;
+  c.status.spoke(now, a.kind);
+  sayStatus(c, text);
+}
+async function sayStatus(c, text) {
+  const ac = c.statusAc = new AbortController();
+  const parts = [];
+  let rate = 24000;
+  try {
+    await pcm(text, c.voice, ac.signal, (f, r) => { parts.push(f); rate = r; });
+  } catch (e) {
+    if (c.statusAc === ac) c.statusAc = null;
+    return;
+  }
+  if (c.statusAc !== ac) return;              // dropped while it synthesized
+  c.statusAc = null;
+  if (call !== c || c.paused || c.state !== 'thinking' || !c.awaiting || c.player.busy()) return;
+  const n = parts.reduce((x, p) => x + p.length, 0);
+  if (!n) return;
+  const buf = c.ctx.createBuffer(1, n, rate);
+  const ch = buf.getChannelData(0);
+  let o = 0;
+  for (const p of parts) { ch.set(p, o); o += p.length; }
+  c.statusSrc = c.player.playBuffer(buf);
+  if (c.debug) console.info('[call] status said', text);
+}
+function dropStatus(c) {
+  if (c.statusAc) { try { c.statusAc.abort(); } catch (e) {} c.statusAc = null; }
+  if (c.statusSrc) { c.player.cut(c.statusSrc); c.statusSrc = null; }
 }
 
 // A few fillers, synthesized at call start in the lieutenant's voice. One at a
@@ -694,6 +779,38 @@ function meter(c, db) {
   c.view.meter.style.width = pct.toFixed(0) + '%';
 }
 
+// Earcons, made on the spot (no asset): a soft rising "plim" the moment his
+// turn goes out, a softer low tick when "cancela" throws it away. Straight to
+// the speakers, past the ducking gain, well under the voice; ~150ms, short
+// enough to end before a VAD frame could take it for speech.
+const EARCONS = {
+  sent: { notes: [[1318.5, 0], [1975.5, 0.06]], peak: 0.09, len: 0.15 },
+  cancel: { notes: [[523.25, 0]], peak: 0.05, len: 0.08 },
+};
+function earcon(c, kind) {
+  const e = EARCONS[kind];
+  const ctx = c && c.ctx;
+  if (!e || !ctx || ctx.state === 'closed') return;
+  try {
+    const t0 = ctx.currentTime + 0.01;
+    for (const [hz, at] of e.notes) {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine';
+      o.frequency.value = hz;
+      const end = t0 + e.len;          // the notes end together
+      g.gain.setValueAtTime(0.0001, t0 + at);
+      g.gain.exponentialRampToValueAtTime(e.peak, t0 + at + 0.008);
+      g.gain.exponentialRampToValueAtTime(0.0001, end);
+      o.connect(g);
+      g.connect(ctx.destination);
+      o.start(t0 + at);
+      o.stop(end + 0.02);
+    }
+    if (c.debug) console.info('[call] earcon', kind);
+  } catch (err) {}
+}
+
 // ── the lieutenant answering ────────────────────────────────────────────────
 function msgKey(m) { return m.ts + '|' + m.author + '|' + m.text; }
 function isFrom(who, ltId) {
@@ -725,6 +842,8 @@ function onReply(c, m) {
   if (turn && turn.reply == null && turn.posted != null) turn.reply = now;
   c.awaiting = false;
   c.filler.replied();
+  c.status.replied();
+  dropStatus(c);
   const text = spokenReply(cleanForCall(m.text), c.nth++);
   c.view.said.textContent = text;
   if (!text || !c.engine || !c.voice) return;
@@ -754,6 +873,10 @@ export function endCall(reason) {
   call = null;
   c.state = 'ended';
   clearInterval(c.timer);
+  if (c.offActivity) c.offActivity();
+  if (c.wake) { const w = c.wake; c.wake = null; w.release().catch(() => {}); }
+  noSleepStop();
+  dropStatus(c);
   clearTimeout(c.awayTimer);
   clearTimeout(c.devTimer);
   if (c.take) clearTimeout(c.take.probe);
@@ -780,6 +903,38 @@ function awayToast() {
 // page, which takes the microphone with it. A short absence PAUSES the call —
 // nothing heard is acted on — and coming back resumes it, re-taking the mic if
 // iOS let go of it. Only a long absence ends the call, and he is told so.
+// The screen stays on for the whole call: a phone set down on the table
+// auto-locks, and a locked iPhone takes the microphone AND the speaker with it.
+// The Screen Wake Lock first; the browser lets go of it whenever the page
+// hides, so it is taken again on every return. Where it is missing or refused
+// (iOS before 18.4 in a home-screen app, Low Power Mode) a muted looping video
+// does the same job (nosleep.js) — primed inside the 📞 tap, the only moment
+// iOS lets it start. Neither works: say how to keep the screen on by hand.
+async function wakeLock(c) {
+  if (c.wake && !c.wake.released) return;
+  if (navigator.wakeLock && navigator.wakeLock.request) {
+    try {
+      const w = await navigator.wakeLock.request('screen');
+      if (call !== c) { w.release().catch(() => {}); return; }
+      c.wake = w;
+      noSleepStop();
+      c.view.tip.hidden = true;
+      w.addEventListener('release', () => { if (c.wake === w) c.wake = null; });
+      if (c.debug) console.info('[call] screen wake lock held');
+      return;
+    } catch (e) {
+      if (c.debug) console.info('[call] no wake lock:', why(e));
+    }
+  }
+  if (call !== c) return;
+  const ok = await noSleepStart();
+  if (call !== c) { noSleepStop(); return; }
+  if (c.debug) console.info('[call] screen kept on by video:', ok);
+  if (!ok && document.hidden) return;
+  c.view.tip.textContent = 'keep the screen on: Settings > Display > Auto-Lock';
+  c.view.tip.hidden = ok;
+}
+
 function pause(c) {
   if (c.paused) return;
   c.paused = true;
@@ -799,6 +954,7 @@ async function resume(c) {
   const t = c.stream && c.stream.getAudioTracks()[0];
   if (!t || t.readyState !== 'live' || t.muted) await remic(c, 'back from a pause');
   if (call !== c) return;
+  wakeLock(c);                 // the browser lets go of it whenever the page hides
   c.vad.reset();
   c.view.label.textContent = LABEL[c.state] || c.state;
   c.note(c.ctx.state === 'running' ? '' : 'tap anywhere to bring the sound back');

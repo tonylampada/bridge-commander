@@ -101,6 +101,11 @@
 //       state (codex resolves its thread-id from the session-id file there);
 //       omitting it falls back to whatever the ref alone can answer. rateLimits only where the harness persists
 //       them (codex); claude omits the field.
+//   activity(ref) -> { running, since, tool: { kind, name, label } | null } | null
+//       what the session is doing right now — turn running since when, the
+//       tool in flight — tail-read from the same transcript, secrets in the
+//       label redacted (activity.js). Synchronous, stat-gated, so the board
+//       can ask every second. null when unknown.
 
 const VERBS = ['spawn', 'send', 'alive', 'resumable', 'resume', 'kill', 'onTurnEnd'];
 

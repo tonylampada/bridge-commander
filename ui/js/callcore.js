@@ -268,6 +268,50 @@ export function nextCallState(state, event, { awaiting = false } = {}) {
 // reply arrives (or he speaks again, which is a new wait).
 export const FILLER_PHRASES = ['One moment…', 'Let me check…', 'Hang on…', 'Hmm, checking…', 'Just a second…'];
 
+// ── spoken status: a long turn says what it is doing ────────────────────────
+// The filler covers the first seconds. Past firstMs, the lieutenant's live
+// activity (activity.js: the tool in flight, by kind) is said out loud — at
+// most one line per gapMs, only into silence (quiet: nothing playing, he is not
+// talking), and never once the reply is in. The same kind twice in a row takes
+// the next phrase, so a long command is not announced in the same words.
+// 'reply' (the answer is being written) says nothing: it is about to be heard.
+export const STATUS_PHRASES = {
+  bash: ['Still running a command.', 'That command is still going.'],
+  read: ['Reading some files.', 'Still reading.'],
+  edit: ['Editing a file.', 'Still making changes.'],
+  search: ['Searching the code.', 'Still searching.'],
+  agent: ['Waiting on a subagent.', 'The subagent is still on it.'],
+  web: ['Searching the web.', 'Still looking online.'],
+  think: ['Still thinking.', 'Still working on it.'],
+  other: ['Still working on it.', 'Still at it.'],
+};
+export function spokenStatus(kind, n = 0) {
+  if (!kind || kind === 'reply') return '';
+  const list = STATUS_PHRASES[kind] || STATUS_PHRASES.other;
+  return list[n % list.length];
+}
+export function createStatusPolicy({ firstMs = 15000, gapMs = 20000 } = {}) {
+  let start = null, last = null, prevKind = null, run = 0;
+  return {
+    sent(now) { start = now; last = null; prevKind = null; run = 0; },
+    replied() { start = null; },
+    // the line to say now, or '' — asking changes nothing
+    due(now, kind, quiet) {
+      if (start == null || !quiet || !kind) return '';
+      if (now - start < firstMs) return '';
+      if (last != null && now - last < gapMs) return '';
+      return spokenStatus(kind, kind === prevKind ? run : 0);
+    },
+    // a line was committed to (synthesis started): the clock restarts
+    spoke(now, kind) {
+      run = kind === prevKind ? run + 1 : 1;
+      prevKind = kind;
+      last = now;
+    },
+    get waiting() { return start != null; },
+  };
+}
+
 export function createFillerPolicy({ delayMs = 3000, rand = Math.random } = {}) {
   let waitStart = null, used = false, lastPick = -1;
   return {

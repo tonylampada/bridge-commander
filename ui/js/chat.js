@@ -15,6 +15,7 @@ import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 import { slashOptions } from './slash.js';
 import { mountMic } from './mic.js';
 import { mountCallButton, syncButton as syncCallButton } from './call.js';
+import { activityHtml, onActivity } from './activity.js';
 
 const feedEl = document.getElementById('chat-feed');
 const titleEl = document.getElementById('chat-title');
@@ -234,7 +235,7 @@ function emptyFeedHtml(lt) {
     : '<span class="chat-empty-dot" style="background:' + esc(lieutenantColor(lt.id)) + '"></span>';
   return '<div class="empty">' + face + 'no messages yet</div>';
 }
-function typingHtml(state, name, chip) {
+function typingHtml(state, name, chip, act) {
   // the "owes you a reply" balloon (card.status.owedState / the main-chat rule),
   // one visual per state so queued-unseen never masquerades as being worked on:
   // 'stale'  = owed past the threshold: a DISTINCT "may be stuck" state, static
@@ -253,9 +254,18 @@ function typingHtml(state, name, chip) {
       '<span class="tcheck">⏳</span>' +
       '<span class="lbl">delivered — waiting for ' + esc(name) + ' to pick it up</span>' + src + '</div>';
   }
+  // 'seen' with a turn running: what it is doing right now, instead of "owes you"
+  if (act) return workingHtml(name, act, src);
   return '<div class="msg agent typing" title="' + esc(name) + ' owes you a reply here">' +
     '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
     '<span class="lbl">' + esc(name) + ' owes you a reply…</span>' + src + '</div>';
+}
+// The live activity line (activity.js): the lieutenant's turn is running, and
+// this is the tool in flight — owed reply or not.
+function workingHtml(name, act, chip) {
+  return '<div class="msg agent typing working" title="' + esc(name) + ' is working">' +
+    '<span class="tdot"></span><span class="tdot"></span><span class="tdot"></span>' +
+    '<span class="lbl act">' + act + '</span>' + (chip || '') + '</div>';
 }
 function mainFeedMsgs() {
   // the UNIFIED stream: the lieutenant's main-chat messages PLUS every thread
@@ -491,7 +501,9 @@ export function renderChat() {
     }
   }
   const owedState = targetOwedState(target);
-  if (owedState) tail += typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName);
+  const act = lt ? activityHtml(lt.id) : '';
+  if (owedState) tail += typingHtml(targetOwedStale(target) ? 'stale' : owedState, ltName, '', act);
+  if (act && owedState !== 'seen') tail += workingHtml(ltName, act);
 
   const prev = feed;
   feed = { key: target, blocks, tail };
@@ -503,8 +515,7 @@ export function renderChat() {
   } else if (prefixOk && prev.blocks.length) {
     // append-only delta: swap the typing indicator, add the new blocks at the
     // end; the earlier DOM — scroll, selection, focus — is never touched
-    const typingEl = feedEl.querySelector('.msg.typing');
-    if (typingEl) typingEl.remove();
+    for (const el of feedEl.querySelectorAll('.msg.typing')) el.remove();
     const fresh = blocks.slice(prev.blocks.length);
     feedEl.insertAdjacentHTML('beforeend', fresh.map((b) => b.html).join('') + tail);
     mdEnhance(feedEl);
@@ -943,3 +954,6 @@ inputEl.onkeydown = (e) => {
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); send(); }
 };
 document.getElementById('chat-form').onsubmit = (e) => { e.preventDefault(); send(); };
+
+// a lieutenant started, switched or finished a tool: the working line follows
+onActivity(() => renderChat());

@@ -163,6 +163,10 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg.typing .tdot:nth-child(2) { animation-delay: .2s; }
 .msg.typing .tdot:nth-child(3) { animation-delay: .4s; }
 .msg.typing .lbl { color: var(--faint); font-size: 11px; margin-left: 4px; }
+.msg.typing.working { max-width: 100%; min-width: 0; }
+.msg.typing .lbl.act { display: flex; gap: 8px; min-width: 0; color: var(--dim); font-size: 12px; }
+.act-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-time { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
 @keyframes typing-blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 /* stale-owed: the "may be stuck" state — static amber, clearly NOT healthy typing */
 .msg.typing.stale { border-color: var(--warn); }
@@ -1920,6 +1924,8 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .call-view[data-state="speaking"] .call-avatar { box-shadow: 0 0 0 4px var(--accent), 0 0 36px var(--accent-soft); }
 .call-view[data-state="capturing"] .call-avatar { box-shadow: 0 0 0 4px var(--ok), 0 0 36px var(--ok-soft); }
 .call-name { font-size: 24px; font-weight: 600; }
+.call-act { display: flex; gap: 10px; max-width: min(520px, 92vw); padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line2); color: var(--dim); font-size: 13.5px; }
+.call-act[hidden] { display: none; }
 .call-state { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--dim); min-height: 22px; }
 .call-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
 .call-view[data-state="listening"] .call-dot { background: var(--ok); }
@@ -1939,6 +1945,10 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .call-mic { color: var(--faint); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .call-said:empty { display: none; }
 .call-said { color: var(--dim); max-height: 7.5em; overflow: hidden; }
+.call-tip { max-width: 520px; text-align: center; color: var(--faint); font-size: 12.5px; }
+.call-tip[hidden] { display: none; }
+.call-view { transition: filter 1.2s ease; }
+.call-view.dim { filter: brightness(.3); }
 .call-note { max-width: 520px; text-align: center; color: var(--warn); font-size: 13.5px; }
 .call-stats { color: var(--faint); font: 11px var(--mono, ui-monospace, Menlo, monospace); text-align: center; max-width: 520px; min-height: 1em; }
 .call-actions { margin-top: auto; width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
