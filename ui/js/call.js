@@ -27,7 +27,7 @@ import { push as toast } from './toast.js';
 import { speechEngine, voiceFor, setAutoSpeakGate, stopSpeaking } from './voice.js';
 import {
   cleanForCall, splitSentences, createVad, rmsDb, nextCallState, createFillerPolicy,
-  FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply, takeKeyword, hasWords,
+  FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply, takeKeyword, splitAtKeyword, hasWords,
 } from './callcore.js';
 
 const STT_ROUTE = '/api/stt/transcribe';
@@ -212,7 +212,9 @@ function buildView(lt) {
     '<div class="call-lines"><div class="call-heard"></div><div class="call-said"></div></div>' +
     '<div class="call-note" hidden></div>' +
     '<div class="call-stats"></div>' +
-    '<button type="button" class="call-hangup" title="hang up">✕</button>';
+    '<div class="call-actions">' +
+    '<button type="button" class="call-send" disabled hidden>Send</button>' +
+    '<button type="button" class="call-hangup" title="hang up">✕</button></div>';
   document.body.appendChild(v);
   return {
     root: v,
@@ -225,6 +227,7 @@ function buildView(lt) {
     note: v.querySelector('.call-note'),
     stats: v.querySelector('.call-stats'),
     hangup: v.querySelector('.call-hangup'),
+    send: v.querySelector('.call-send'),
   };
 }
 
@@ -269,6 +272,7 @@ export function startCall(ltId) {
     cancelWord: tune.cancelWord || 'cancela',
     buffer: '',           // keyword mode: what he has said this turn, not yet sent
     turnFrames: [], turnVoiced: 0, frozen: '', turnGen: 0,   // …and the audio it was heard from
+    sendNow: false,       // Send tapped: the next hearing of the turn ends it
     chain: Promise.resolve(),   // segment transcripts are handled in the order spoken
     view: buildView(lt),
     vad: createVad(vadOpts),
@@ -289,6 +293,8 @@ export function startCall(ltId) {
   c.player = createPlayer(ctx, out);
   c.player.onIdle = () => { if (call === c && c.state === 'speaking') go('done'); };
   c.view.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
+  c.view.send.hidden = c.mode !== 'keyword';
+  c.view.send.onclick = (e) => { e.stopPropagation(); sendTurn(c); };
   // the buffered transcript is his to throw away with a tap
   c.view.heard.onclick = (e) => { e.stopPropagation(); if (c.mode === 'keyword') clearBuffer(c, 'cleared'); };
   // any tap on the call view also wakes an audio session iOS left interrupted
@@ -459,6 +465,7 @@ function onVad(c, ev) {
   if (ev.type === 'drop') {
     if (take.probation) c.player.duck(false);
     else go('drop');
+    if (c.sendNow) flushTurn(c);     // Send was tapped over a cough
     return;
   }
   // end: cut the dead air the VAD had to wait through, keep a breath of it
@@ -554,8 +561,9 @@ async function turnHeard(c, take, voicedMs, timing) {
   const gen = c.turnGen;
   for (const f of take.frames) c.turnFrames.push(f);
   c.turnVoiced += voicedMs;
+  c.turnRate = take.rate || c.turnRate;
   let text = '';
-  try { text = await transcribe(c.turnFrames.slice(), take.rate); } catch (e) {
+  if (c.turnFrames.length) try { text = await transcribe(c.turnFrames.slice(), take.rate); } catch (e) {
     if (call === c) c.note('transcription failed: ' + why(e));
     return;
   }
@@ -564,9 +572,11 @@ async function turnHeard(c, take, voicedMs, timing) {
   if (!hasWords(text) || isPhantom(text, c.turnVoiced)) text = '';
   const full = [c.frozen, text].filter(Boolean).join(' ');
   if (takeKeyword(full, c.cancelWord).hit) return clearBuffer(c, 'cancelled');
-  const k = takeKeyword(full, c.keyword);
+  const k = splitAtKeyword(full, c.keyword);
+  if (!k.hit && c.sendNow) { k.hit = true; k.text = full.replace(/[\s,;:–—-]+$/, '').trim(); }
   if (k.hit) {
     resetTurn(c);
+    if (k.rest) c.frozen = c.buffer = k.rest;   // said after the keyword: the next turn's start
     showBuffer(c);
     if (!k.text) return;                    // "câmbio" with nothing before it
     go('commit');
@@ -583,6 +593,26 @@ function resetTurn(c) {
   c.turnVoiced = 0;
   c.frozen = '';
   c.buffer = '';
+  c.sendNow = false;
+}
+
+// The Send button: the keyword, tapped. "câmbio" lost in the noise still ends
+// the turn. A chunk he is still saying, or one still at the STT, is part of it:
+// the turn ends when that one is heard. Otherwise the turn is heard once more,
+// whole, and sent.
+function sendTurn(c) {
+  if (call !== c || c.mode !== 'keyword' || !c.buffer) return;
+  c.sendNow = true;
+  c.view.send.disabled = true;
+  if (c.state !== 'capturing') flushTurn(c);
+}
+function flushTurn(c) {
+  const gen = c.turnGen;
+  const now = performance.now();
+  c.chain = c.chain.then(() => {
+    // an earlier chunk on the chain may have ended the turn already
+    if (call === c && gen === c.turnGen && c.sendNow) return turnHeard(c, { frames: [], rate: c.turnRate }, 0, { lastVoice: now, vadEnd: now });
+  });
 }
 
 function clearBuffer(c, how) {
@@ -595,8 +625,9 @@ function showBuffer(c) {
   if (c.mode !== 'keyword') return;
   const h = c.view.heard;
   h.classList.toggle('buffer', !!c.buffer);
+  c.view.send.disabled = !c.buffer || c.sendNow;
   h.innerHTML = c.buffer
-    ? esc(c.buffer) + '<span class="call-hint">say “' + esc(c.keyword) + '” to send · tap or say “' + esc(c.cancelWord) + '” to clear</span>'
+    ? esc(c.buffer) + '<span class="call-hint">say “' + esc(c.keyword) + '” or tap Send · tap here or say “' + esc(c.cancelWord) + '” to clear</span>'
     : '<span class="call-hint">end with “' + esc(c.keyword) + '” to send</span>';
 }
 
@@ -633,7 +664,7 @@ function tickFiller() {
 
 // A few fillers, synthesized at call start in the lieutenant's voice. One at a
 // time and only while nothing else wants the engine, so a real reply never
-// queues behind "deixa eu ver".
+// queues behind "let me check".
 async function cacheFillers(c) {
   const pool = FILLER_PHRASES.slice().sort(() => Math.random() - 0.5).slice(0, FILLERS_CACHED);
   for (const text of pool) {

@@ -26,10 +26,10 @@ test('code, links, tables and paths become one pointer at the chat', () => {
     'Arquivo em /home/ai/repos/x/server.js.',
   ].join('\n'));
   assert.doesNotMatch(out, /https?:|```|\||const a/);
-  assert.match(out, /link no chat/);
-  assert.match(out, /código no chat/);
-  assert.match(out, /tabela no chat/);
-  assert.match(out, /caminho no chat/);
+  assert.match(out, /link in the chat/);
+  assert.match(out, /code in the chat/);
+  assert.match(out, /table in the chat/);
+  assert.match(out, /path in the chat/);
 });
 
 test('markdown gives up its marks and keeps its words', () => {
@@ -39,11 +39,11 @@ test('markdown gives up its marks and keeps its words', () => {
 
 test('snake_case survives, emoji do not, a repeated pointer is said once', () => {
   assert.strictEqual(C.cleanForCall('use call_mode ✅ agora'), 'use call_mode agora');
-  assert.strictEqual(C.cleanForCall('veja http://a.com e http://b.com'), 'veja link no chat');
+  assert.strictEqual(C.cleanForCall('veja http://a.com e http://b.com'), 'veja link in the chat');
 });
 
 test('an unclosed fence still says nothing of its code', () => {
-  assert.strictEqual(C.cleanForCall('olha:\n```\nrm -rf x'), 'olha:\ncódigo no chat.');
+  assert.strictEqual(C.cleanForCall('olha:\n```\nrm -rf x'), 'olha:\ncode in the chat.');
 });
 
 // ── the sentence splitter ────────────────────────────────────────────────────
@@ -256,8 +256,13 @@ test('the same filler never plays twice running', () => {
   assert.strictEqual(C.createFillerPolicy().pick(1), 0);
 });
 
-test('there are several phrases to vary between', () => {
+test('there are several phrases to vary between, in English like the replies', () => {
   assert.ok(C.FILLER_PHRASES.length >= 3);
+  for (const p of C.FILLER_PHRASES) assert.match(p, /^[\x20-\x7e…]+$/, p);
+});
+
+test('a repeated English pointer joined by "and" is said once', () => {
+  assert.strictEqual(C.cleanForCall('see http://a.com and http://b.com'), 'see link in the chat');
 });
 
 // ── the latency legs ─────────────────────────────────────────────────────────
@@ -296,7 +301,7 @@ test('the first reply is spoken whole; a long later one is announced', () => {
   const long = 'x'.repeat(400);
   assert.strictEqual(C.spokenReply(long, 0), long);
   assert.strictEqual(C.spokenReply('curto.', 1), 'curto.');
-  assert.strictEqual(C.spokenReply(long, 1), 'Mandei mais detalhes no chat.');
+  assert.strictEqual(C.spokenReply(long, 1), 'More details in the chat.');
   assert.strictEqual(C.spokenReply('', 0), '');
 });
 
@@ -331,6 +336,11 @@ test('takeKeyword: the STT variants of "câmbio" all end the turn', () => {
     ['qual o status CÂMBIO!', 'qual o status'],
     ['qual o status cam bio', 'qual o status'],
     ['Câmbio.', ''],
+    ['é isso, o câmbio', 'é isso'],
+    ['faz o deploy e câmbio', 'faz o deploy'],
+    ['pode mandar então, câmbio.', 'pode mandar'],
+    ['manda os dois, e o câmbio', 'manda os dois'],
+    ['o câmbio', ''],
   ]) {
     assert.deepStrictEqual(C.takeKeyword(inp, kw), { hit: true, text: out }, inp);
   }
@@ -340,6 +350,24 @@ test('takeKeyword: the keyword anywhere but the end does not end the turn', () =
   assert.deepStrictEqual(C.takeKeyword('o câmbio do dólar subiu', 'câmbio'), { hit: false, text: 'o câmbio do dólar subiu' });
   assert.deepStrictEqual(C.takeKeyword('', 'câmbio'), { hit: false, text: '' });
   assert.strictEqual(C.takeKeyword('faz isso câmbio', '').hit, false);
+});
+
+test('splitAtKeyword: speech after the keyword is cut off and carried over', () => {
+  const kw = 'câmbio';
+  assert.deepStrictEqual(
+    C.splitAtKeyword('Ok, pode parar, vamos ver se isso funciona, câmbio, contou até o sete', kw),
+    { hit: true, text: 'Ok, pode parar, vamos ver se isso funciona', rest: 'contou até o sete' });
+  assert.deepStrictEqual(C.splitAtKeyword('primeiro câmbio. segundo, câmbio. e mais', kw),
+    { hit: true, text: 'primeiro câmbio. segundo', rest: 'e mais' }, 'the last one wins');
+  assert.deepStrictEqual(C.splitAtKeyword('qual o status câmbio, câmbio.', kw), { hit: true, text: 'qual o status', rest: '' });
+  assert.deepStrictEqual(C.splitAtKeyword('é isso, o câmbio. ...', kw), { hit: true, text: 'é isso', rest: '' });
+  assert.deepStrictEqual(C.splitAtKeyword('status cam bio', kw), { hit: true, text: 'status', rest: '' });
+});
+
+test('splitAtKeyword: the keyword as a plain word mid-sentence is not a sign-off', () => {
+  assert.deepStrictEqual(C.splitAtKeyword('o câmbio do dólar subiu', 'câmbio'), { hit: false, text: 'o câmbio do dólar subiu', rest: '' });
+  assert.strictEqual(C.splitAtKeyword('o câmbio do dólar subiu, câmbio', 'câmbio').text, 'o câmbio do dólar subiu');
+  assert.strictEqual(C.splitAtKeyword('', 'câmbio').hit, false);
 });
 
 test('takeKeyword: a multi-word keyword, and "cancela"', () => {

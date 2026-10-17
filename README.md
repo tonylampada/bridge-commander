@@ -92,12 +92,16 @@ toggle again.
 hands-free call. The mic stays open. **His turn ends when he says the keyword** — "câmbio" by
 default: a client VAD only cuts the audio into chunks, the whole turn is re-transcribed at each
 chunk end (so a lone "câmbio" is heard in context), and the live transcript shows in the call
-view until it ends with the keyword. The keyword is stripped and the rest is posted as a captain
-message with `via: "call"` (drain shows **ON A CALL**; the thread shows 📞). Tapping the
+view until it ends with the keyword. The turn is cut at the last keyword (at the end, or followed by punctuation, so "o câmbio do
+dólar" is just a word); the keyword and a dangling "o" / "e" / "então" before it are dropped, anything
+said after it opens the next turn, and the rest is posted as a captain
+message with `via: "call"` (drain shows **ON A CALL**; the thread shows 📞). A big **Send** button (bottom, under the thumb; disabled while
+nothing is heard) ends the turn the same way when the keyword gets lost in the noise. Tapping the
 transcript, or ending with "cancela", clears it. Every reply from that lieutenant is spoken back
 sentence by sentence while the next sentence synthesizes. Talking over a reply ducks it at once
 and stops it only when a quick STT finds words, so noise never kills playback. After 3s without
-an answer a short pre-synthesized filler plays once. A hidden page or screen-off (proximity at
+an answer a short pre-synthesized filler ("Let me check…") plays once. Everything the call
+says or shows is English, like the replies; only his input is pt-BR. A hidden page or screen-off (proximity at
 the ear) pauses the call and resumes it on return; past 60s away it ends, and says so. A change
 of input device (AirPods in) re-takes the mic. Code: `ui/js/call.js` (audio + screen),
 `ui/js/callcore.js` (decisions, tested in `test/call.test.js`).

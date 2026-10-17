@@ -11,8 +11,8 @@
 // A call reply is HEARD. stripForSpeech (voice.js) turns a message into speech
 // faithfully, a table into the word "table"; on a call the captain is not going
 // to look at the screen, so everything that needs eyes collapses to a pointer at
-// the chat, said once, in Portuguese.
-const IN_CHAT = { code: 'código no chat', link: 'link no chat', table: 'tabela no chat', path: 'caminho no chat' };
+// the chat, said once, in English like the reply around it.
+const IN_CHAT = { code: 'code in the chat', link: 'link in the chat', table: 'table in the chat', path: 'path in the chat' };
 
 function sentenceEnd(s) { return /[.!?:;…]\s*$/.test(s) ? s : s.replace(/\s*$/, '.'); }
 
@@ -38,9 +38,9 @@ export function cleanForCall(text) {
     .replace(/\p{Extended_Pictographic}/gu, ' ')
     .replace(/[\u{FE00}-\u{FE0F}\u{200D}\u{1F3FB}-\u{1F3FF}\u{20E3}]/gu, '')
     .replace(/[←-⇿⌀-⏿■-◿☀-➿⬀-⯿]/g, ' ');
-  // the same pointer twice in a row is said once ("link no chat. link no chat")
+  // the same pointer twice in a row is said once ("link in the chat. link in the chat")
   for (const p of Object.values(IN_CHAT)) {
-    const re = new RegExp('(' + p + ')(?:[\\s.,;]+(?:(?:e|ou)\\s+)?' + p + ')+', 'g');
+    const re = new RegExp('(' + p + ')(?:[\\s.,;]+(?:(?:and|or|e|ou)\\s+)?' + p + ')+', 'g');
     t = t.replace(re, '$1');
   }
   return t
@@ -266,7 +266,7 @@ export function nextCallState(state, event, { awaiting = false } = {}) {
 // Once per wait, never if the answer is already here, never the same phrase
 // twice running. A wait opens when an utterance is delivered and closes when a
 // reply arrives (or he speaks again, which is a new wait).
-export const FILLER_PHRASES = ['Um momento…', 'Deixa eu ver…', 'Só um instante…', 'Hmm, vou checar…', 'Tô vendo aqui…'];
+export const FILLER_PHRASES = ['One moment…', 'Let me check…', 'Hang on…', 'Hmm, checking…', 'Just a second…'];
 
 export function createFillerPolicy({ delayMs = 3000, rand = Math.random } = {}) {
   let waitStart = null, used = false, lastPick = -1;
@@ -359,7 +359,7 @@ export function isPhantom(text, voicedMs) {
 export function spokenReply(cleaned, nth, { maxLater = 300 } = {}) {
   if (!cleaned) return '';
   if (nth === 0 || cleaned.length <= maxLater) return cleaned;
-  return 'Mandei mais detalhes no chat.';
+  return 'More details in the chat.';
 }
 
 // ── "câmbio": the end of his turn, said out loud ────────────────────────────
@@ -375,6 +375,7 @@ export function letters(s) {
 
 // The text with the keyword (repeated any number of times) taken off its end:
 // {hit, text}. hit=false leaves the text alone.
+const DANGLING = new Set(['o', 'a', 'os', 'as', 'um', 'uma', 'e', 'ou', 'entao', 'dai']);
 export function takeKeyword(text, keyword) {
   const kw = letters(keyword);
   const words = String(text || '').trim().split(/\s+/).filter(Boolean);
@@ -389,9 +390,37 @@ export function takeKeyword(text, keyword) {
     if (!took) break;
     words.splice(words.length - took, took);
     hit = true;
+    // "…isso, o câmbio": the article or connector he said on the way to the
+    // keyword belongs to it, not to the message
+    while (words.length && DANGLING.has(letters(words[words.length - 1]))) words.pop();
   }
   const rest = words.join(' ').replace(/[\s,;:–—-]+$/, '').trim();
   return { hit, text: hit ? rest : words.join(' ') };
+}
+
+// The whole turn is heard again at every chunk, so the transcript can run past
+// the keyword: "…se isso funciona, câmbio, contou até o sete". The turn ends at
+// the LAST keyword that closes a phrase — at the very end, or with punctuation
+// after it (Whisper writes the sign-off as "câmbio," / "câmbio."; "o câmbio do
+// dólar" has none and is just a word). {hit, text, rest}: text is what is sent,
+// rest what he said after it, which opens the next turn.
+export function splitAtKeyword(text, keyword) {
+  const kw = letters(keyword);
+  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
+  let last = words.length - 1;
+  while (last >= 0 && !letters(words[last])) last--;
+  if (kw) {
+    for (let i = last; i >= 0; i--) {
+      if (i !== last && !/[.,!?;:…]$/.test(words[i])) continue;
+      for (let n = 1; n <= Math.min(4, i + 1); n++) {
+        if (letters(words.slice(i - n + 1, i + 1).join('')) !== kw) continue;
+        const before = takeKeyword(words.slice(0, i + 1).join(' '), keyword);
+        const rest = words.slice(i + 1).join(' ').replace(/^[\s.,;:!?…–—-]+/, '').trim();
+        return { hit: true, text: before.text, rest: hasWords(rest) ? rest : '' };
+      }
+    }
+  }
+  return { hit: false, text: words.join(' '), rest: '' };
 }
 
 // Something with words in it, as opposed to noise the engine wrote down.
