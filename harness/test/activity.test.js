@@ -6,7 +6,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { redact, shortCommand, toolLabel, claudeActivityFromLines, claudeActivity } = require('../activity');
+const { redact, shortCommand, toolLabel, claudeActivityFromLines, claudeActivity, labelAt, TOOL_HOLD_MS } = require('../activity');
 
 const L = (o) => JSON.stringify(o);
 const prompt = (ts, text) => L({ type: 'user', timestamp: ts, message: { role: 'user', content: text } });
@@ -80,8 +80,10 @@ test('transcript: a running turn, its tool, and its end', () => {
   let a = claudeActivityFromLines(lines);
   assert.strictEqual(a.running, true);
   assert.strictEqual(a.tool.label, '🔧 running: gh pr checks 162');
-  lines.push(result('t3', 'a'));
-  assert.strictEqual(claudeActivityFromLines(lines).tool.kind, 'think');
+  lines.push(result('2026-01-01T00:00:03Z', 'a'));
+  a = claudeActivityFromLines(lines);
+  assert.strictEqual(a.tool.kind, 'bash', 'the finished tool is latched…');
+  assert.strictEqual(a.tool.doneAt, '2026-01-01T00:00:03Z');
   lines.push(said('t4', 'done'), end('t4'));
   a = claudeActivityFromLines(lines);
   assert.deepStrictEqual([a.running, a.tool], [false, null]);
@@ -112,4 +114,35 @@ test('claudeActivity reads the session file and caches on size+mtime', () => {
   assert.strictEqual(claudeActivity(ref, { projectsDir: dir }).running, false);
   assert.strictEqual(claudeActivity({ cwd, resumeId: 'nope' }, { projectsDir: dir }), null);
   assert.strictEqual(claudeActivity({}, { projectsDir: dir }), null);
+});
+
+test('a sub-second tool is held TOOL_HOLD_MS past its end, then thinking', () => {
+  const end = Date.parse('2026-01-01T00:00:03Z');
+  const tool = Object.assign(toolLabel('Bash', { command: 'ls' }), { doneAt: '2026-01-01T00:00:03Z' });
+  assert.strictEqual(labelAt(tool, end + 100).label, '🔧 running: ls');
+  assert.strictEqual(labelAt(tool, end + TOOL_HOLD_MS - 1).label, '🔧 running: ls');
+  assert.strictEqual(labelAt(tool, end + TOOL_HOLD_MS).label, '💭 thinking');
+  const inFlight = toolLabel('Read', { file_path: '/a/b.js' });
+  assert.strictEqual(labelAt(inFlight, end + 60000).label, '📖 reading b.js', 'in flight: shown however long it takes');
+  assert.strictEqual(labelAt(null, end), null);
+});
+
+test('a burst of quick tools, sampled once a second, shows every one of them', () => {
+  // the real shape that showed only "thinking": five tools under a second each,
+  // a second or two of thinking between them
+  const T = (s) => new Date(Date.parse('2026-01-01T00:00:00Z') + s * 1000).toISOString();
+  const script = [[1, 'a', 'Bash', { command: 'ls' }, 1.3], [3, 'b', 'Read', { file_path: '/x/callcore.js' }, 3.2],
+    [5.5, 'c', 'Bash', { command: 'find . -name x' }, 5.9], [7.5, 'd', 'Bash', { command: 'git log --oneline -5' }, 7.7]];
+  const lines = [end(T(-5)), prompt(T(0), 'go')];
+  const events = [];
+  for (const [at, id, name, input, done] of script) { events.push([at, use(T(at), id, name, input)]); events.push([done, result(T(done), id)]); }
+  const seen = new Set();
+  for (let t = 0; t <= 10; t += 1) {
+    const upTo = lines.concat(events.filter(([at]) => at <= t).map(([, l]) => l));
+    const a = claudeActivityFromLines(upTo);
+    seen.add(labelAt(a.tool, Date.parse(T(t))).label);
+  }
+  for (const want of ['🔧 running: ls', '📖 reading callcore.js', '🔧 running: find . -name x', '🔧 running: git log --oneline -5']) {
+    assert.ok(seen.has(want), want + ' never showed: ' + [...seen].join(' | '));
+  }
 });

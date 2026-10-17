@@ -65,6 +65,7 @@ const crypto = require('crypto');
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
 const { isHarnessRef, harnessFor, getHarness } = require(path.join(__dirname, '..', 'harness', 'port.js'));
+const { labelAt } = require(path.join(__dirname, '..', 'harness', 'activity.js'));
 const { createWorktree, releaseWorktree, worktreeToolFor } = require(path.join(__dirname, 'worktrees.js'));
 const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns, lastRuns, hookKey,
   hooksDir, namedHookFile, cancelNamedHook, traceSkip, lastRunsFor,
@@ -3786,7 +3787,9 @@ function readActivity(lt) {
   // the turn-end hook is the server's own word that the turn is over
   if (lt.lastTurnEnd && Number.isFinite(since) && Date.parse(lt.lastTurnEnd) > since) return null;
   if (a.mtime && Date.now() - a.mtime > ACTIVITY_QUIET_MS) return null;
-  return { since: Number.isFinite(since) ? since : null, tool: a.tool ? { kind: a.tool.kind, label: a.tool.label } : null };
+  // held past its end (activity.labelAt), so a sub-second tool is still seen
+  const tool = labelAt(a.tool, Date.now());
+  return { since: Number.isFinite(since) ? since : null, tool: tool ? { kind: tool.kind, label: tool.label } : null };
 }
 function activitySnapshot() {
   const out = {};

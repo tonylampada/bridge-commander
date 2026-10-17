@@ -7,8 +7,12 @@
 //
 // A turn starts at the last real prompt (a user line that is not a tool
 // result) and ends at the `system/turn_duration` line claude writes when it
-// stops. A tool_use with no tool_result after it is the tool in flight; none
-// pending in a running turn means the model is thinking.
+// stops. The tool is the turn's newest tool_use: in flight when no tool_result
+// answers it, else `doneAt` says when it finished. Most tools take well under a
+// second and the model thinks a second or two between them, so a reader that
+// samples once a second would only ever see "thinking": the label HOLDS the
+// last tool for TOOL_HOLD_MS after it ends (labelAt) and says thinking only
+// past that, or before the turn's first tool.
 //
 // The label is shown to the captain and may be on a shared screen: a command's
 // obvious secrets are redacted (redact) before it leaves this module.
@@ -114,8 +118,8 @@ function isPrompt(d) {
 // claudeActivityFromLines(lines) -> { running, since, tool } — `lines` is the
 // tail, oldest first; the first may be cut mid-JSON and is skipped.
 function claudeActivityFromLines(lines) {
-  const done = new Set();          // tool_use ids with a result, seen from the end
-  let pending = null;               // the newest tool_use without one
+  const done = new Map();          // tool_use id -> when its result came, seen from the end
+  let pending = null;               // the newest tool_use of the turn
   let last = null;                  // timestamp of the newest line with one
   for (let i = lines.length - 1; i >= 0; i--) {
     const l = lines[i];
@@ -126,16 +130,29 @@ function claudeActivityFromLines(lines) {
     if (d.isSidechain) continue;
     if (d.type === 'system' && d.subtype === 'turn_duration') return { running: false, since: null, tool: null, last };
     const c = d.message && d.message.content;
-    if (d.type === 'user' && Array.isArray(c)) for (const b of c) if (b && b.type === 'tool_result') done.add(b.tool_use_id);
+    if (d.type === 'user' && Array.isArray(c)) for (const b of c) if (b && b.type === 'tool_result') done.set(b.tool_use_id, d.timestamp || null);
     if (d.type === 'assistant' && Array.isArray(c) && !pending) {
       for (let k = c.length - 1; k >= 0; k--) {
         const b = c[k];
-        if (b && b.type === 'tool_use' && !done.has(b.id)) { pending = Object.assign({ name: b.name }, toolLabel(b.name, b.input)); break; }
+        if (!b || b.type !== 'tool_use') continue;
+        pending = Object.assign({ name: b.name }, toolLabel(b.name, b.input));
+        if (done.has(b.id)) pending.doneAt = done.get(b.id) || d.timestamp || null;
+        break;
       }
     }
-    if (isPrompt(d)) return { running: true, since: d.timestamp || null, tool: pending || { kind: 'think', name: '', label: '💭 thinking' }, last };
+    if (isPrompt(d)) return { running: true, since: d.timestamp || null, tool: pending || THINKING, last };
   }
   return null;   // neither end nor start in the window: unknown
+}
+
+// What to show NOW: the tool, held TOOL_HOLD_MS past its end, then thinking.
+const TOOL_HOLD_MS = 3000;
+const THINKING = { kind: 'think', name: '', label: '💭 thinking' };
+function labelAt(tool, now) {
+  if (!tool) return null;
+  if (!tool.doneAt) return tool;
+  const at = Date.parse(tool.doneAt);
+  return Number.isFinite(at) && now - at < TOOL_HOLD_MS ? tool : THINKING;
 }
 
 // claudeActivity(ref, opts?) -> activity | null. Stat-gated: an unchanged
@@ -162,4 +179,4 @@ function claudeActivity(ref, opts = {}) {
   return value;
 }
 
-module.exports = { redact, shortCommand, toolLabel, claudeActivityFromLines, claudeActivity };
+module.exports = { redact, shortCommand, toolLabel, claudeActivityFromLines, claudeActivity, labelAt, TOOL_HOLD_MS };
