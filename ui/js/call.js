@@ -39,9 +39,25 @@ const PREROLL_MS = 800;     // audio kept from before the VAD said "start" (cove
 const TAIL_KEEP_MS = 250;   // trailing silence sent with the take (the rest is dead air)
 const FILLERS_CACHED = 3;
 // The end-of-turn words: `keywords` (a list) or `keyword` (one) in the
-// tuning, else these. STT drops a lone "câmbio" often enough that a second,
-// longer phrase earns its place.
-const KEYWORDS = ['pode mandar', 'câmbio'];
+// tuning, else this one. A phrase he would say anyway ("pode mandar") ends
+// turns he did not mean to end, so the default stays a radio word; STT is
+// helped to hear it instead (sttBias).
+const KEYWORDS = ['câmbio'];
+
+// What the STT is told to expect in keyword mode: Whisper's `hotwords` (the
+// keywords) and, only when tuned, `initial_prompt` (whisper_server POST
+// /transcribe `hotwords` / `prompt`). Measured on 96 clips × clean / SNR 10 /
+// SNR 3: hotwords took a lone "câmbio" from 14/48 to 47/48 and one at a
+// sentence's end from 113/144 to 125/144, with no false "câmbio"; a "Câmbio."
+// prompt gained 5 more but, in noise, replaced whole sentences with "Câmbio.
+// Câmbio." — his words lost — so it is off by default. An engine that does
+// not know the fields ignores them; one that rejects them gets the take again
+// without, and the call stops sending them.
+function sttBias(tune, keywords) {
+  const hotwords = tune.sttHotwords != null ? String(tune.sttHotwords) : keywords.join(' ');
+  const prompt = tune.sttPrompt != null ? String(tune.sttPrompt) : '';
+  return hotwords || prompt ? { hotwords, prompt } : null;
+}
 function endKeywords(tune) {
   const k = Array.isArray(tune.keywords) ? tune.keywords : tune.keyword ? [tune.keyword] : KEYWORDS;
   const out = k.map((w) => String(w || '').trim()).filter(Boolean);
@@ -297,6 +313,7 @@ export function startCall(ltId) {
     mode,
     // any of these ends his turn; the first is the one the hint leads with
     keywords: endKeywords(tune),
+    sttBias: null,        // set below, from the keywords
     cancelWord: tune.cancelWord || 'cancela',
     buffer: '',           // keyword mode: what he has said this turn, not yet sent
     turnFrames: [], turnVoiced: 0, frozen: '', turnGen: 0,   // …and the audio it was heard from
@@ -321,6 +338,7 @@ export function startCall(ltId) {
     note(msg) { c.view.note.textContent = msg || ''; c.view.note.hidden = !msg; },
   };
   c.player = createPlayer(ctx, out);
+  if (c.mode === 'keyword') c.sttBias = sttBias(tune, c.keywords);
   c.player.onIdle = () => { if (call === c && c.state === 'speaking') go('done'); };
   c.view.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
   c.view.send.hidden = c.mode !== 'keyword';
@@ -567,12 +585,21 @@ function unprobe(c, take) {
   if (take.barge && !take.confirmed) c.player.duck(false);
 }
 
-async function transcribe(frames, rate) {
+async function transcribe(frames, rate, bias) {
   const wav = encodeWav16k(frames, rate);
-  const fd = new FormData();
-  fd.append('file', new Blob([wav], { type: 'audio/wav' }), 'call.wav');
-  fd.append('language', LANG);
-  const r = await fetch(STT_ROUTE, { method: 'POST', body: fd });
+  const post = (withBias) => {
+    const fd = new FormData();
+    fd.append('file', new Blob([wav], { type: 'audio/wav' }), 'call.wav');
+    fd.append('language', LANG);
+    if (withBias && withBias.hotwords) fd.append('hotwords', withBias.hotwords);
+    if (withBias && withBias.prompt) fd.append('prompt', withBias.prompt);
+    return fetch(STT_ROUTE, { method: 'POST', body: fd });
+  };
+  let r = await post(bias);
+  if (bias && (r.status === 400 || r.status === 422)) {
+    if (call) call.sttBias = null;          // this engine will not take hints: stop sending them
+    r = await post(null);
+  }
   if (!r.ok) throw new Error('STT HTTP ' + r.status);
   const d = await r.json();
   return typeof d.text === 'string' ? d.text.trim() : '';
@@ -615,7 +642,7 @@ async function turnHeard(c, take, voicedMs, timing) {
   c.turnVoiced += voicedMs;
   c.turnRate = take.rate || c.turnRate;
   let text = '';
-  if (c.turnFrames.length) try { text = await transcribe(c.turnFrames.slice(), take.rate); } catch (e) {
+  if (c.turnFrames.length) try { text = await transcribe(c.turnFrames.slice(), take.rate, c.sttBias); } catch (e) {
     if (call === c) c.note('transcription failed: ' + why(e));
     return;
   }

@@ -89,8 +89,11 @@ toggle again.
 ### Call mode
 
 📞 in a lieutenant's chat header (shown when both `tts` and `stt` are configured) starts a
-hands-free call. The mic stays open. **His turn ends when he says a keyword** — "pode mandar"
-or "câmbio" by default (STT drops a lone "câmbio" often enough to want a longer second phrase): a client VAD only cuts the audio into chunks, the whole turn is re-transcribed at each
+hands-free call. The mic stays open. **His turn ends when he says the keyword** — "câmbio" by
+default (a list works too, `keywords`); the STT is told to expect it (Whisper `hotwords`, sent as the
+`hotwords` field; an `initial_prompt` via `sttPrompt` is off by default — in noise it makes Whisper
+hallucinate the keyword over whole sentences — an engine that ignores them changes
+nothing, one that rejects them gets the audio again without and the call stops sending them): a client VAD only cuts the audio into chunks, the whole turn is re-transcribed at each
 chunk end (so a lone "câmbio" is heard in context), and the live transcript shows in the call
 view until it ends with the keyword. The turn is cut at the last keyword (at the end, or followed by punctuation, so "o câmbio do
 dólar" is just a word); the keyword and a dangling "o" / "e" / "então" before it are dropped, anything
@@ -116,9 +119,9 @@ the ear) pauses the call and resumes it on return; past 60s away it ends, and sa
 of input device (AirPods in) re-takes the mic. Code: `ui/js/call.js` (audio + screen),
 `ui/js/callcore.js` (decisions, tested in `test/call.test.js`).
 
-Tuning per browser, no deploy: `localStorage['bc-call'] = '{"keywords":["pode mandar","câmbio"],"cancelWord":"cancela","debug":true}'`
+Tuning per browser, no deploy: `localStorage['bc-call'] = '{"keywords":["câmbio"],"cancelWord":"cancela","debug":true}'`
 — also `endMode: "silence"` (the old end-of-turn on trailing silence, off by default),
-`fillerMs`, `statusMs` / `statusGapMs` (spoken status, 15000 / 20000), and any key of `VAD_DEFAULTS` in `callcore.js` (`hangMs`, `maxUtteranceMs`,
+`sttHotwords` / `sttPrompt` (override the hints; `""` turns one off), `fillerMs`, `statusMs` / `statusGapMs` (spoken status, 15000 / 20000), and any key of `VAD_DEFAULTS` in `callcore.js` (`hangMs`, `maxUtteranceMs`,
 `bargeMarginDb` / `bargeMinDb` / `bargeHoldMs`). `debug` logs state transitions and per-turn
 latency to the console; `window.bcCallTurns` holds the last 50 turns.
 
