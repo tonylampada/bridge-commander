@@ -435,3 +435,30 @@ test('status phrases are English and short', () => {
     assert.ok(s.split(' ').length <= 7, s);
   }
 });
+
+// ── several end-of-turn keywords ─────────────────────────────────────────────
+
+test('keywords: any of the list ends the turn, multi-word ones included', () => {
+  const kws = ['pode mandar', 'câmbio'];
+  assert.deepStrictEqual(C.splitAtKeyword('qual o status do deploy, pode mandar.', kws), { hit: true, text: 'qual o status do deploy', rest: '' });
+  assert.deepStrictEqual(C.splitAtKeyword('qual o status do deploy câmbio', kws), { hit: true, text: 'qual o status do deploy', rest: '' });
+  assert.deepStrictEqual(C.splitAtKeyword('Qual o status? Pode-mandar!', kws), { hit: true, text: 'Qual o status?', rest: '' });
+  assert.deepStrictEqual(C.splitAtKeyword('faz o merge, então pode mandar', kws), { hit: true, text: 'faz o merge', rest: '' }, 'dangling "então" dropped');
+  assert.deepStrictEqual(C.takeKeyword('faz o merge pode mandar, câmbio.', kws), { hit: true, text: 'faz o merge' }, 'both, stacked');
+});
+
+test('keywords: the last match across the list wins, what follows carries over', () => {
+  const kws = ['pode mandar', 'câmbio'];
+  assert.deepStrictEqual(C.splitAtKeyword('primeiro isso, câmbio. segundo aquilo, pode mandar. e mais', kws),
+    { hit: true, text: 'primeiro isso, câmbio. segundo aquilo', rest: 'e mais' });
+  assert.deepStrictEqual(C.splitAtKeyword('faz isso, pode mandar, e depois vê o log', kws),
+    { hit: true, text: 'faz isso', rest: 'e depois vê o log' });
+});
+
+test('keywords: mid-sentence, unpunctuated, they are just words', () => {
+  const kws = ['pode mandar', 'câmbio'];
+  assert.strictEqual(C.splitAtKeyword('pode mandar o relatório amanhã', kws).hit, false);
+  assert.strictEqual(C.splitAtKeyword('o câmbio do dólar subiu', kws).hit, false);
+  assert.strictEqual(C.splitAtKeyword('qualquer coisa', []).hit, false);
+  assert.strictEqual(C.takeKeyword('qualquer coisa', ['', null]).hit, false);
+});

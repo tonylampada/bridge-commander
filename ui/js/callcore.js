@@ -420,17 +420,26 @@ export function letters(s) {
 // The text with the keyword (repeated any number of times) taken off its end:
 // {hit, text}. hit=false leaves the text alone.
 const DANGLING = new Set(['o', 'a', 'os', 'as', 'um', 'uma', 'e', 'ou', 'entao', 'dai']);
+// A keyword, or a list of them: their letters, empties dropped.
+function keywordSet(keyword) {
+  return (Array.isArray(keyword) ? keyword : [keyword]).map(letters).filter(Boolean);
+}
+// The last n words (n ≤ 4) ending at index i are one of the keywords: n, else 0.
+function keywordAt(words, i, kws) {
+  for (let n = 1; n <= Math.min(4, i + 1); n++) {
+    if (kws.includes(letters(words.slice(i - n + 1, i + 1).join('')))) return n;
+  }
+  return 0;
+}
+
 export function takeKeyword(text, keyword) {
-  const kw = letters(keyword);
+  const kws = keywordSet(keyword);
   const words = String(text || '').trim().split(/\s+/).filter(Boolean);
-  if (!kw) return { hit: false, text: words.join(' ') };
+  if (!kws.length) return { hit: false, text: words.join(' ') };
   let hit = false;
   for (;;) {
     while (words.length && !letters(words[words.length - 1])) words.pop();   // a lone "." or "—"
-    let took = 0;
-    for (let n = 1; n <= Math.min(4, words.length); n++) {
-      if (letters(words.slice(-n).join('')) === kw) { took = n; break; }
-    }
+    const took = words.length ? keywordAt(words, words.length - 1, kws) : 0;
     if (!took) break;
     words.splice(words.length - took, took);
     hit = true;
@@ -449,19 +458,17 @@ export function takeKeyword(text, keyword) {
 // dólar" has none and is just a word). {hit, text, rest}: text is what is sent,
 // rest what he said after it, which opens the next turn.
 export function splitAtKeyword(text, keyword) {
-  const kw = letters(keyword);
+  const kws = keywordSet(keyword);
   const words = String(text || '').trim().split(/\s+/).filter(Boolean);
   let last = words.length - 1;
   while (last >= 0 && !letters(words[last])) last--;
-  if (kw) {
+  if (kws.length) {
     for (let i = last; i >= 0; i--) {
       if (i !== last && !/[.,!?;:…]$/.test(words[i])) continue;
-      for (let n = 1; n <= Math.min(4, i + 1); n++) {
-        if (letters(words.slice(i - n + 1, i + 1).join('')) !== kw) continue;
-        const before = takeKeyword(words.slice(0, i + 1).join(' '), keyword);
-        const rest = words.slice(i + 1).join(' ').replace(/^[\s.,;:!?…–—-]+/, '').trim();
-        return { hit: true, text: before.text, rest: hasWords(rest) ? rest : '' };
-      }
+      if (!keywordAt(words, i, kws)) continue;
+      const before = takeKeyword(words.slice(0, i + 1).join(' '), keyword);
+      const rest = words.slice(i + 1).join(' ').replace(/^[\s.,;:!?…–—-]+/, '').trim();
+      return { hit: true, text: before.text, rest: hasWords(rest) ? rest : '' };
     }
   }
   return { hit: false, text: words.join(' '), rest: '' };

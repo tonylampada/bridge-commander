@@ -38,6 +38,16 @@ const LANG = 'pt';
 const PREROLL_MS = 800;     // audio kept from before the VAD said "start" (covers the barge hold)
 const TAIL_KEEP_MS = 250;   // trailing silence sent with the take (the rest is dead air)
 const FILLERS_CACHED = 3;
+// The end-of-turn words: `keywords` (a list) or `keyword` (one) in the
+// tuning, else these. STT drops a lone "câmbio" often enough that a second,
+// longer phrase earns its place.
+const KEYWORDS = ['pode mandar', 'câmbio'];
+function endKeywords(tune) {
+  const k = Array.isArray(tune.keywords) ? tune.keywords : tune.keyword ? [tune.keyword] : KEYWORDS;
+  const out = k.map((w) => String(w || '').trim()).filter(Boolean);
+  return out.length ? out : KEYWORDS;
+}
+
 // Tuning without a deploy: localStorage['bc-call'] = '{"hangMs":700,"fillerMs":2500}'
 // Any VAD_DEFAULTS key, plus fillerMs and debug.
 function tuning() {
@@ -285,7 +295,8 @@ export function startCall(ltId) {
   const c = call = {
     ltId, target: 'lieutenant:' + ltId, ctx, out, state: 'idle',
     mode,
-    keyword: tune.keyword || 'câmbio',
+    // any of these ends his turn; the first is the one the hint leads with
+    keywords: endKeywords(tune),
     cancelWord: tune.cancelWord || 'cancela',
     buffer: '',           // keyword mode: what he has said this turn, not yet sent
     turnFrames: [], turnVoiced: 0, frozen: '', turnGen: 0,   // …and the audio it was heard from
@@ -613,7 +624,7 @@ async function turnHeard(c, take, voicedMs, timing) {
   if (!hasWords(text) || isPhantom(text, c.turnVoiced)) text = '';
   const full = [c.frozen, text].filter(Boolean).join(' ');
   if (takeKeyword(full, c.cancelWord).hit) return clearBuffer(c, 'cancelled');
-  const k = splitAtKeyword(full, c.keyword);
+  const k = splitAtKeyword(full, c.keywords);
   if (!k.hit && c.sendNow) { k.hit = true; k.text = full.replace(/[\s,;:–—-]+$/, '').trim(); }
   if (k.hit) {
     resetTurn(c);
@@ -663,14 +674,19 @@ function clearBuffer(c, how) {
   if (how === 'cancelled') earcon(c, 'cancel');
 }
 
+// “pode mandar” or “câmbio”
+function said(words) {
+  return words.map((w) => '“' + esc(w) + '”').join(' or ');
+}
+
 function showBuffer(c) {
   if (c.mode !== 'keyword') return;
   const h = c.view.heard;
   h.classList.toggle('buffer', !!c.buffer);
   c.view.send.disabled = !c.buffer || c.sendNow;
   h.innerHTML = c.buffer
-    ? esc(c.buffer) + '<span class="call-hint">say “' + esc(c.keyword) + '” or tap Send · tap here or say “' + esc(c.cancelWord) + '” to clear</span>'
-    : '<span class="call-hint">end with “' + esc(c.keyword) + '” to send</span>';
+    ? esc(c.buffer) + '<span class="call-hint">say ' + said(c.keywords) + ' or tap Send · tap here or say “' + esc(c.cancelWord) + '” to clear</span>'
+    : '<span class="call-hint">end with ' + said(c.keywords) + ' to send</span>';
 }
 
 async function deliver(c, text, timing) {
