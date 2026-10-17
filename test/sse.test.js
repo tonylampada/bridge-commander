@@ -22,7 +22,8 @@ async function firstSseEvent(base) {
     const { value, done } = await reader.read();
     if (done) throw new Error('stream ended before first event');
     buf += dec.decode(value, { stream: true });
-    const end = buf.indexOf('\n\n');
+    let end = buf.indexOf('\n\n');
+    while (end !== -1 && buf.startsWith(':')) { buf = buf.slice(end + 2); end = buf.indexOf('\n\n'); } // comments (`:ok`)
     if (end === -1) continue;
     reader.cancel().catch(() => {});
     const frame = buf.slice(0, end);
@@ -70,7 +71,7 @@ async function sseReader(base) {
         const frame = buf.slice(0, end);
         buf = buf.slice(end + 2);
         const event = (/^event: (.*)$/m.exec(frame) || [])[1];
-        if (event === 'ping') continue;
+        if (!event || event === 'ping') continue; // comments and heartbeats
         return event;
       }
       const left = deadline - Date.now();
@@ -139,5 +140,38 @@ test('boot id changes across a server restart on the same workspace+port', async
     assert.notEqual(boot2, boot1);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Through the Cloudflare tunnel, a stream the edge may compress or buffer
+// landed after the Web Push for the same message. The headers forbid both, the
+// `:ok` comment is the first body bytes on the wire, and the named ping keeps
+// an idle stream moving (and the client's watchdog fed).
+test('/api/events: no-transform headers, :ok first, named ping on idle', async () => {
+  const s = await startServer({ env: { BC_SSE_PING_MS: '100' } });
+  const ctrl = new AbortController();
+  try {
+    const res = await fetch(s.base + '/api/events', { signal: ctrl.signal, headers: { 'Accept-Encoding': 'gzip, br' } });
+    assert.equal(res.status, 200);
+    assert.match(res.headers.get('content-type'), /^text\/event-stream/);
+    assert.equal(res.headers.get('cache-control'), 'no-cache, no-transform');
+    assert.equal(res.headers.get('x-accel-buffering'), 'no');
+    assert.equal(res.headers.get('content-encoding'), 'identity');
+
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    const deadline = Date.now() + 3000;
+    while (!/event: ping\ndata: \{\}\n\n/.test(buf) && Date.now() < deadline) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+    }
+    assert.ok(buf.startsWith(':ok\n\n'), 'the comment is the first thing on the wire');
+    assert.match(buf, /event: board\n/, 'the hello still follows');
+    assert.match(buf, /event: ping\ndata: \{\}\n\n/, 'a heartbeat arrives on an idle stream');
+  } finally {
+    ctrl.abort();
+    await s.stop();
   }
 });

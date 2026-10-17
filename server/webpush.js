@@ -247,12 +247,24 @@ async function broadcastPush(store, payload, subject, opts) {
 
 // ---------- policy: what an event or a message says on the phone ----------
 // ev: a board event (card events carry `card`/`cardTitle` once flattened);
-// ctx: { emoji(kind) → string, reviewTitle }.
+// ctx: { emoji(kind) → string, reviewTitle, lieutenant({card, id}) → {name, avatar?}|null }.
+// The lieutenant behind a push — the card's owner, or the chat's — lends it
+// their avatar as the icon (Mac/Chrome/Android show it; iOS keeps the app icon)
+// and, on a card event, their name ahead of the card id.
 // The captain's own clicks never buzz his pocket (actor 'user'). Every other
 // event is a candidate; its category (categorize, the in-tab classifier)
 // decides which devices take it.
-// Returns null or { title, body, card, url, category } — title + one line + the
-// card id, the url opening the board on that card.
+// Returns null or { title, body, card, url, category, icon } — title + one line +
+// the card id, the url opening the board on that card.
+const BOARD_ICON = '/ui/img/icon-192.png';
+function iconFor(lt) {
+  const a = lt && lt.avatar;
+  return Number.isInteger(a) && a >= 0 && a <= 63 ? '/ui/img/avatars/' + a + '.png' : BOARD_ICON;
+}
+function lieutenantOf(ctx, q) {
+  try { return (ctx && typeof ctx.lieutenant === 'function' && ctx.lieutenant(q)) || null; }
+  catch (e) { return null; }
+}
 function oneLine(s, max) {
   const t = String(s || '').replace(/\s+/g, ' ').trim();
   return t.length > max ? t.slice(0, max - 1) + '…' : t;
@@ -262,7 +274,8 @@ function pushFor(ev, ctx) {
   const c = ctx || {};
   const cardId = ev.card || null;
   const url = cardId ? '/?card=' + encodeURIComponent(cardId) : '/';
-  const where = cardId || ev.actor || 'board';
+  const lt = cardId ? lieutenantOf(c, { card: cardId }) : null;
+  const where = cardId ? (lt && lt.name ? lt.name + ' · ' : '') + cardId : ev.actor || 'board';
   const text = String(ev.text || '');
   const intoReview = (ev.kind === 'handoff' || ev.kind === 'moved') && c.reviewTitle
     && text.endsWith('→ ' + c.reviewTitle);
@@ -282,16 +295,18 @@ function pushFor(ev, ctx) {
     title = em + ' ' + where + (ev.kind ? ' · ' + ev.kind : '');
     body = text;
   }
-  return { title: oneLine(title, 80), body: oneLine(body, 160), card: cardId, url, category: categorize(ev.kind, ev.level) };
+  return { title: oneLine(title, 80), body: oneLine(body, 160), card: cardId, url, category: categorize(ev.kind, ev.level), icon: iconFor(lt) };
 }
 
 // A chat message (lieutenant main chat or card thread). The in-tab toasts
 // classify every message as kind 'reply'; so does this. The captain's own
 // messages and slash-command transcripts (msg.cmd) stay off the phone.
-function pushForMessage(target, msg) {
+function pushForMessage(target, msg, ctx) {
   if (!msg || msg.author === 'user' || msg.cmd) return null;
   const m = /^card:(.+)$/.exec(target || '');
   const cardId = m ? m[1] : null;
+  const l = /^lieutenant:(.+)$/.exec(target || '');
+  const lt = lieutenantOf(ctx, cardId ? { card: cardId } : { id: l ? l[1] : null });
   const author = String(msg.author || 'agent');
   const text = String(msg.text || '') || ((msg.attachments || []).length ? '📎 attachment' : '');
   return {
@@ -300,6 +315,7 @@ function pushForMessage(target, msg) {
     card: cardId,
     url: cardId ? '/?card=' + encodeURIComponent(cardId) : '/',
     category: categorize('reply', 1),
+    icon: iconFor(lt),
   };
 }
 

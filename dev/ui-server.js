@@ -29,6 +29,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { SSE_HEADERS } = require(path.join(__dirname, '..', 'server', 'sse.js'));
 
 const UI_DIR = path.join(__dirname, '..', 'ui');
 const FIX_DIR = path.join(__dirname, 'fixtures');
@@ -228,7 +229,8 @@ function createDevServer(opts) {
     for (const res of sseClients) res.write(payload);
   }
   function sseHead(res) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+    res.writeHead(200, SSE_HEADERS);
+    res.flushHeaders();
   }
 
   function mkEvent(kind, text, actor, level) {
