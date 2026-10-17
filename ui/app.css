@@ -1964,3 +1964,7 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 }
 .call-hangup:hover { filter: brightness(1.1); }
 body.in-call .speech-transport { display: none; }
+/* wide screens: the call takes the chat pane only, the board stays usable */
+.call-view.docked { position: absolute; inset: 0; z-index: 4; padding: 14px 16px 22px; }
+.call-view.docked .call-who { margin-top: 2vh; }
+.call-view.docked .call-avatar { width: 108px; height: 108px; }

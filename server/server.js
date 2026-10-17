@@ -218,6 +218,10 @@ function userConfig() {
   // the board's own /api/stt prefix, so all the UI needs to know is whether
   // there is an engine behind it. No stt config => no stt key => no microphone.
   if (sttConfig()) out.stt = true;
+  // Where the board is reached over https, when it is (a Tailscale serve /
+  // Cloudflare name). The page served on plain http names it for what needs a
+  // secure context — the call's microphone.
+  if (typeof c.publicUrl === 'string' && /^https:\/\/\S+$/.test(c.publicUrl.trim())) out.publicUrl = c.publicUrl.trim();
   return out;
 }
 // External TTS engine (voxbench API), optional: config.json

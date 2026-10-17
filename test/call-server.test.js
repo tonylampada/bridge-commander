@@ -45,3 +45,20 @@ test('any other via is ignored: an ordinary message stays ordinary', async () =>
     await s.stop();
   }
 });
+
+// publicUrl: the board's https address, named to an http page that cannot
+// open a microphone. Only an https URL is passed on.
+test('/api/config carries publicUrl when it is an https address, and only then', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { startServer } = require('./helper');
+  const seed = (cfg) => (dir) => {
+    const sd = path.join(dir, '.bridge-commander');
+    fs.mkdirSync(sd, { recursive: true });
+    fs.writeFileSync(path.join(sd, 'config.json'), JSON.stringify(cfg));
+  };
+  let s = await startServer({ seed: seed({ publicUrl: ' https://jarbas.tail925c5f.ts.net ' }) });
+  try { assert.equal((await s.api('GET', '/api/config')).body.publicUrl, 'https://jarbas.tail925c5f.ts.net'); } finally { await s.stop(); }
+  s = await startServer({ seed: seed({ publicUrl: 'http://jarbas:4780' }) });
+  try { assert.equal((await s.api('GET', '/api/config')).body.publicUrl, undefined); } finally { await s.stop(); }
+});

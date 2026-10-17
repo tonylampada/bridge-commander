@@ -50,6 +50,7 @@ Per-workspace config lives in `.bridge-commander/config.json`:
 | `harness` | `claude` | default agent harness (`claude` \| `codex`) |
 | `voices` | — | UI text-to-speech voice filter |
 | `tts` | — | speak agent messages through an external TTS engine: `{"url": "http://127.0.0.1:8883", "lang": "pt", "voice": null, "params": {}}` (voxbench API). Absent = the board stays silent. The **server** reaches the engine: the browser talks to `/api/tts/*` on the board's own origin and the url only has to be reachable from the machine running the server (no CORS, no tailnet on the phone) |
+| `publicUrl` | — | the board's https address, if it has one (e.g. `https://jarbas.tail925c5f.ts.net`): a page opened over plain http names it where a secure context is needed (the call's microphone) |
 | `push` | — | Web Push contact: `{"subject": "mailto:you@example.com"}` (the VAPID `sub` claim; must be `mailto:` or `https:`). Absent = the project URL. Push itself needs no config — see below |
 
 Env knobs (set on the server process):
@@ -89,7 +90,9 @@ toggle again.
 ### Call mode
 
 📞 in a lieutenant's chat header (shown when both `tts` and `stt` are configured) starts a
-hands-free call. The mic stays open. **His turn ends when he says the keyword** — "câmbio" by
+hands-free call. On a wide screen the call takes the chat pane only, the board stays usable beside it; a
+phone gets the whole screen. The microphone needs https: a page opened over plain http says so,
+naming `publicUrl` when config has one. The mic stays open. **His turn ends when he says the keyword** — "câmbio" by
 default (a list works too, `keywords`); the STT is told to expect it (Whisper `hotwords`, sent as the
 `hotwords` field; an `initial_prompt` via `sttPrompt` is off by default — in noise it makes Whisper
 hallucinate the keyword over whole sentences — an engine that ignores them changes

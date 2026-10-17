@@ -256,7 +256,7 @@ function buildView(lt) {
     '<div class="call-actions">' +
     '<button type="button" class="call-send" disabled hidden>Send</button>' +
     '<button type="button" class="call-hangup" title="hang up">✕</button></div>';
-  document.body.appendChild(v);
+  dock(v);
   return {
     root: v,
     clock: v.querySelector('.call-clock'),
@@ -387,7 +387,7 @@ async function open(c) {
   const md = navigator.mediaDevices;
   if (!md || !md.getUserMedia) {
     return fail(c, typeof isSecureContext !== 'undefined' && !isSecureContext
-      ? 'no microphone outside https — open the board over https to call'
+      ? 'no microphone outside https — open ' + (httpsHere() || 'the board over https') + ' to call'
       : 'this browser gives no microphone here — open the board in Safari to call');
   }
   c.view.label.textContent = 'allow the microphone…';
@@ -482,6 +482,12 @@ function deviceChanged(c) {
     if (held && held.readyState === 'live' && label && (label === heldLabel || label.endsWith(heldLabel))) return;
     remic(c, 'input device changed');
   }, 600);
+}
+
+// This page, at the https address config names (publicUrl), or ''.
+function httpsHere() {
+  if (!/^https:\/\//.test(publicUrl)) return '';
+  try { return new URL(location.pathname + location.search, publicUrl).href; } catch (e) { return ''; }
 }
 
 function fail(c, msg) {
@@ -1016,7 +1022,27 @@ if (typeof document !== 'undefined' && document.addEventListener) {
 // ── the header button ───────────────────────────────────────────────────────
 let btn = null;
 let ready = false;
-api.config().then((cfg) => { ready = !!(cfg && cfg.stt && cfg.tts); syncButton(); }, () => {});
+let publicUrl = '';     // config publicUrl: where the board is served over https
+api.config().then((cfg) => {
+  ready = !!(cfg && cfg.stt && cfg.tts);
+  publicUrl = (cfg && cfg.publicUrl) || '';
+  syncButton();
+}, () => {});
+
+// Where the call view lives. A phone gets the whole screen; a wide window
+// gets the chat pane only, so the board stays in view and in reach beside the
+// call. Crossing the breakpoint (a rotated tablet, a resized window) moves it.
+const WIDE = typeof matchMedia !== 'undefined' ? matchMedia('(min-width: 761px)') : null;
+function dock(v) {
+  const pane = WIDE && WIDE.matches ? document.getElementById('chat') : null;
+  v.classList.toggle('docked', !!pane);
+  const home = pane || document.body;
+  if (v.parentNode !== home) home.appendChild(v);
+}
+if (WIDE) {
+  const redock = () => { if (call) dock(call.view.root); };
+  if (WIDE.addEventListener) WIDE.addEventListener('change', redock); else if (WIDE.addListener) WIDE.addListener(redock);
+}
 // chat.js hands over the button and the lieutenant the header is showing.
 export function mountCallButton(el, currentLt) {
   btn = el;
