@@ -72,6 +72,7 @@ const { runHooks, runTeardown, listAllHooks, runNamedHook, runningHook, readRuns
 const { parseWhen, nextAfter, dueWindows, pickWindows, describeWhen, normalizeSchedules,
   NAME_RE: SCHEDULE_NAME_RE, OVERLAP, CATCHUP } = require(path.join(__dirname, 'schedules.js'));
 const { createSampler } = require(path.join(__dirname, 'sysload.js'));
+const { sseOpen } = require(path.join(__dirname, 'sse.js'));
 const usage = require(path.join(__dirname, 'usage.js'));
 const { workerBrief, listPlaybooks, resolvePlaybook, playbooksDir, PACKAGED_PLAYBOOKS_DIR, parsePlaybook, attrVar, attrCardKey, PLACEHOLDERS, FRONTMATTER } = require(path.join(__dirname, 'playbooks.js'));
 const names = require(path.join(__dirname, 'names.js'));
@@ -1337,7 +1338,7 @@ function paneWrite(res, event, data) {
   res.write('event: ' + event + '\ndata: ' + JSON.stringify(data === undefined ? {} : data) + '\n\n');
 }
 function paneStream(req, res, ref, reason) {
-  res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+  sseOpen(req, res, { pingMs: SSE_PING_MS });
   if (!ref) { paneWrite(res, 'no-pane', { reason }); return res.end(); }
   let impl;
   try { impl = harnessFor(ref); }
@@ -1478,13 +1479,9 @@ function sysloadTargets() {
 }
 const sysload = createSampler({ workspace: WORKSPACE, targets: sysloadTargets, intervalMs: SYSLOAD_MS });
 
-// Named ping (not an SSE comment): comments are invisible to EventSource, so
-// the client's staleness watchdog couldn't see the stream is alive. Pane
-// streams piggyback on the same ping so proxies don't drop them either.
-setInterval(() => {
-  for (const res of sseClients) res.write('event: ping\ndata: {}\n\n');
-  for (const hub of panes.values()) for (const res of hub.clients) res.write('event: ping\ndata: {}\n\n');
-}, 25000).unref();
+// Every stream opened through sseOpen gets the named ping on this cadence.
+const SSE_PING_MS = parseInt(process.env.BC_SSE_PING_MS, 10) > 0
+  ? parseInt(process.env.BC_SSE_PING_MS, 10) : 15000;
 
 // ---------- helpers ----------
 // Byte serve shared by the raw artifact and attachment routes. Honors a single
@@ -5796,9 +5793,9 @@ const server = http.createServer(async (req, res) => {
     // ----- sysload stream (⚙️ → monitoring; see the sysload section above) -----
     // The HTTP connection's lifetime IS the subscription, exactly like the
     // pane streams: connect to watch, disconnect to release. Each sample lands
-    // as one `sample` event; samples flow every ~2s, so no extra ping rides here.
+    // as one `sample` event; the shared SSE heartbeat (server/sse.js) rides along.
     if (route === 'GET /api/sysload/stream') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      sseOpen(req, res, { pingMs: SSE_PING_MS });
       const unsubscribe = sysload.subscribe((sample) => {
         res.write('event: sample\ndata: ' + JSON.stringify(sample) + '\n\n');
       });
@@ -5808,7 +5805,7 @@ const server = http.createServer(async (req, res) => {
 
     // ----- SSE -----
     if (route === 'GET /api/events') {
-      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' });
+      sseOpen(req, res, { pingMs: SSE_PING_MS });
       res.write('event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n');
       sseClients.add(res);
       req.on('close', () => sseClients.delete(res));

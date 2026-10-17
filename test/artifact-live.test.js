@@ -46,7 +46,7 @@ async function sseReader(base) {
         const frame = buf.slice(0, end);
         buf = buf.slice(end + 2);
         const event = (/^event: (.*)$/m.exec(frame) || [])[1];
-        if (event === 'ping') continue;
+        if (!event || event === 'ping') continue; // comments and heartbeats
         const raw = (/^data: (.*)$/m.exec(frame) || [])[1];
         return { event, data: raw ? JSON.parse(raw) : null };
       }
