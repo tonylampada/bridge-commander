@@ -235,6 +235,16 @@ const LABEL = {
   listening: 'listening', capturing: 'hearing you', sending: 'sending', thinking: 'thinking',
   speaking: 'speaking', ended: 'call ended',
 };
+// what the status line says: muted wins over listening, paused over both
+function stateLabel(c) {
+  if (c.paused) return 'paused';
+  if (c.mute.muted && c.state === 'listening') return 'muted';
+  return LABEL[c.state] || c.state;
+}
+const MIC_SVG = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/><path d="M8 22h8"/>';
+const MIC_ICON = MIC_SVG + '</svg>';
+const MIC_OFF_ICON = MIC_SVG + '<path d="M3 3l18 18"/></svg>';
 function buildView(lt) {
   const v = document.createElement('div');
   v.id = 'call-view';
@@ -247,8 +257,7 @@ function buildView(lt) {
     '<div class="call-who">' + (av || '<span class="call-avatar call-avatar-none">' + esc((lt.name || lt.id).slice(0, 1).toUpperCase()) + '</span>') +
     '<div class="call-name">' + esc(lt.name || lt.id) + '</div>' +
     '<div class="call-act" hidden></div></div>' +
-    '<div class="call-state" aria-live="polite"><span class="call-dot"></span><span class="call-label">connecting…</span>' +
-    '<span class="call-muted" hidden>🔇 Muted</span></div>' +
+    '<div class="call-state" aria-live="polite"><span class="call-dot"></span><span class="call-label">connecting…</span></div>' +
     '<div class="call-meter" aria-hidden="true"><span></span></div>' +
     '<div class="call-lines"><div class="call-heard"></div><div class="call-said"></div></div>' +
     '<div class="call-note" hidden></div>' +
@@ -257,7 +266,7 @@ function buildView(lt) {
     '<div class="call-actions">' +
     '<button type="button" class="call-send" disabled hidden>Send</button>' +
     '<div class="call-buttons">' +
-    '<button type="button" class="call-mute" title="mute (M)" aria-pressed="false">🎙</button>' +
+    '<button type="button" class="call-mute" title="mute (M)" aria-label="mute" aria-pressed="false">' + MIC_ICON + '</button>' +
     '<button type="button" class="call-hangup" title="hang up">✕</button></div></div>';
   dock(v);
   return {
@@ -272,7 +281,6 @@ function buildView(lt) {
     stats: v.querySelector('.call-stats'),
     hangup: v.querySelector('.call-hangup'),
     mute: v.querySelector('.call-mute'),
-    muted: v.querySelector('.call-muted'),
     send: v.querySelector('.call-send'),
     act: v.querySelector('.call-act'),
     tip: v.querySelector('.call-tip'),
@@ -385,7 +393,6 @@ export function startCall(ltId) {
   for (const m of lt.chat || []) c.seen.add(msgKey(m));
   setAutoSpeakGate((who) => call === c && isFrom(who, c.ltId));
   document.body.classList.add('in-call');
-  mediaKeys(c);
   syncButton();
   showBuffer(c);
   open(c);
@@ -514,7 +521,7 @@ function go(ev) {
   c.state = nextCallState(c.state, ev, { awaiting: c.awaiting });
   if (c.state === was) return;
   c.view.root.dataset.state = c.state;
-  c.view.label.textContent = c.paused ? 'paused' : LABEL[c.state] || c.state;
+  c.view.label.textContent = stateLabel(c);
   // a reply that landed while he was talking (held) starts when he stops
   c.player.hold(c.state === 'capturing' || c.state === 'sending');
   if ((c.state === 'listening' || c.state === 'thinking') && c.player.queue.length) go('reply');
@@ -898,36 +905,11 @@ function setMute(c, on) {
 function showMute(c) {
   const on = c.mute.muted;
   c.view.root.classList.toggle('muted', on);
-  c.view.muted.hidden = !on;
-  c.view.mute.textContent = on ? '🔇' : '🎙';
+  c.view.label.textContent = stateLabel(c);
+  c.view.mute.innerHTML = on ? MIC_OFF_ICON : MIC_ICON;
   c.view.mute.title = on ? 'unmute (M)' : 'mute (M)';
+  c.view.mute.setAttribute('aria-label', on ? 'unmute' : 'mute');
   c.view.mute.setAttribute('aria-pressed', on ? 'true' : 'false');
-}
-
-// AirPods: a stem press is a media key, and iOS sends media keys to whoever
-// owns the Now Playing session — the call does while it is live (its own
-// AudioContext output, the earcons, the replies). play, pause and the
-// conferencing togglemicrophone all mean the same thing on a call: mute or
-// unmute. playbackState stays 'playing' either way, so the session is not
-// handed back to something else between presses. With a 'pause' handler the
-// page's own handler is the whole action — the reply playing is not paused,
-// it is the captain who is muted.
-const MEDIA_KEYS = ['play', 'pause', 'togglemicrophone'];
-function mediaKeys(c) {
-  const s = navigator.mediaSession;
-  if (!s) return;
-  try { if (window.MediaMetadata) s.metadata = new MediaMetadata({ title: 'Bridge Commander call', artist: c.view.root.getAttribute('aria-label').replace(/^call with /, '') }); } catch (e) {}
-  try { s.playbackState = 'playing'; } catch (e) {}
-  for (const a of MEDIA_KEYS) {
-    try { s.setActionHandler(a, () => { if (call === c) toggleMute(c); }); } catch (e) {}   // an action this browser does not know
-  }
-  if (c.debug) console.info('[call] media keys held');
-}
-function unMediaKeys() {
-  const s = navigator.mediaSession;
-  if (!s) return;
-  for (const a of MEDIA_KEYS) { try { s.setActionHandler(a, null); } catch (e) {} }
-  try { s.metadata = null; s.playbackState = 'none'; } catch (e) {}
 }
 
 // M on a keyboard, unless he is typing
@@ -1019,7 +1001,6 @@ export function endCall(reason) {
   c.view.root.remove();
   document.body.classList.remove('in-call');
   setAutoSpeakGate(null);
-  unMediaKeys();
   endedAway = reason === 'away';
   syncButton();
   if (endedAway && !document.hidden) awayToast();
@@ -1087,7 +1068,7 @@ async function resume(c) {
   if (call !== c) return;
   wakeLock(c);                 // the browser lets go of it whenever the page hides
   c.vad.reset();
-  c.view.label.textContent = LABEL[c.state] || c.state;
+  c.view.label.textContent = stateLabel(c);
   c.note(c.ctx.state === 'running' ? '' : 'tap anywhere to bring the sound back');
   if (c.debug) console.info('[call] resumed after', Date.now() - c.hiddenAt, 'ms; audio', c.ctx.state);
 }

@@ -88,17 +88,13 @@ is the auth boundary:
 
 ## Muting a call
 
-- 🎙 button beside hang-up (phone and docked desktop call), `M` on a keyboard, or the AirPods
-  stem press. Muted: mic track disabled, VAD fed nothing, the utterance open at the press is
-  dropped; replies keep playing. Status line shows 🔇 Muted; a falling two-note earcon on mute,
-  rising on unmute.
+- Mic button beside hang-up (phone and docked desktop call), or `M` on a keyboard. Muted: mic
+  track disabled, VAD fed nothing, the utterance open at the press is dropped; replies keep
+  playing. The button shows a crossed-out mic and the status line says "muted" where it would
+  say "listening"; a falling two-note earcon on mute, rising on unmute.
 - Mute survives screen-off pause/resume and a mic change; a new call starts unmuted.
-- AirPods: while a call is live it holds the Media Session (`metadata` "Bridge Commander call",
-  `playbackState` 'playing') with `play`, `pause` and `togglemicrophone` handlers, all toggling
-  mute; cleared on hang-up. A stem press during a reply should toggle mute, not pause the reply
-  (the handler replaces the default action). Unverified on a real iPhone: whether iOS routes the
-  press to a page whose only audio is Web Audio. If it does not, the press does nothing (or
-  pauses another app) and the on-screen button is the way.
+- AirPods stem press does not reach the page: iOS keeps it for its own call-mute gesture
+  ("Cannot Control Mic with AirPods"). The on-screen button is the way.
 
 ## Checklist
 
