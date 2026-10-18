@@ -1963,6 +1963,15 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
   font-size: 28px; line-height: 1; box-shadow: 0 6px 22px rgba(239, 100, 97, .35);
 }
 .call-hangup:hover { filter: brightness(1.1); }
+.call-buttons { display: flex; align-items: center; justify-content: center; gap: 28px; }
+.call-mute {
+  width: 72px; height: 72px; flex: none; border-radius: 50%; background: var(--panel3); color: var(--text);
+  font-size: 28px; line-height: 1; border: 1px solid var(--line2);
+}
+.call-mute[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
+.call-muted { margin-left: 8px; padding: 1px 8px; border-radius: 10px; background: var(--danger); color: #fff; font-size: 12.5px; font-weight: 600; }
+.call-muted[hidden] { display: none; }
+.call-view.muted .call-meter span { width: 0 !important; }
 body.in-call .speech-transport { display: none; }
 /* wide screens: the call takes the chat pane only, the board stays usable */
 .call-view.docked { position: absolute; inset: 0; z-index: 4; padding: 14px 16px 22px; }

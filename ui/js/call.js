@@ -28,7 +28,7 @@ import { speechEngine, voiceFor, setAutoSpeakGate, stopSpeaking } from './voice.
 import {
   cleanForCall, splitSentences, createVad, rmsDb, nextCallState, createFillerPolicy,
   FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply, takeKeyword, splitAtKeyword, hasWords,
-  createStatusPolicy,
+  createStatusPolicy, createMute,
 } from './callcore.js';
 import { activityOf, activityHtml, onActivity } from './activity.js';
 import { noSleepStart, noSleepStop } from './nosleep.js';
@@ -247,7 +247,8 @@ function buildView(lt) {
     '<div class="call-who">' + (av || '<span class="call-avatar call-avatar-none">' + esc((lt.name || lt.id).slice(0, 1).toUpperCase()) + '</span>') +
     '<div class="call-name">' + esc(lt.name || lt.id) + '</div>' +
     '<div class="call-act" hidden></div></div>' +
-    '<div class="call-state" aria-live="polite"><span class="call-dot"></span><span class="call-label">connecting…</span></div>' +
+    '<div class="call-state" aria-live="polite"><span class="call-dot"></span><span class="call-label">connecting…</span>' +
+    '<span class="call-muted" hidden>🔇 Muted</span></div>' +
     '<div class="call-meter" aria-hidden="true"><span></span></div>' +
     '<div class="call-lines"><div class="call-heard"></div><div class="call-said"></div></div>' +
     '<div class="call-note" hidden></div>' +
@@ -255,7 +256,9 @@ function buildView(lt) {
     '<div class="call-stats"></div>' +
     '<div class="call-actions">' +
     '<button type="button" class="call-send" disabled hidden>Send</button>' +
-    '<button type="button" class="call-hangup" title="hang up">✕</button></div>';
+    '<div class="call-buttons">' +
+    '<button type="button" class="call-mute" title="mute (M)" aria-pressed="false">🎙</button>' +
+    '<button type="button" class="call-hangup" title="hang up">✕</button></div></div>';
   dock(v);
   return {
     root: v,
@@ -268,6 +271,8 @@ function buildView(lt) {
     note: v.querySelector('.call-note'),
     stats: v.querySelector('.call-stats'),
     hangup: v.querySelector('.call-hangup'),
+    mute: v.querySelector('.call-mute'),
+    muted: v.querySelector('.call-muted'),
     send: v.querySelector('.call-send'),
     act: v.querySelector('.call-act'),
     tip: v.querySelector('.call-tip'),
@@ -338,11 +343,13 @@ export function startCall(ltId) {
     note(msg) { c.view.note.textContent = msg || ''; c.view.note.hidden = !msg; },
   };
   c.player = createPlayer(ctx, out);
+  c.mute = createMute(c.vad);   // a new call starts unmuted
   if (c.mode === 'keyword') c.sttBias = sttBias(tune, c.keywords);
   c.player.onIdle = () => { if (call === c && c.state === 'speaking') go('done'); };
   c.view.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
   c.view.send.hidden = c.mode !== 'keyword';
   c.view.send.onclick = (e) => { e.stopPropagation(); sendTurn(c); };
+  c.view.mute.onclick = (e) => { e.stopPropagation(); toggleMute(c); };
   // the buffered transcript is his to throw away with a tap
   c.view.heard.onclick = (e) => { e.stopPropagation(); if (c.mode === 'keyword') clearBuffer(c, 'cleared'); };
   // any tap on the call view also wakes an audio session iOS left interrupted
@@ -378,6 +385,7 @@ export function startCall(ltId) {
   for (const m of lt.chat || []) c.seen.add(msgKey(m));
   setAutoSpeakGate((who) => call === c && isFrom(who, c.ltId));
   document.body.classList.add('in-call');
+  mediaKeys(c);
   syncButton();
   showBuffer(c);
   open(c);
@@ -434,13 +442,14 @@ async function attachMic(c) {
     const preMax = Math.ceil(PREROLL_MS / c.frameMs);
     c.proc.onaudioprocess = (e) => {
       if (call !== c || c.paused) return;
+      if (c.mute.muted) return meter(c, -100);    // nothing from a muted stretch reaches a take
       const f = new Float32Array(e.inputBuffer.getChannelData(0));
       const db = rmsDb(f);
       meter(c, db);
       if (c.take) c.take.frames.push(f);
       else { c.pre.push(f); if (c.pre.length > preMax) c.pre.shift(); }
       c.vad.setBarge(c.player.busy() && !(c.take && c.take.confirmed));
-      const ev = c.vad.frame(db, performance.now());
+      const ev = c.mute.frame(db, performance.now());
       if (ev) onVad(c, ev);
     };
   }
@@ -448,6 +457,7 @@ async function attachMic(c) {
   if (oldSrc) { try { oldSrc.disconnect(); } catch (e) {} }
   if (old) old.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
   const track = stream.getAudioTracks()[0];
+  c.mute.apply(track);         // muted before the new stream, muted after it
   if (track) track.addEventListener('ended', () => { if (call === c && c.stream === stream) remic(c, 'the microphone went away'); });
   c.view.mic.textContent = track && track.label ? '🎙 ' + track.label : '';
   c.take = null; c.pre = [];
@@ -835,6 +845,9 @@ function meter(c, db) {
 const EARCONS = {
   sent: { notes: [[1318.5, 0], [1975.5, 0.06]], peak: 0.09, len: 0.15 },
   cancel: { notes: [[523.25, 0]], peak: 0.05, len: 0.08 },
+  // mute falls a fifth, unmute climbs it: low and in the middle, so neither is "sent"
+  mute: { notes: [[880, 0], [587.33, 0.07]], peak: 0.07, len: 0.16 },
+  unmute: { notes: [[587.33, 0], [880, 0.07]], peak: 0.07, len: 0.16 },
 };
 function earcon(c, kind) {
   const e = EARCONS[kind];
@@ -858,6 +871,74 @@ function earcon(c, kind) {
     }
     if (c.debug) console.info('[call] earcon', kind);
   } catch (err) {}
+}
+
+// ── mute ────────────────────────────────────────────────────────────────────
+// The rule is callcore.createMute: muted frames never reach the VAD, the track
+// is disabled (and stays disabled across a remic), the replies keep playing.
+// Here: the take open at the press goes in the bin, the screen says so, and an
+// earcon says it to an ear that is not looking.
+function toggleMute(c) { setMute(c, !c.mute.muted); }
+function setMute(c, on) {
+  if (call !== c) return;
+  const track = c.stream && c.stream.getAudioTracks()[0];
+  if (!c.mute.set(on, track)) return;
+  if (on) {
+    const take = c.take;
+    c.take = null;
+    if (take) { clearTimeout(take.probe); unprobe(c, take); }
+    if (take && (!take.barge || take.confirmed)) go('drop');   // he was mid-sentence: it is not sent
+    if (c.sendNow) flushTurn(c);           // Send was tapped before the press: what was heard goes
+  }
+  c.pre = [];
+  earcon(c, on ? 'mute' : 'unmute');
+  showMute(c);
+  if (c.debug) console.info('[call]', on ? 'muted' : 'unmuted');
+}
+function showMute(c) {
+  const on = c.mute.muted;
+  c.view.root.classList.toggle('muted', on);
+  c.view.muted.hidden = !on;
+  c.view.mute.textContent = on ? '🔇' : '🎙';
+  c.view.mute.title = on ? 'unmute (M)' : 'mute (M)';
+  c.view.mute.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+// AirPods: a stem press is a media key, and iOS sends media keys to whoever
+// owns the Now Playing session — the call does while it is live (its own
+// AudioContext output, the earcons, the replies). play, pause and the
+// conferencing togglemicrophone all mean the same thing on a call: mute or
+// unmute. playbackState stays 'playing' either way, so the session is not
+// handed back to something else between presses. With a 'pause' handler the
+// page's own handler is the whole action — the reply playing is not paused,
+// it is the captain who is muted.
+const MEDIA_KEYS = ['play', 'pause', 'togglemicrophone'];
+function mediaKeys(c) {
+  const s = navigator.mediaSession;
+  if (!s) return;
+  try { if (window.MediaMetadata) s.metadata = new MediaMetadata({ title: 'Bridge Commander call', artist: c.view.root.getAttribute('aria-label').replace(/^call with /, '') }); } catch (e) {}
+  try { s.playbackState = 'playing'; } catch (e) {}
+  for (const a of MEDIA_KEYS) {
+    try { s.setActionHandler(a, () => { if (call === c) toggleMute(c); }); } catch (e) {}   // an action this browser does not know
+  }
+  if (c.debug) console.info('[call] media keys held');
+}
+function unMediaKeys() {
+  const s = navigator.mediaSession;
+  if (!s) return;
+  for (const a of MEDIA_KEYS) { try { s.setActionHandler(a, null); } catch (e) {} }
+  try { s.metadata = null; s.playbackState = 'none'; } catch (e) {}
+}
+
+// M on a keyboard, unless he is typing
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('keydown', (e) => {
+    if (!call || e.repeat || e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'm' && e.key !== 'M')) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    e.preventDefault();
+    toggleMute(call);
+  });
 }
 
 // ── the lieutenant answering ────────────────────────────────────────────────
@@ -938,6 +1019,7 @@ export function endCall(reason) {
   c.view.root.remove();
   document.body.classList.remove('in-call');
   setAutoSpeakGate(null);
+  unMediaKeys();
   endedAway = reason === 'away';
   syncButton();
   if (endedAway && !document.hidden) awayToast();
