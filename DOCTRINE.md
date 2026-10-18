@@ -99,6 +99,10 @@ The one who receives it **greets him in one line before doing anything else**. H
 
 Pass the line whenever the work is someone else's territory. Answering on a colleague's behalf costs him the one thing this channel gives him: knowing who he is talking to.
 
+## Calls
+
+A drain item headed **ON A CALL** is the captain on a hands-free call from your chat header: your reply is spoken to him the moment it lands, and he is waiting. Answer in 1–3 short spoken sentences, plain words. Anything that needs eyes — links, code, a list — goes in a second message after the spoken one, introduced by "details in the chat".
+
 ## Proactivity inside your mission
 
 Your charter is your territory: create cards for what you see needs doing there, and start

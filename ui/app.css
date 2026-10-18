@@ -163,6 +163,10 @@ body.resizing { user-select: none; cursor: col-resize; }
 .msg.typing .tdot:nth-child(2) { animation-delay: .2s; }
 .msg.typing .tdot:nth-child(3) { animation-delay: .4s; }
 .msg.typing .lbl { color: var(--faint); font-size: 11px; margin-left: 4px; }
+.msg.typing.working { max-width: 100%; min-width: 0; }
+.msg.typing .lbl.act { display: flex; gap: 8px; min-width: 0; color: var(--dim); font-size: 12px; }
+.act-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.act-time { flex: none; color: var(--faint); font-variant-numeric: tabular-nums; }
 @keyframes typing-blink { 0%, 80%, 100% { opacity: .25; } 40% { opacity: 1; } }
 /* stale-owed: the "may be stuck" state — static amber, clearly NOT healthy typing */
 .msg.typing.stale { border-color: var(--warn); }
@@ -1901,3 +1905,66 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
   .us-wide { display: none; }
   .us-split { display: block; }
 }
+
+/* ---------- call mode (call.js) ---------- */
+.chat-call { flex: none; color: var(--faint); font-size: 15px; line-height: 1; padding: 7px 7px; border-radius: 7px; transition: color .12s, background .12s; }
+.chat-call:hover { color: var(--ok); background: var(--ok-soft); }
+.chat-call.live { color: var(--danger); }
+.call-view {
+  position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center;
+  gap: 18px; padding: max(18px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+  background: radial-gradient(ellipse at 50% 30%, var(--panel2), var(--bg) 70%); color: var(--text);
+  overflow-y: auto; -webkit-user-select: none; user-select: none;
+}
+.call-top { width: 100%; max-width: 520px; display: flex; justify-content: space-between; color: var(--dim); font: 12.5px var(--mono, ui-monospace, Menlo, monospace); }
+.call-tag { color: var(--ok); }
+.call-who { margin-top: 4vh; display: flex; flex-direction: column; align-items: center; gap: 12px; }
+.call-avatar { width: 132px; height: 132px; border-radius: 50%; box-shadow: 0 0 0 3px var(--line2); transition: box-shadow .2s; }
+.call-avatar-none { display: grid; place-items: center; background: var(--panel3); font-size: 52px; font-weight: 600; color: var(--dim); }
+.call-view[data-state="speaking"] .call-avatar { box-shadow: 0 0 0 4px var(--accent), 0 0 36px var(--accent-soft); }
+.call-view[data-state="capturing"] .call-avatar { box-shadow: 0 0 0 4px var(--ok), 0 0 36px var(--ok-soft); }
+.call-name { font-size: 24px; font-weight: 600; }
+.call-act { display: flex; gap: 10px; max-width: min(520px, 92vw); padding: 6px 12px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line2); color: var(--dim); font-size: 13.5px; }
+.call-act[hidden] { display: none; }
+.call-state { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--dim); min-height: 22px; }
+.call-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--faint); }
+.call-view[data-state="listening"] .call-dot { background: var(--ok); }
+.call-view[data-state="capturing"] .call-dot { background: var(--ok); animation: call-pulse .8s ease-in-out infinite; }
+.call-view[data-state="sending"] .call-dot,
+.call-view[data-state="thinking"] .call-dot { background: var(--warn); animation: call-pulse 1.2s ease-in-out infinite; }
+.call-view[data-state="speaking"] .call-dot { background: var(--accent); }
+.call-view[data-state="ended"] .call-dot { background: var(--danger); }
+@keyframes call-pulse { 50% { opacity: .3; } }
+.call-meter { width: min(260px, 70vw); height: 6px; border-radius: 3px; background: var(--panel3); overflow: hidden; }
+.call-meter span { display: block; height: 100%; width: 0; background: var(--ok); transition: width 60ms linear; }
+.call-view[data-state="speaking"] .call-meter span { background: var(--faint); }
+.call-lines { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 10px; text-align: center; font-size: 15px; line-height: 1.45; }
+.call-heard { color: var(--text); }
+.call-heard.buffer { background: var(--panel); border: 1px solid var(--line2); border-radius: 10px; padding: 10px 12px; cursor: pointer; text-align: left; }
+.call-hint { display: block; margin-top: 4px; color: var(--faint); font-size: 12px; text-align: center; }
+.call-mic { color: var(--faint); max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.call-said:empty { display: none; }
+.call-said { color: var(--dim); max-height: 7.5em; overflow: hidden; }
+.call-tip { max-width: 520px; text-align: center; color: var(--faint); font-size: 12.5px; }
+.call-tip[hidden] { display: none; }
+.call-view { transition: filter 1.2s ease; }
+.call-view.dim { filter: brightness(.3); }
+.call-note { max-width: 520px; text-align: center; color: var(--warn); font-size: 13.5px; }
+.call-stats { color: var(--faint); font: 11px var(--mono, ui-monospace, Menlo, monospace); text-align: center; max-width: 520px; min-height: 1em; }
+.call-actions { margin-top: auto; width: 100%; max-width: 420px; display: flex; flex-direction: column; align-items: center; gap: 16px; }
+.call-send {
+  width: 100%; height: 64px; flex: none; border-radius: 32px; background: var(--ok); color: #fff;
+  font-size: 20px; font-weight: 600; letter-spacing: .02em; box-shadow: 0 6px 22px var(--ok-soft); transition: opacity .15s;
+}
+.call-send:disabled { opacity: .35; box-shadow: none; cursor: default; }
+.call-send[hidden] { display: none; }
+.call-hangup {
+  width: 72px; height: 72px; flex: none; border-radius: 50%; background: var(--danger); color: #fff;
+  font-size: 28px; line-height: 1; box-shadow: 0 6px 22px rgba(239, 100, 97, .35);
+}
+.call-hangup:hover { filter: brightness(1.1); }
+body.in-call .speech-transport { display: none; }
+/* wide screens: the call takes the chat pane only, the board stays usable */
+.call-view.docked { position: absolute; inset: 0; z-index: 4; padding: 14px 16px 22px; }
+.call-view.docked .call-who { margin-top: 2vh; }
+.call-view.docked .call-avatar { width: 108px; height: 108px; }

@@ -1676,6 +1676,12 @@ async function cmdDrain() {
       hint = 'he is listening with the SCREEN OFF — this will be heard, not read: answer in a couple of '
         + 'spoken sentences, no links or diffs unless he asked. Reply: bc-axi say '
         + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
+    } else if (it.kind === 'message' && it.via === 'call') {
+      head = 'captain message (ON A CALL — spoken, he is waiting on the line)';
+      hint = 'your reply is read aloud to him the moment it lands: answer in 1–3 short spoken sentences, '
+        + 'plain words, no markdown, links, code or lists; anything that needs eyes goes in a SECOND message '
+        + 'after the spoken one (say "details in the chat"). Reply: bc-axi say '
+        + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
     } else if (it.kind === 'message') {
       head = 'captain message (your main chat)';
       hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';

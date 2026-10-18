@@ -3,6 +3,8 @@ import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, 
 import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
+import { callBoard } from './call.js';
+import { setActivity } from './activity.js';
 import { trackEvents, renderNotifSettings } from './notifysettings.js';
 import { onOpenCard as toastOnOpenCard, onOpenLieutenant as toastOnOpenLieutenant } from './toast.js';
 import { renderBoard, newCardOpen, closeNewCard, newLieutenantOpen, closeNewLieutenant, closeMoveMenu } from './board.js';
@@ -347,6 +349,7 @@ function applyBoard(doc) {
   serverBoot = doc.boot || serverBoot;
   S.doc = doc;
   trackMessages(S.doc);
+  callBoard(S.doc);
   trackEvents(S.doc);
   render();
   if (deepCard) {
@@ -375,9 +378,16 @@ function connect() {
     lastEventAt = Date.now();
     try { artifactWritten(JSON.parse(e.data)); } catch (err) {}
   });
+  // what each lieutenant is doing right now — a small event of its own, never
+  // a board render (activity.js)
+  es.addEventListener('activity', (e) => {
+    lastEventAt = Date.now();
+    try { setActivity(JSON.parse(e.data)); } catch (err) {}
+  });
   es.addEventListener('ping', () => { lastEventAt = Date.now(); });
   es.onopen = () => {
     lastEventAt = Date.now();
+    setActivity({}); // whatever was running may have ended while we were away — the server resends what still is
     S.connected = true;
     renderStatusDot();
     refetchBoard(); // anything pushed while we were away is unrecoverable — resync
