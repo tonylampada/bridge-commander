@@ -28,7 +28,7 @@ import { speechEngine, voiceFor, setAutoSpeakGate, stopSpeaking } from './voice.
 import {
   cleanForCall, splitSentences, createVad, rmsDb, nextCallState, createFillerPolicy,
   FILLER_PHRASES, turnLegs, encodeWav16k, isPhantom, spokenReply, takeKeyword, splitAtKeyword, hasWords,
-  createStatusPolicy,
+  createStatusPolicy, createMute,
 } from './callcore.js';
 import { activityOf, activityHtml, onActivity } from './activity.js';
 import { noSleepStart, noSleepStop } from './nosleep.js';
@@ -235,6 +235,16 @@ const LABEL = {
   listening: 'listening', capturing: 'hearing you', sending: 'sending', thinking: 'thinking',
   speaking: 'speaking', ended: 'call ended',
 };
+// what the status line says: muted wins over listening, paused over both
+function stateLabel(c) {
+  if (c.paused) return 'paused';
+  if (c.mute.muted && c.state === 'listening') return 'muted';
+  return LABEL[c.state] || c.state;
+}
+const MIC_SVG = '<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+  '<rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1"/><path d="M12 18v4"/><path d="M8 22h8"/>';
+const MIC_ICON = MIC_SVG + '</svg>';
+const MIC_OFF_ICON = MIC_SVG + '<path d="M3 3l18 18"/></svg>';
 function buildView(lt) {
   const v = document.createElement('div');
   v.id = 'call-view';
@@ -255,7 +265,9 @@ function buildView(lt) {
     '<div class="call-stats"></div>' +
     '<div class="call-actions">' +
     '<button type="button" class="call-send" disabled hidden>Send</button>' +
-    '<button type="button" class="call-hangup" title="hang up">✕</button></div>';
+    '<div class="call-buttons">' +
+    '<button type="button" class="call-mute" title="mute (M)" aria-label="mute" aria-pressed="false">' + MIC_ICON + '</button>' +
+    '<button type="button" class="call-hangup" title="hang up">✕</button></div></div>';
   dock(v);
   return {
     root: v,
@@ -268,6 +280,7 @@ function buildView(lt) {
     note: v.querySelector('.call-note'),
     stats: v.querySelector('.call-stats'),
     hangup: v.querySelector('.call-hangup'),
+    mute: v.querySelector('.call-mute'),
     send: v.querySelector('.call-send'),
     act: v.querySelector('.call-act'),
     tip: v.querySelector('.call-tip'),
@@ -338,11 +351,13 @@ export function startCall(ltId) {
     note(msg) { c.view.note.textContent = msg || ''; c.view.note.hidden = !msg; },
   };
   c.player = createPlayer(ctx, out);
+  c.mute = createMute(c.vad);   // a new call starts unmuted
   if (c.mode === 'keyword') c.sttBias = sttBias(tune, c.keywords);
   c.player.onIdle = () => { if (call === c && c.state === 'speaking') go('done'); };
   c.view.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
   c.view.send.hidden = c.mode !== 'keyword';
   c.view.send.onclick = (e) => { e.stopPropagation(); sendTurn(c); };
+  c.view.mute.onclick = (e) => { e.stopPropagation(); toggleMute(c); };
   // the buffered transcript is his to throw away with a tap
   c.view.heard.onclick = (e) => { e.stopPropagation(); if (c.mode === 'keyword') clearBuffer(c, 'cleared'); };
   // any tap on the call view also wakes an audio session iOS left interrupted
@@ -434,13 +449,14 @@ async function attachMic(c) {
     const preMax = Math.ceil(PREROLL_MS / c.frameMs);
     c.proc.onaudioprocess = (e) => {
       if (call !== c || c.paused) return;
+      if (c.mute.muted) return meter(c, -100);    // nothing from a muted stretch reaches a take
       const f = new Float32Array(e.inputBuffer.getChannelData(0));
       const db = rmsDb(f);
       meter(c, db);
       if (c.take) c.take.frames.push(f);
       else { c.pre.push(f); if (c.pre.length > preMax) c.pre.shift(); }
       c.vad.setBarge(c.player.busy() && !(c.take && c.take.confirmed));
-      const ev = c.vad.frame(db, performance.now());
+      const ev = c.mute.frame(db, performance.now());
       if (ev) onVad(c, ev);
     };
   }
@@ -448,6 +464,7 @@ async function attachMic(c) {
   if (oldSrc) { try { oldSrc.disconnect(); } catch (e) {} }
   if (old) old.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
   const track = stream.getAudioTracks()[0];
+  c.mute.apply(track);         // muted before the new stream, muted after it
   if (track) track.addEventListener('ended', () => { if (call === c && c.stream === stream) remic(c, 'the microphone went away'); });
   c.view.mic.textContent = track && track.label ? '🎙 ' + track.label : '';
   c.take = null; c.pre = [];
@@ -504,7 +521,7 @@ function go(ev) {
   c.state = nextCallState(c.state, ev, { awaiting: c.awaiting });
   if (c.state === was) return;
   c.view.root.dataset.state = c.state;
-  c.view.label.textContent = c.paused ? 'paused' : LABEL[c.state] || c.state;
+  c.view.label.textContent = stateLabel(c);
   // a reply that landed while he was talking (held) starts when he stops
   c.player.hold(c.state === 'capturing' || c.state === 'sending');
   if ((c.state === 'listening' || c.state === 'thinking') && c.player.queue.length) go('reply');
@@ -835,6 +852,9 @@ function meter(c, db) {
 const EARCONS = {
   sent: { notes: [[1318.5, 0], [1975.5, 0.06]], peak: 0.09, len: 0.15 },
   cancel: { notes: [[523.25, 0]], peak: 0.05, len: 0.08 },
+  // mute falls a fifth, unmute climbs it: low and in the middle, so neither is "sent"
+  mute: { notes: [[880, 0], [587.33, 0.07]], peak: 0.07, len: 0.16 },
+  unmute: { notes: [[587.33, 0], [880, 0.07]], peak: 0.07, len: 0.16 },
 };
 function earcon(c, kind) {
   const e = EARCONS[kind];
@@ -858,6 +878,49 @@ function earcon(c, kind) {
     }
     if (c.debug) console.info('[call] earcon', kind);
   } catch (err) {}
+}
+
+// ── mute ────────────────────────────────────────────────────────────────────
+// The rule is callcore.createMute: muted frames never reach the VAD, the track
+// is disabled (and stays disabled across a remic), the replies keep playing.
+// Here: the take open at the press goes in the bin, the screen says so, and an
+// earcon says it to an ear that is not looking.
+function toggleMute(c) { setMute(c, !c.mute.muted); }
+function setMute(c, on) {
+  if (call !== c) return;
+  const track = c.stream && c.stream.getAudioTracks()[0];
+  if (!c.mute.set(on, track)) return;
+  if (on) {
+    const take = c.take;
+    c.take = null;
+    if (take) { clearTimeout(take.probe); unprobe(c, take); }
+    if (take && (!take.barge || take.confirmed)) go('drop');   // he was mid-sentence: it is not sent
+    if (c.sendNow) flushTurn(c);           // Send was tapped before the press: what was heard goes
+  }
+  c.pre = [];
+  earcon(c, on ? 'mute' : 'unmute');
+  showMute(c);
+  if (c.debug) console.info('[call]', on ? 'muted' : 'unmuted');
+}
+function showMute(c) {
+  const on = c.mute.muted;
+  c.view.root.classList.toggle('muted', on);
+  c.view.label.textContent = stateLabel(c);
+  c.view.mute.innerHTML = on ? MIC_OFF_ICON : MIC_ICON;
+  c.view.mute.title = on ? 'unmute (M)' : 'mute (M)';
+  c.view.mute.setAttribute('aria-label', on ? 'unmute' : 'mute');
+  c.view.mute.setAttribute('aria-pressed', on ? 'true' : 'false');
+}
+
+// M on a keyboard, unless he is typing
+if (typeof document !== 'undefined' && document.addEventListener) {
+  document.addEventListener('keydown', (e) => {
+    if (!call || e.repeat || e.ctrlKey || e.metaKey || e.altKey || (e.key !== 'm' && e.key !== 'M')) return;
+    const t = e.target;
+    if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    e.preventDefault();
+    toggleMute(call);
+  });
 }
 
 // ── the lieutenant answering ────────────────────────────────────────────────
@@ -1005,7 +1068,7 @@ async function resume(c) {
   if (call !== c) return;
   wakeLock(c);                 // the browser lets go of it whenever the page hides
   c.vad.reset();
-  c.view.label.textContent = LABEL[c.state] || c.state;
+  c.view.label.textContent = stateLabel(c);
   c.note(c.ctx.state === 'running' ? '' : 'tap anywhere to bring the sound back');
   if (c.debug) console.info('[call] resumed after', Date.now() - c.hiddenAt, 'ms; audio', c.ctx.state);
 }

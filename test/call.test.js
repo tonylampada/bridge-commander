@@ -462,3 +462,69 @@ test('keywords: mid-sentence, unpunctuated, they are just words', () => {
   assert.strictEqual(C.splitAtKeyword('qualquer coisa', []).hit, false);
   assert.strictEqual(C.takeKeyword('qualquer coisa', ['', null]).hit, false);
 });
+
+// ── mute ─────────────────────────────────────────────────────────────────────
+
+function muteRun(m, t0, ms, db, out) {
+  for (let t = t0 + 20; t <= t0 + ms; t += 20) { const ev = m.frame(db, t); if (ev) out.push(ev); }
+  return t0 + ms;
+}
+
+test('nothing is heard while muted: speech under mute starts and ends nothing', () => {
+  const vad = C.createVad();
+  const m = C.createMute(vad);
+  const evs = [];
+  let t = muteRun(m, 0, 500, -70, evs);           // calibrate on silence
+  m.set(true);
+  t = muteRun(m, t, 2000, -20, evs);              // he talks, muted
+  t = muteRun(m, t, 1500, -70, evs);
+  assert.deepStrictEqual(evs, []);
+  assert.strictEqual(m.muted, true);
+});
+
+test('an utterance open at the mute press is never ended (never sent)', () => {
+  const vad = C.createVad();
+  const m = C.createMute(vad);
+  const evs = [];
+  let t = muteRun(m, 0, 500, -70, evs);
+  t = muteRun(m, t, 600, -20, evs);
+  assert.deepStrictEqual(evs.map((e) => e.type), ['start']);
+  m.set(true);
+  t = muteRun(m, t, 2000, -70, evs);
+  m.set(false);
+  t = muteRun(m, t, 2000, -70, evs);              // the silence after unmute ends nothing either
+  assert.deepStrictEqual(evs.map((e) => e.type), ['start']);
+});
+
+test('unmuting resumes listening: the next utterance starts and ends', () => {
+  const vad = C.createVad();
+  const m = C.createMute(vad);
+  const evs = [];
+  let t = muteRun(m, 0, 500, -70, evs);
+  assert.strictEqual(m.toggle(), true);
+  t = muteRun(m, t, 1000, -20, evs);
+  assert.strictEqual(m.toggle(), true);
+  assert.strictEqual(m.muted, false);
+  t = muteRun(m, t, 800, -20, evs);
+  t = muteRun(m, t, 1200, -70, evs);
+  assert.deepStrictEqual(evs.map((e) => e.type), ['start', 'end']);
+  assert.ok(evs[0].at >= 1500, 'the utterance starts after the unmute, not inside the muted stretch');
+});
+
+test('mute is applied to the track, and to every fresh track after a remic', () => {
+  const m = C.createMute(C.createVad());
+  const first = { enabled: true };
+  m.set(true, first);
+  assert.strictEqual(first.enabled, false);
+  const second = { enabled: true };               // remic: a new stream, a new track
+  m.apply(second);
+  assert.strictEqual(second.enabled, false);
+  assert.strictEqual(m.muted, true);
+  m.set(false, second);
+  assert.strictEqual(second.enabled, true);
+  assert.strictEqual(m.set(false, second), false, 'setting the state it is in changes nothing');
+});
+
+test('a new call starts unmuted', () => {
+  assert.strictEqual(C.createMute(C.createVad()).muted, false);
+});

@@ -86,6 +86,16 @@ is the auth boundary:
   `host`).
 - **Never `0.0.0.0`.** voxbench and whisper_server refuse it; don't route around that.
 
+## Muting a call
+
+- Mic button beside hang-up (phone and docked desktop call), or `M` on a keyboard. Muted: mic
+  track disabled, VAD fed nothing, the utterance open at the press is dropped; replies keep
+  playing. The button shows a crossed-out mic and the status line says "muted" where it would
+  say "listening"; a falling two-note earcon on mute, rising on unmute.
+- Mute survives screen-off pause/resume and a mic change; a new call starts unmuted.
+- AirPods stem press does not reach the page: iOS keeps it for its own call-mute gesture
+  ("Cannot Control Mic with AirPods"). The on-screen button is the way.
+
 ## Checklist
 
 On the board's machine, with the GPU stack working (`docker run --rm --gpus all ubuntu

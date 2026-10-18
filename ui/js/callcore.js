@@ -198,7 +198,8 @@ export function createVad(opts = {}) {
   return {
     frame,
     setBarge(on) { barge = !!on; },
-    reset() { inUtt = false; voicedSince = null; voicedMs = 0; },
+    // a gap in the frames (mute, pause, a new mic) is not time spent in any state
+    reset() { inUtt = false; voicedSince = null; voicedMs = 0; last = null; },
     get floor() { return floor; },
     get speaking() { return inUtt; },
     options: o,
@@ -477,4 +478,34 @@ export function splitAtKeyword(text, keyword) {
 // Something with words in it, as opposed to noise the engine wrote down.
 export function hasWords(text) {
   return /\p{L}{2,}/u.test(String(text || ''));
+}
+
+// ── mute ────────────────────────────────────────────────────────────────────
+// He mutes himself: nothing he says from then on is heard, and nothing heard
+// before the press but not yet a whole utterance survives it. The replies keep
+// playing. The microphone frames go through here on their way to the VAD; a
+// muted call drops them, and every flip of the switch resets the VAD, so an
+// utterance open at the press never ends (never sent) and the one after the
+// unmute starts clean. The track is a plain object here: `apply` sets its
+// `enabled`, and is called again on every fresh stream (remic), so mute
+// outlives a device change. A new call makes a new one: it starts unmuted.
+export function createMute(vad) {
+  let muted = false;
+  const M = {
+    get muted() { return muted; },
+    // true when it changed
+    set(on, track) {
+      on = !!on;
+      if (on === muted) return false;
+      muted = on;
+      if (vad) vad.reset();
+      M.apply(track);
+      return true;
+    },
+    toggle(track) { return M.set(!muted, track); },
+    apply(track) { if (track) track.enabled = !muted; },
+    // one microphone frame: the VAD's event, or null (always null while muted)
+    frame(db, now) { return muted || !vad ? null : vad.frame(db, now); },
+  };
+  return M;
 }
