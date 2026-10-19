@@ -23,6 +23,8 @@ try { if (h === '0') localStorage.setItem(HOOK, '1'); else if (h === '1') localS
 let noHook = false;
 try { noHook = on && localStorage.getItem(HOOK) === '1'; } catch (e) {}
 export const pasteHookOff = noHook;
+// chat.js writes its own lines into the log through this; a no-op when off.
+export let debugLog = () => {};
 
 if (on) {
   const session = Math.random().toString(36).slice(2, 8);
@@ -31,6 +33,7 @@ if (on) {
     : (n.tagName || '?').toLowerCase() + (n.id ? '#' + n.id : '') + (n.className && typeof n.className === 'string' ? '.' + n.className.split(' ')[0] : '');
   const state = () => 'act=' + name(document.activeElement) + ' hasFocus=' + document.hasFocus() + ' vis=' + document.visibilityState;
   const log = (s) => { buf.push(new Date().toISOString() + ' ' + s); if (buf.length > 2000) buf.shift(); };
+  debugLog = log;
   const flush = (beacon) => {
     if (!buf.length) return;
     const body = JSON.stringify({ session, ua: navigator.userAgent, lines: buf });
@@ -73,10 +76,19 @@ if (on) {
     ' readOnly=' + t.readOnly + ' disabled=' + t.disabled + ' maxLength=' + t.maxLength;
   let inputSeen = 0;
   window.addEventListener('input', () => { inputSeen++; }, true);
+  const inputAtPaste = new WeakMap(); // taken before any handler can insert
+  window.addEventListener('paste', (e) => inputAtPaste.set(e, inputSeen), true);
   window.addEventListener('paste', (e) => {
     let len = '?';
     try { len = e.clipboardData ? e.clipboardData.getData('text/plain').length : 'none'; } catch (err) { len = 'threw'; }
     log('  paste after handlers: text/plain len=' + len + ' cancelable=' + e.cancelable);
+    // Whoever inserts it (the browser, or the composer's workaround), a paste
+    // with text must end in an input event.
+    const seen = inputAtPaste.has(e) ? inputAtPaste.get(e) : inputSeen, t = e.target;
+    if (len > 0) setTimeout(() => {
+      if (inputSeen > seen) log('  paste landed: len=' + (t.value || '').length);
+      else log('!! paste with text but NO input within 50ms defaultPrevented=' + e.defaultPrevented + ' ' + state());
+    }, 50);
   });
   window.addEventListener('beforeinput', (e) => {
     if (e.inputType !== 'insertFromPaste') return;
