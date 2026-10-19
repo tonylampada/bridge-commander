@@ -495,6 +495,12 @@ function createDevServer(opts) {
       if (route === 'GET /api/notifications') return sendJson(res, 200, { items: [], unread: 0 });
       if (route === 'GET /api/usage') return sendJson(res, 200, usageReport(url.searchParams));
       if (route === 'POST /api/usage/index') return sendJson(res, 200, { ok: true, running: false });
+      // ?pastedebug=1's log: nothing persists here, so it goes to stdout
+      if (route === 'POST /api/pastedebug') {
+        const b = JSON.parse(await readBody(req) || '{}');
+        for (const l of b.lines || []) console.log('[pastedebug] ' + b.session + ' ' + l);
+        return sendJson(res, 200, { ok: true });
+      }
       if (route === 'GET /api/archive') {
         // paginated read over the append-only log, newest first: limit+offset
         // window plus the total, so the UI can "load more" instead of slurping

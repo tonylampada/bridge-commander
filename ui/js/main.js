@@ -1,4 +1,5 @@
 // boot: SSE, header controls, mobile tabs, render orchestration
+import './pastedebug.js'; // opt-in (?pastedebug=1): first, so its listeners wrap everyone's
 import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, notifUnreadCount, owedTargets, clearFilters, filtersActive } from './state.js';
 import { api } from './api.js';
 import { refreshAgoLabels } from './util.js';
