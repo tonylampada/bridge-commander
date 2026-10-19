@@ -4,6 +4,7 @@
 // premium composer.
 import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
+import { pasteHookOff } from './pastedebug.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
@@ -720,6 +721,7 @@ api.config().then((cfg) => mountMic({
 }), () => {});
 // paste-image from the clipboard (screenshots)
 inputEl.addEventListener('paste', (e) => {
+  if (pasteHookOff) return; // MNC-280 A/B: ?pastedebug=1&pastehook=0
   const items = e.clipboardData && e.clipboardData.items;
   if (!items) return;
   const files = [];

@@ -11,10 +11,18 @@
 // says whether one of them swallowed it.
 
 const FLAG = 'bc-pastedebug';
-const q = new URLSearchParams(location.search).get('pastedebug');
+const q = new URLSearchParams(typeof location === 'undefined' ? '' : location.search).get('pastedebug');
 try { if (q === '1') localStorage.setItem(FLAG, '1'); else if (q === '0') localStorage.removeItem(FLAG); } catch (e) {}
 let on = false;
 try { on = localStorage.getItem(FLAG) === '1'; } catch (e) {}
+// A/B for the composer's own paste hook (chat.js reads clipboardData.items):
+// ?pastehook=0 turns it off (sticky), ?pastehook=1 back on.
+const HOOK = 'bc-pastedebug-nohook';
+const h = new URLSearchParams(typeof location === 'undefined' ? '' : location.search).get('pastehook');
+try { if (h === '0') localStorage.setItem(HOOK, '1'); else if (h === '1') localStorage.removeItem(HOOK); } catch (e) {}
+let noHook = false;
+try { noHook = on && localStorage.getItem(HOOK) === '1'; } catch (e) {}
+export const pasteHookOff = noHook;
 
 if (on) {
   const session = Math.random().toString(36).slice(2, 8);
@@ -58,6 +66,32 @@ if (on) {
   }, true);
   window.addEventListener('paste', () => clearTimeout(pendingV), true);
 
+  // An uncancelled insertFromPaste that never becomes an input event is the
+  // bug as the first log showed it. Snapshot the field at beforeinput, and 50ms
+  // later say whether the text ever landed.
+  const fieldState = (t) => 'len=' + (t.value || '').length + ' sel=' + t.selectionStart + '-' + t.selectionEnd +
+    ' readOnly=' + t.readOnly + ' disabled=' + t.disabled + ' maxLength=' + t.maxLength;
+  let inputSeen = 0;
+  window.addEventListener('input', () => { inputSeen++; }, true);
+  window.addEventListener('paste', (e) => {
+    let len = '?';
+    try { len = e.clipboardData ? e.clipboardData.getData('text/plain').length : 'none'; } catch (err) { len = 'threw'; }
+    log('  paste after handlers: text/plain len=' + len + ' cancelable=' + e.cancelable);
+  });
+  window.addEventListener('beforeinput', (e) => {
+    if (e.inputType !== 'insertFromPaste') return;
+    const t = e.target;
+    let dt = 'null';
+    try { if (e.dataTransfer) dt = String(e.dataTransfer.getData('text/plain').length); } catch (err) { dt = 'threw'; }
+    log('  beforeinput paste: data.len=' + (e.data == null ? 'null' : e.data.length) + ' dataTransfer.len=' + dt +
+      ' cancelable=' + e.cancelable + ' composing=' + e.isComposing + ' ' + fieldState(t));
+    const seen = inputSeen, before = (t.value || '').length;
+    setTimeout(() => {
+      const landed = inputSeen > seen;
+      log((landed ? '  ' : '!! ') + 'paste 50ms later: input=' + landed + ' len ' + before + '→' + (t.value || '').length + ' ' + fieldState(t) + ' ' + state());
+    }, 50);
+  }, true);
+
   for (const type of ['focus', 'blur']) window.addEventListener(type, (e) => log(type + ' target=' + name(e.target) + ' ' + state()), true);
   for (const type of ['focusin', 'focusout']) document.addEventListener(type, (e) => log(type + ' target=' + name(e.target) + ' related=' + name(e.relatedTarget) + ' ' + state()), true);
   document.addEventListener('visibilitychange', () => log('visibilitychange ' + state()), true);
@@ -70,12 +104,12 @@ if (on) {
     }
   }).observe(document.documentElement, { childList: true, subtree: true });
 
-  log('armed session=' + session + ' ' + state());
+  log('armed session=' + session + ' pastehook=' + (noHook ? 'off' : 'on') + ' ' + state());
   setInterval(flush, 2000);
   // Visible, so nobody forgets it is on — and inert, so it can never take focus.
   const mount = () => {
     const badge = document.createElement('div');
-    badge.textContent = 'paste debug · ' + session;
+    badge.textContent = 'paste debug · ' + session + (noHook ? ' · hook off' : '');
     badge.style.cssText = 'position:fixed;left:6px;bottom:6px;z-index:2147483647;pointer-events:none;font:10px ui-monospace,monospace;color:#9f9;background:#000a;padding:2px 5px;border-radius:4px';
     badge.setAttribute('aria-hidden', 'true');
     document.body.appendChild(badge);
