@@ -4,7 +4,6 @@
 // premium composer.
 import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
-import { pasteHookOff, debugLog } from './pastedebug.js';
 import { composerPaste } from './composerpaste.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
@@ -722,9 +721,7 @@ api.config().then((cfg) => mountMic({
 }), () => {});
 // paste: files become attachments, text is inserted by us (composerpaste.js)
 inputEl.addEventListener('paste', (e) => {
-  if (pasteHookOff) return; // MNC-280 A/B: ?pastedebug=1&pastehook=0
-  const did = composerPaste(e, { input: inputEl, doc: document, addFiles: addPendingFiles });
-  debugLog('  composer paste: ' + (did || 'left to the browser') + (did === 'text' ? ' (workaround)' : ''));
+  composerPaste(e, { input: inputEl, doc: document, addFiles: addPendingFiles });
 });
 
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }

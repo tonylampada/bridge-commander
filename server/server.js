@@ -138,7 +138,6 @@ const STATE_DIR = path.join(WORKSPACE, STATE_DIR_NAME);
 const BOARD_FILE = path.join(STATE_DIR, 'board.json');
 const ARCHIVE_FILE = path.join(STATE_DIR, 'archive.jsonl');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
-const PASTEDEBUG_FILE = path.join(STATE_DIR, 'pastedebug.log');
 const QUEUE_DIR = path.join(STATE_DIR, 'queue');
 const CHAT_DIR = path.join(STATE_DIR, 'chat');
 const PID_FILE = path.join(STATE_DIR, 'server.pid');
@@ -4526,15 +4525,6 @@ const server = http.createServer(async (req, res) => {
     // ----- reads -----
     if (route === 'GET /api/board') return sendJson(res, 200, publicBoard(url.searchParams.get('user') || 'user'));
     if (route === 'GET /api/config') return sendJson(res, 200, userConfig());
-    // ui/js/pastedebug.js (?pastedebug=1) ships its event log here (MNC-280).
-    if (route === 'POST /api/pastedebug') {
-      let b;
-      try { b = JSON.parse(await readBodyUpto(req, 1e6)); } catch (e) { return sendJson(res, 400, { error: 'bad body' }); }
-      const sid = String(b.session || '?').replace(/[^a-z0-9]/gi, '').slice(0, 16);
-      const lines = Array.isArray(b.lines) ? b.lines.map((l) => String(l).replace(/[\r\n]/g, ' ')) : [];
-      fs.appendFileSync(PASTEDEBUG_FILE, lines.map((l) => sid + ' ' + l + '\n').join('') + (b.ua ? sid + ' ua ' + String(b.ua).slice(0, 300) + '\n' : ''));
-      return sendJson(res, 200, { ok: true });
-    }
     // ----- the TTS engine, on the board's own origin -----
     // Any method, any path under the prefix, streamed both ways. No engine
     // configured means no route at all: this falls through to the ordinary 404
