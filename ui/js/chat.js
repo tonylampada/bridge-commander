@@ -4,6 +4,7 @@
 // premium composer.
 import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
+import { composerPaste } from './composerpaste.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { speakMessage, trackMessages } from './voice.js';
@@ -718,13 +719,9 @@ api.config().then((cfg) => mountMic({
   errEl: document.getElementById('chat-mic-err'),
   stt: !!(cfg && cfg.stt),
 }), () => {});
-// paste-image from the clipboard (screenshots)
+// paste: files become attachments, text is inserted by us (composerpaste.js)
 inputEl.addEventListener('paste', (e) => {
-  const items = e.clipboardData && e.clipboardData.items;
-  if (!items) return;
-  const files = [];
-  for (const it of items) { if (it.kind === 'file') { const f = it.getAsFile(); if (f) files.push(f); } }
-  if (files.length) { e.preventDefault(); addPendingFiles(files); }
+  composerPaste(e, { input: inputEl, doc: document, addFiles: addPendingFiles });
 });
 
 function autoGrow(t) { t.style.height = 'auto'; t.style.height = Math.min(t.scrollHeight, 132) + 'px'; }
