@@ -1644,6 +1644,18 @@ a.a-uri { color: var(--accent); }
 #usage-screen { display: none; }
 #board-wrap.usage-mode #board { display: none; }
 #board-wrap.usage-mode #usage-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+/* 📄 a lieutenant's page, framed */
+#page-screen { display: none; }
+#board-wrap.page-mode #board { display: none; }
+#board-wrap.page-mode #page-screen { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+#pg-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: #fff; }
+.pg-title { flex: none; font-weight: 650; color: var(--text); }
+.pg-upd { flex: none; color: var(--dim); }
+.pg-upd.stale { color: var(--warn); }
+.pg-sp { flex: 1; }
+#pg-head .pg-act { flex: none; color: var(--dim); padding: 2px 8px; border: 1px solid var(--line); border-radius: 7px; background: var(--panel); text-decoration: none; }
+#pg-head .pg-act:hover { color: var(--text); border-color: var(--line2); }
+.pg-empty { margin: 24px; }
 
 .tv-scroll { flex: 1; min-height: 0; overflow: auto; padding: 0 16px 16px; }
 table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 820px; }
@@ -1910,6 +1922,11 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .chat-call { flex: none; color: var(--faint); font-size: 15px; line-height: 1; padding: 7px 7px; border-radius: 7px; transition: color .12s, background .12s; }
 .chat-call:hover { color: var(--ok); background: var(--ok-soft); }
 .chat-call.live { color: var(--danger); }
+/* 📄 + how old the page is; amber past a day (ltpage.js sets .stale) */
+.chat-page { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--faint); font-size: 14px; line-height: 1; padding: 7px 7px; border-radius: 7px; transition: color .12s, background .12s; }
+.chat-page:hover, .chat-page.on { color: var(--accent); background: var(--accent-soft); }
+.chat-page .cp-ago { font-size: 11px; color: var(--dim); }
+.chat-page.stale .cp-ago { color: var(--warn); }
 .call-view {
   position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column; align-items: center;
   gap: 18px; padding: max(18px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
