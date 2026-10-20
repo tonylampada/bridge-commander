@@ -53,7 +53,7 @@ test('the region goes to the ⚡ screen, and the board gets out of its way', () 
 test('the way out is the switcher, not a back button of its own', () => {
   const screen = html.slice(html.indexOf('id="auto-screen"'), html.indexOf('</main>'));
   assert.ok(!/fs-back|ss-back/.test(screen), 'no ⟵ — it is a switcher mode, not a screen');
-  assert.match(mainSrc, /const SCREENS = \['file', 'settings'\];/, 'and it is not one of the screens');
+  assert.ok(!/'auto'/.test(/const SCREENS = \[[^\]]*\]/.exec(mainSrc)[0]), 'and it is not one of the screens');
 });
 
 // Entering is a fresh look at the clock, the same contract setWsTab gives a

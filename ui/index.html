@@ -138,6 +138,9 @@
       <button id="chat-lt-peek" class="lts-peek" type="button" hidden title="watch this lieutenant's terminal live">👁</button>
       <button id="chat-lt-menu" class="lts-menu" type="button" hidden title="lieutenant actions">⋯</button>
       <button id="chat-call" class="chat-call" type="button" hidden title="call this lieutenant (hands-free)">📞</button>
+      <!-- the lieutenant's page (lieutenants/<id>/page/), with how old it is;
+           shown only when it has one — ltpage.js -->
+      <button id="chat-page" class="chat-page" type="button" hidden></button>
       <div id="chat-title">💬 chat</div>
       <button id="chat-card-open" title="open card" hidden>open card</button>
     </div>
@@ -176,6 +179,11 @@
     <div id="table"></div>
     <div id="archive"></div>
     <div id="filepane"></div>
+    <!-- 📄 a lieutenant's page: its own HTML, framed (ltpage.js) -->
+    <div id="page-screen">
+      <div id="pg-head" class="fs-head"></div>
+      <iframe id="pg-frame" title="lieutenant page"></iframe>
+    </div>
     <!-- the config screen: one section per thing the BOARD owns, as opposed to
          the browser looking at it — labels, playbooks, projects, lieutenants. -->
     <div id="settings-screen">

@@ -27,6 +27,7 @@ import { renderProjects } from './projmanager.js';
 import { renderLieutenants } from './ltmanager.js';
 import { renderAutomation } from './automation.js';
 import { renderUsage } from './usage.js';
+import { renderPageScreen, onPageModeSwitch, onPageBack, forgetPage } from './ltpage.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 import { onOpenCard as pushOnOpenCard } from './push.js'; // phone push: the switch + the notification tap
@@ -140,7 +141,7 @@ for (const b of document.querySelectorAll('#ss-tabs button')) {
 // opening a file, or from the gear), and never remembered — MODE_BTN is the
 // whole rule, so a reload comes back to the last switcher mode.
 const MODE_BTN = { board: 'vs-board', table: 'vs-table', archive: 'vs-arch', auto: 'vs-auto', usage: 'vs-usage' };
-const SCREENS = ['file', 'settings'];
+const SCREENS = ['file', 'settings', 'page'];
 // Entering ⚡ is a fresh look at the clock, not last visit's answer — the same
 // contract setWsTab gives a config section. The render loop below hands this to
 // renderAutomation once and clears it, so the board events that follow repaint
@@ -155,6 +156,7 @@ function setBoardMode(mode) {
   if (mode !== S.boardMode && auxDetailKey()) closeDetail();
   if (!MODE_BTN[mode] && !SCREENS.includes(mode)) mode = 'board';
   if (mode !== 'file') forgetFile(); // anything else leaves the file screen
+  if (mode !== 'page') forgetPage();
   S.boardMode = mode;
   if (MODE_BTN[mode]) try { localStorage.setItem('bc-board-mode', mode); } catch (e) {}
   const wrap = document.getElementById('board-wrap');
@@ -164,6 +166,7 @@ function setBoardMode(mode) {
   wrap.classList.toggle('usage-mode', mode === 'usage');
   wrap.classList.toggle('file-mode', mode === 'file');
   wrap.classList.toggle('settings-mode', mode === 'settings');
+  wrap.classList.toggle('page-mode', mode === 'page');
   for (const [m, id] of Object.entries(MODE_BTN)) {
     document.getElementById(id).classList.toggle('on', m === mode);
   }
@@ -188,6 +191,8 @@ function tapBoardTab() {
 }
 document.getElementById('ss-back').onclick = leaveScreen;
 onModeSwitch(setBoardMode);   // the file screen flips the mode through this one owner
+onPageModeSwitch(setBoardMode); // …and so does the lieutenant page
+onPageBack(leaveScreen);
 onQuoteSource(fileQuote);     // …and is where every message's file context comes from
 // Mobile collapses the switcher to just the active mode's button; tapping it
 // opens a small dropdown of the four modes. Desktop shows all four buttons,
@@ -307,6 +312,7 @@ onRender(() => {
   // under the captain's cursor would eat what he is typing.
   if (S.boardMode === 'file') { /* nothing to repaint */ }
   else if (S.boardMode === 'settings') WS_RENDER[wsTab]();
+  else if (S.boardMode === 'page') renderPageScreen();
   else if (S.boardMode === 'auto') { renderAutomation(enteringAuto); enteringAuto = false; }
   else if (S.boardMode === 'usage') { renderUsage(enteringUsage); enteringUsage = false; }
   else if (S.boardMode === 'archive') renderArchive();

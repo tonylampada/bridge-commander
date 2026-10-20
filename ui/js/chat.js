@@ -16,6 +16,7 @@ import { CHAT_KEY, CLOSED, encodeChat, decodeChat } from './chatmem.js';
 import { slashOptions } from './slash.js';
 import { mountMic } from './mic.js';
 import { mountCallButton, syncButton as syncCallButton } from './call.js';
+import { mountPageButton, syncPageButton } from './ltpage.js';
 import { activityHtml, onActivity } from './activity.js';
 
 const feedEl = document.getElementById('chat-feed');
@@ -434,6 +435,7 @@ export function renderChat() {
   ltBtn.hidden = isCard || !lt;
   ltPeekBtn.hidden = ltMenuBtn.hidden = ltBtn.hidden; // current lt's 👁/⋯ ride with the trigger
   syncCallButton(!ltBtn.hidden); // 📞 too — a call is with a lieutenant, never a card thread
+  syncPageButton(); // 📄 follows the lieutenant behind the conversation, card threads included
   titleEl.hidden = !ltBtn.hidden;
   if (isCard || !lt) setHtmlIfChanged(titleEl, esc(cardEmoji(c) + ' ' + (c.title || c.id)));
   else setHtmlIfChanged(ltBtn, ltTriggerHtml(lt));
@@ -710,6 +712,8 @@ composerEl.addEventListener('drop', (e) => {
 });
 // 📞 call mode (call.js): shown only where the board has both STT and TTS.
 if (callBtn) mountCallButton(callBtn, currentLieutenant);
+// 📄 the lieutenant's page (ltpage.js): shown only when it has one.
+mountPageButton(document.getElementById('chat-page'), currentLieutenant);
 // The microphone, if the board has an engine behind /api/stt. mic.js mounts
 // nothing when it does not — a board with no stt block is byte-for-byte the
 // composer it was before this feature existed.

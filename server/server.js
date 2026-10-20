@@ -80,6 +80,7 @@ const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
+const { resolvePageFile, pageInfo } = require(path.join(__dirname, 'ltpage.js'));
 const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
 const webpush = require(path.join(__dirname, 'webpush.js'));
 const { proxyTts } = require(path.join(__dirname, 'ttsproxy.js'));
@@ -1240,6 +1241,10 @@ function publicBoard(user) {
     lieutenants: board.lieutenants.map((l) => Object.assign({}, withStatusAge(l), {
       chatOwed: targetOwed('lieutenant:' + l.id, msgSeqs),
       chatQueued: targetQueued('lieutenant:' + l.id, msgSeqs),
+      // {updated} when lieutenants/<id>/page/index.html exists, else null —
+      // read off the disk on every broadcast, since the lieutenant writes it
+      // without telling the board.
+      page: pageInfo(WORKSPACE, l.id),
     })),
   });
 }
@@ -4390,6 +4395,36 @@ function serveStatic(res, rel) {
   res.end(data);
 }
 
+// A lieutenant's page (server/ltpage.js). `/lt/<id>` redirects to the slash
+// form so the page's relative asset links resolve under it. Unknown lieutenant,
+// missing file and a path out of page/ are all the same 404.
+function serveLtPage(res, rawId, rawRest) {
+  let id, rel;
+  try { id = decodeURIComponent(rawId); rel = decodeURIComponent((rawRest || '').slice(1)); }
+  catch (e) { return sendJson(res, 404, { error: 'not found' }); }
+  if (!findLieutenant(id)) return sendJson(res, 404, { error: 'not found' });
+  if (rawRest === undefined) {
+    res.writeHead(301, { Location: '/lt/' + encodeURIComponent(id) + '/' });
+    return res.end();
+  }
+  const file = resolvePageFile(WORKSPACE, id, rel);
+  let data;
+  try { data = file && fs.readFileSync(file); } catch (e) { data = null; }
+  if (!data) return sendJson(res, 404, { error: 'not found' });
+  res.writeHead(200, {
+    'Content-Type': MIME[path.extname(file).toLowerCase()] || LT_PAGE_MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+    // the lieutenant rewrites it on its own schedule: always the newest
+    'Cache-Control': 'no-store',
+  });
+  res.end(data);
+}
+const LT_PAGE_MIME = {
+  '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.ico': 'image/x-icon',
+  '.json': 'application/json', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8', '.woff2': 'font/woff2', '.pdf': 'application/pdf',
+  '.mp4': 'video/mp4', '.webm': 'video/webm', '.mp3': 'audio/mpeg',
+};
+
 // The one uri the artifact routes accept that is not listed on a card: a
 // playbook. The config screen edits them in the same editor a card artifact
 // opens in, which means the same GET, the same version check and the same 409 —
@@ -4521,6 +4556,11 @@ const server = http.createServer(async (req, res) => {
     // ----- ui -----
     if (route === 'GET /') return serveStatic(res, 'index.html');
     if (req.method === 'GET' && p.startsWith('/ui/')) return serveStatic(res, p.slice(4));
+
+    // ----- lieutenant pages: lieutenants/<id>/page/, static, read-only -----
+    if (route === 'GET /lt/_bc.js') return serveStatic(res, 'lt/_bc.js');
+    const ltPage = req.method === 'GET' && /^\/lt\/([^/]+)(\/.*)?$/.exec(p);
+    if (ltPage) return serveLtPage(res, ltPage[1], ltPage[2]);
 
     // ----- reads -----
     if (route === 'GET /api/board') return sendJson(res, 200, publicBoard(url.searchParams.get('user') || 'user'));
@@ -4944,7 +4984,7 @@ const server = http.createServer(async (req, res) => {
     // gates its git reads: the tab asks, nobody else pays.
     if (route === 'GET /api/lieutenants') {
       if (!/^(1|true)$/.test(url.searchParams.get('live') || '')) {
-        return sendJson(res, 200, { lieutenants: board.lieutenants.map(withStatusAge) });
+        return sendJson(res, 200, { lieutenants: board.lieutenants.map((l) => Object.assign({}, withStatusAge(l), { page: pageInfo(WORKSPACE, l.id) })) });
       }
       const lieutenants = await Promise.all(board.lieutenants.map(async (l) => Object.assign({}, withStatusAge(l), {
         cards: board.cards.filter((c) => c.owner === l.id).length,
