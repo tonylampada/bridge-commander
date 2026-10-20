@@ -41,7 +41,7 @@ test('the bar: who, the state, Send, mute, hang up and the way back', () => {
   assert.match(bar, /insertBefore\(b, layout\)/);
   assert.match(css, /\.call-bar \{\s*flex: none;/);
   assert.ok(!/\.call-bar \{[^}]*position: (fixed|absolute)/.test(css), 'not floating over anything');
-  assert.match(css, /body\.call-bar #detail \{ top: var\(--callbar-bottom/, 'card detail starts under it');
+  assert.match(css, /body\.call-minimized #detail \{ top: var\(--callbar-bottom/, 'card detail starts under it');
   // the same handlers drive both faces
   assert.match(call, /c\.view\.send\.onclick = bar\.send\.onclick/);
   assert.match(call, /c\.view\.mute\.onclick = bar\.mute\.onclick/);

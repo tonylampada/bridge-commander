@@ -2023,9 +2023,9 @@ body.in-call .speech-transport { display: none; }
 .call-bar .cb-mute svg { width: 18px; height: 18px; }
 .cb-hangup { flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--danger); color: #fff; font-size: 15px; line-height: 1; }
 /* the card detail is fixed from the top of the screen: it starts under the bar */
-body.call-bar #detail { top: var(--callbar-bottom, 0); }
+body.call-minimized #detail { top: var(--callbar-bottom, 0); }
 @media (max-width: 760px) {
-  body.call-bar #detail { padding-top: 0; }
+  body.call-minimized #detail { padding-top: 0; }
   .call-bar { gap: 6px; padding: 5px 8px; }
   .cb-send { padding: 0 13px; }
 }

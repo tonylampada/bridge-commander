@@ -341,7 +341,7 @@ function minimize(c, on) {
   c.minimized = !!on;
   c.view.root.hidden = c.minimized;
   c.view.bar.root.hidden = !c.minimized;
-  document.body.classList.toggle('call-bar', c.minimized);
+  document.body.classList.toggle('call-minimized', c.minimized);
   c.touched = Date.now();
   c.view.root.classList.remove('dim');
   placeBar(c);
@@ -1106,7 +1106,7 @@ export function endCall(reason) {
   try { c.ctx.close(); } catch (e) {}
   c.view.root.remove();
   c.view.bar.root.remove();
-  document.body.classList.remove('in-call', 'call-bar');
+  document.body.classList.remove('in-call', 'call-minimized');
   placeBar(null);
   setAutoSpeakGate(null);
   endedAway = reason === 'away';
