@@ -528,3 +528,34 @@ test('mute is applied to the track, and to every fresh track after a remic', () 
 test('a new call starts unmuted', () => {
   assert.strictEqual(C.createMute(C.createVad()).muted, false);
 });
+
+// ── Send: "I'm done talking" (MNC-299) ───────────────────────────────────────
+
+test('flush ends the utterance now, mid-pause, before hangMs would', () => {
+  const vad = C.createVad({ hangMs: 1500 });
+  const { t } = drive(vad, [[-70, 1000], [-25, 1200], [-70, 400]]);
+  assert.ok(vad.speaking, 'a 400ms pause is still inside the utterance');
+  const e = vad.flush(t);
+  assert.strictEqual(e.type, 'end');
+  assert.strictEqual(e.lastVoice, 2200);
+  assert.ok(e.voicedMs >= 1000, 'the voiced time it carries: ' + e.voicedMs);
+  assert.strictEqual(vad.speaking, false);
+  // the silence that follows ends nothing a second time
+  assert.deepStrictEqual(drive(vad, [[-70, 3000]], t).evs, []);
+});
+
+test('flush outside an utterance is nothing; over a cough it is a drop', () => {
+  const vad = C.createVad();
+  const { t } = drive(vad, [[-70, 1000]]);
+  assert.strictEqual(vad.flush(t), null);
+  const cough = drive(vad, [[-25, 200]], t);
+  assert.strictEqual(vad.flush(cough.t).type, 'drop');
+});
+
+test('after a flush, his next words start a new utterance', () => {
+  const vad = C.createVad({ hangMs: 1500 });
+  const { t } = drive(vad, [[-70, 1000], [-25, 800]]);
+  assert.strictEqual(vad.flush(t).type, 'end');
+  const next = drive(vad, [[-25, 600], [-70, 2000]], t).evs.map((e) => e.type);
+  assert.deepStrictEqual(next, ['start', 'end']);
+});

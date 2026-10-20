@@ -1988,6 +1988,47 @@ table.tv { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 8
 .call-mute[aria-pressed="true"] { background: var(--text); color: var(--bg); border-color: var(--text); }
 .call-view.muted .call-meter span { width: 0 !important; }
 body.in-call .speech-transport { display: none; }
+/* ⌄ puts the call view away; the call goes on in the bar below */
+.call-view[hidden] { display: none; }
+.call-top { align-items: center; }
+.call-min { color: var(--dim); font-size: 22px; line-height: 1; padding: 2px 10px 6px; margin: -4px 0 0 -8px; border-radius: 8px; }
+.call-min:hover { color: var(--text); background: var(--panel2); }
+/* The call bar: a row of the page's own column, between #topbar and #layout,
+   so it pushes everything down rather than covering the composer or a control.
+   Shown while a call is on and its view is put away. */
+.call-bar {
+  flex: none; display: flex; align-items: center; gap: 8px; padding: 6px 10px 6px 8px;
+  background: var(--panel); border-bottom: 1px solid var(--line2); position: relative; z-index: 6;
+}
+.call-bar[hidden] { display: none; }
+.cb-open { flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: 9px; text-align: left; padding: 2px 4px; border-radius: 8px; }
+.cb-open:hover { background: var(--panel2); }
+.cb-open .call-avatar { width: 30px; height: 30px; flex: none; box-shadow: 0 0 0 2px var(--line2); }
+.cb-open .call-avatar-none { font-size: 14px; }
+.cb-who { min-width: 0; display: flex; flex-direction: column; line-height: 1.2; }
+.cb-name { font-weight: 600; font-size: 13.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cb-state { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; }
+.cb-state .call-dot { width: 7px; height: 7px; }
+.call-bar[data-state="speaking"] .call-avatar { box-shadow: 0 0 0 2px var(--accent); }
+.call-bar[data-state="capturing"] .call-avatar { box-shadow: 0 0 0 2px var(--ok); }
+.call-bar[data-state="listening"] .call-dot { background: var(--ok); }
+.call-bar[data-state="capturing"] .call-dot { background: var(--ok); animation: call-pulse .8s ease-in-out infinite; }
+.call-bar[data-state="sending"] .call-dot,
+.call-bar[data-state="thinking"] .call-dot { background: var(--warn); animation: call-pulse 1.2s ease-in-out infinite; }
+.call-bar[data-state="speaking"] .call-dot { background: var(--accent); }
+.call-bar[data-state="ended"] .call-dot { background: var(--danger); }
+.cb-send { flex: none; height: 34px; padding: 0 16px; border-radius: 17px; background: var(--ok); color: #fff; font-weight: 600; }
+.cb-send:disabled { opacity: .35; cursor: default; }
+.call-bar .cb-mute { width: 36px; height: 36px; }
+.call-bar .cb-mute svg { width: 18px; height: 18px; }
+.cb-hangup { flex: none; width: 36px; height: 36px; border-radius: 50%; background: var(--danger); color: #fff; font-size: 15px; line-height: 1; }
+/* the card detail is fixed from the top of the screen: it starts under the bar */
+body.call-bar #detail { top: var(--callbar-bottom, 0); }
+@media (max-width: 760px) {
+  body.call-bar #detail { padding-top: 0; }
+  .call-bar { gap: 6px; padding: 5px 8px; }
+  .cb-send { padding: 0 13px; }
+}
 /* wide screens: the call takes the chat pane only, the board stays usable */
 .call-view.docked { position: absolute; inset: 0; z-index: 4; padding: 14px 16px 22px; }
 .call-view.docked .call-who { margin-top: 2vh; }
