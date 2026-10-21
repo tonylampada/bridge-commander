@@ -18,6 +18,9 @@
 //   played. getUserMedia comes after, and its prompt is the permission prompt.
 // · No call survives the page being hidden. iOS gives a hidden page no
 //   microphone, so a locked screen ENDS the call, and coming back says so.
+// · Every call survives the board's own navigation. The call view can be put
+//   away (⌄): the call keeps its mic, its VAD and its voice, and a bar under
+//   the top bar carries it from screen to screen until he hangs up.
 import { api } from './api.js';
 import { lieutenant, lieutenantByActor, lieutenantAvatar, render, USER } from './state.js';
 import { avatarHtml } from './avatars.js';
@@ -43,6 +46,13 @@ const FILLERS_CACHED = 3;
 // turns he did not mean to end, so the default stays a radio word; STT is
 // helped to hear it instead (sttBias).
 const KEYWORDS = ['câmbio'];
+// Silence mode's end of turn. Send is the "I'm done" now, so silence is only
+// the fallback for when he is not looking at the screen — long enough that a
+// pause to think mid-sentence (pt-BR runs 400-600ms, a thought far longer) is
+// not taken for the end, short enough that a hands-free turn still goes.
+// VAD_DEFAULTS' 800ms cut him off; keyword mode chunks at 600 and is not
+// affected, since a chunk ending never ends his turn there.
+const SILENCE_HANG_MS = 1500;
 
 // What the STT is told to expect in keyword mode: Whisper's `hotwords` (the
 // keywords) and, only when tuned, `initial_prompt` (whisper_server POST
@@ -253,7 +263,8 @@ function buildView(lt) {
   v.setAttribute('aria-label', 'call with ' + (lt.name || lt.id));
   const av = avatarHtml(lieutenantAvatar(lt.id), 'call-avatar');
   v.innerHTML =
-    '<div class="call-top"><span class="call-clock">00:00</span><span class="call-mic"></span><span class="call-tag">📞 call</span></div>' +
+    '<div class="call-top"><button type="button" class="call-min" title="keep talking while you use the board" aria-label="minimize the call">⌄</button>' +
+    '<span class="call-clock">00:00</span><span class="call-mic"></span><span class="call-tag">📞 call</span></div>' +
     '<div class="call-who">' + (av || '<span class="call-avatar call-avatar-none">' + esc((lt.name || lt.id).slice(0, 1).toUpperCase()) + '</span>') +
     '<div class="call-name">' + esc(lt.name || lt.id) + '</div>' +
     '<div class="call-act" hidden></div></div>' +
@@ -269,8 +280,11 @@ function buildView(lt) {
     '<button type="button" class="call-mute" title="mute (M)" aria-label="mute" aria-pressed="false">' + MIC_ICON + '</button>' +
     '<button type="button" class="call-hangup" title="hang up">✕</button></div></div>';
   dock(v);
+  const bar = buildBar(lt, av);
   return {
     root: v,
+    min: v.querySelector('.call-min'),
+    bar,
     clock: v.querySelector('.call-clock'),
     mic: v.querySelector('.call-mic'),
     label: v.querySelector('.call-label'),
@@ -285,6 +299,67 @@ function buildView(lt) {
     act: v.querySelector('.call-act'),
     tip: v.querySelector('.call-tip'),
   };
+}
+
+// The bar the call lives in while he is elsewhere on the board: who, the
+// state, Send, mute, hang up, and the way back. In the page's own column
+// between the top bar and the layout, so it pushes the board down instead of
+// covering the composer or a control; the card detail (fixed, from the top)
+// is moved below it (--callbar-bottom).
+function buildBar(lt, av) {
+  const b = document.createElement('div');
+  b.id = 'call-bar';
+  b.className = 'call-bar';
+  b.hidden = true;
+  b.setAttribute('role', 'region');
+  b.setAttribute('aria-label', 'call with ' + (lt.name || lt.id));
+  b.innerHTML =
+    '<button type="button" class="cb-open" title="back to the call">' +
+    (av || '<span class="call-avatar call-avatar-none">' + esc((lt.name || lt.id).slice(0, 1).toUpperCase()) + '</span>') +
+    '<span class="cb-who"><span class="cb-name">' + esc(lt.name || lt.id) + '</span>' +
+    '<span class="cb-state" aria-live="polite"><span class="call-dot"></span><span class="cb-label">connecting…</span></span></span></button>' +
+    '<button type="button" class="cb-send" disabled>Send</button>' +
+    '<button type="button" class="cb-mute call-mute" title="mute (M)" aria-label="mute" aria-pressed="false">' + MIC_ICON + '</button>' +
+    '<button type="button" class="cb-hangup" title="hang up" aria-label="hang up">✕</button>';
+  const layout = document.getElementById('layout');
+  if (layout && layout.parentNode) layout.parentNode.insertBefore(b, layout);
+  else document.body.appendChild(b);
+  return {
+    root: b,
+    open: b.querySelector('.cb-open'),
+    label: b.querySelector('.cb-label'),
+    send: b.querySelector('.cb-send'),
+    mute: b.querySelector('.cb-mute'),
+    hangup: b.querySelector('.cb-hangup'),
+  };
+}
+
+// The call view put away (the bar shows) or brought back. Nothing about the
+// call itself changes: this is only which of its two faces is on screen.
+function minimize(c, on) {
+  if (call !== c) return;
+  c.minimized = !!on;
+  c.view.root.hidden = c.minimized;
+  c.view.bar.root.hidden = !c.minimized;
+  document.body.classList.toggle('call-minimized', c.minimized);
+  c.touched = Date.now();
+  c.view.root.classList.remove('dim');
+  placeBar(c);
+  render();     // the board under the view is in view again, and may be stale
+}
+function placeBar(c) {
+  const root = document.documentElement;
+  if (!c || !c.minimized) return root.style.removeProperty('--callbar-bottom');
+  root.style.setProperty('--callbar-bottom', Math.round(c.view.bar.root.getBoundingClientRect().bottom) + 'px');
+}
+if (typeof window !== 'undefined' && window.addEventListener) {
+  window.addEventListener('resize', () => { if (call) placeBar(call); });
+}
+
+// What the state line says, on the call view and on the bar alike.
+function label(c, text) {
+  c.view.label.textContent = text;
+  c.view.bar.label.textContent = text;
 }
 
 // ── the call ────────────────────────────────────────────────────────────────
@@ -318,7 +393,7 @@ export function startCall(ltId) {
   const mode = tune.endMode === 'silence' ? 'silence' : 'keyword';
   // Keyword mode chunks short and never holds a chunk long, so in a room the
   // VAD can never call quiet the keyword still gets transcribed within seconds.
-  const vadOpts = Object.assign(mode === 'keyword' ? { hangMs: 600, maxUtteranceMs: 6000 } : {}, tune);
+  const vadOpts = Object.assign(mode === 'keyword' ? { hangMs: 600, maxUtteranceMs: 6000 } : { hangMs: SILENCE_HANG_MS }, tune);
   const out = ctx.createGain();
   out.connect(ctx.destination);
   const c = call = {
@@ -347,6 +422,7 @@ export function startCall(ltId) {
     nth: 0,               // replies seen in this turn
     seen: new Set(), started: Date.now(), timer: null,
     paused: false, hiddenAt: 0, awayTimer: null,
+    minimized: false,     // the view put away, the bar showing
     debug: !!tune.debug,
     note(msg) { c.view.note.textContent = msg || ''; c.view.note.hidden = !msg; },
   };
@@ -354,10 +430,14 @@ export function startCall(ltId) {
   c.mute = createMute(c.vad);   // a new call starts unmuted
   if (c.mode === 'keyword') c.sttBias = sttBias(tune, c.keywords);
   c.player.onIdle = () => { if (call === c && c.state === 'speaking') go('done'); };
-  c.view.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
-  c.view.send.hidden = c.mode !== 'keyword';
-  c.view.send.onclick = (e) => { e.stopPropagation(); sendTurn(c); };
-  c.view.mute.onclick = (e) => { e.stopPropagation(); toggleMute(c); };
+  const bar = c.view.bar;
+  c.view.hangup.onclick = bar.hangup.onclick = (e) => { e.stopPropagation(); endCall('hangup'); };
+  c.view.send.hidden = false;
+  c.view.send.onclick = bar.send.onclick = (e) => { e.stopPropagation(); sendTurn(c); };
+  c.view.mute.onclick = bar.mute.onclick = (e) => { e.stopPropagation(); toggleMute(c); };
+  c.view.min.onclick = (e) => { e.stopPropagation(); minimize(c, true); };
+  bar.open.onclick = (e) => { e.stopPropagation(); minimize(c, false); };
+  bar.root.addEventListener('click', () => { try { c.ctx.resume(); } catch (e) {} });
   // the buffered transcript is his to throw away with a tap
   c.view.heard.onclick = (e) => { e.stopPropagation(); if (c.mode === 'keyword') clearBuffer(c, 'cleared'); };
   // any tap on the call view also wakes an audio session iOS left interrupted
@@ -383,7 +463,7 @@ export function startCall(ltId) {
     c.view.clock.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
     tickFiller();
     tickStatus();
-    if (!c.view.root.classList.contains('dim') && Date.now() - c.touched > DIM_MS) c.view.root.classList.add('dim');
+    if (!c.minimized && !c.view.root.classList.contains('dim') && Date.now() - c.touched > DIM_MS) c.view.root.classList.add('dim');
   }, 250);
   // what the lieutenant is doing, under the avatar (activity.js)
   const showAct = () => { const h = activityHtml(c.ltId); c.view.act.innerHTML = h; c.view.act.hidden = !h; };
@@ -405,7 +485,7 @@ async function open(c) {
       ? 'no microphone outside https — open ' + (httpsHere() || 'the board over https') + ' to call'
       : 'this browser gives no microphone here — open the board in Safari to call');
   }
-  c.view.label.textContent = 'allow the microphone…';
+  label(c, 'allow the microphone…');
   try {
     await attachMic(c);
   } catch (e) {
@@ -509,8 +589,8 @@ function httpsHere() {
 
 function fail(c, msg) {
   if (call !== c) return;
-  c.view.label.textContent = 'cannot call';
-  c.view.root.dataset.state = 'ended';
+  label(c, 'cannot call');
+  c.view.root.dataset.state = c.view.bar.root.dataset.state = 'ended';
   c.note(msg);
 }
 
@@ -520,11 +600,12 @@ function go(ev) {
   const was = c.state;
   c.state = nextCallState(c.state, ev, { awaiting: c.awaiting });
   if (c.state === was) return;
-  c.view.root.dataset.state = c.state;
-  c.view.label.textContent = stateLabel(c);
+  c.view.root.dataset.state = c.view.bar.root.dataset.state = c.state;
+  label(c, stateLabel(c));
   // a reply that landed while he was talking (held) starts when he stops
   c.player.hold(c.state === 'capturing' || c.state === 'sending');
   if ((c.state === 'listening' || c.state === 'thinking') && c.player.queue.length) go('reply');
+  showSend(c);
   if (c.debug) console.info('[call]', was, '--' + ev + '->', c.state);
 }
 
@@ -547,11 +628,13 @@ function onVad(c, ev) {
     } else {
       go('speech');
     }
+    showSend(c);
     return;
   }
   const take = c.take;
   c.take = null;
   if (!take) return;
+  showSend(c);
   clearTimeout(take.probe);
   // a barge still on probation never left 'speaking'; words decide later
   take.probation = take.barge && !take.confirmed;
@@ -698,15 +781,35 @@ function resetTurn(c) {
   c.sendNow = false;
 }
 
-// The Send button: the keyword, tapped. "câmbio" lost in the noise still ends
-// the turn. A chunk he is still saying, or one still at the STT, is part of it:
-// the turn ends when that one is heard. Otherwise the turn is heard once more,
-// whole, and sent.
+// The Send button, on the call view and on the bar: "I'm done talking". The
+// utterance he is in ends NOW instead of after hangMs of silence (vad.flush),
+// so a long pause to think is not what decides. Silence mode: that utterance
+// is the turn, and goes. Keyword mode: it is the keyword, tapped — the chunk
+// joins the turn and the whole turn is heard once more and sent; one still at
+// the STT is part of it. A barge-in still on probation is him, confirmed by
+// the tap.
+function canSend(c) {
+  if (c.paused || (c.mute.muted && !c.buffer)) return false;
+  if (c.mode === 'keyword') return !c.sendNow && !!(c.buffer || c.take);
+  return !!c.take;
+}
+function showSend(c) {
+  const off = !canSend(c);
+  c.view.send.disabled = off;
+  c.view.bar.send.disabled = off;
+}
 function sendTurn(c) {
-  if (call !== c || c.mode !== 'keyword' || !c.buffer) return;
-  c.sendNow = true;
-  c.view.send.disabled = true;
-  if (c.state !== 'capturing') flushTurn(c);
+  if (call !== c || !canSend(c)) return;
+  if (c.mode === 'keyword') c.sendNow = true;
+  const take = c.take;
+  let ev = null;
+  if (take) {
+    if (take.barge && !take.confirmed) { clearTimeout(take.probe); confirmBarge(c, take); }
+    ev = c.vad.flush(performance.now());
+  }
+  if (ev) onVad(c, ev);
+  else if (c.mode === 'keyword') flushTurn(c);
+  showSend(c);
 }
 function flushTurn(c) {
   const gen = c.turnGen;
@@ -733,7 +836,7 @@ function showBuffer(c) {
   if (c.mode !== 'keyword') return;
   const h = c.view.heard;
   h.classList.toggle('buffer', !!c.buffer);
-  c.view.send.disabled = !c.buffer || c.sendNow;
+  showSend(c);
   h.innerHTML = c.buffer
     ? esc(c.buffer) + '<span class="call-hint">say ' + said(c.keywords) + ' or tap Send · tap here or say “' + esc(c.cancelWord) + '” to clear</span>'
     : '<span class="call-hint">end with ' + said(c.keywords) + ' to send</span>';
@@ -905,11 +1008,14 @@ function setMute(c, on) {
 function showMute(c) {
   const on = c.mute.muted;
   c.view.root.classList.toggle('muted', on);
-  c.view.label.textContent = stateLabel(c);
-  c.view.mute.innerHTML = on ? MIC_OFF_ICON : MIC_ICON;
-  c.view.mute.title = on ? 'unmute (M)' : 'mute (M)';
-  c.view.mute.setAttribute('aria-label', on ? 'unmute' : 'mute');
-  c.view.mute.setAttribute('aria-pressed', on ? 'true' : 'false');
+  label(c, stateLabel(c));
+  for (const b of [c.view.mute, c.view.bar.mute]) {
+    b.innerHTML = on ? MIC_OFF_ICON : MIC_ICON;
+    b.title = on ? 'unmute (M)' : 'mute (M)';
+    b.setAttribute('aria-label', on ? 'unmute' : 'mute');
+    b.setAttribute('aria-pressed', on ? 'true' : 'false');
+  }
+  showSend(c);
 }
 
 // M on a keyboard, unless he is typing
@@ -999,7 +1105,9 @@ export function endCall(reason) {
   if (c.stream) c.stream.getTracks().forEach((t) => { try { t.stop(); } catch (e) {} });
   try { c.ctx.close(); } catch (e) {}
   c.view.root.remove();
-  document.body.classList.remove('in-call');
+  c.view.bar.root.remove();
+  document.body.classList.remove('in-call', 'call-minimized');
+  placeBar(null);
   setAutoSpeakGate(null);
   endedAway = reason === 'away';
   syncButton();
@@ -1053,7 +1161,8 @@ function pause(c) {
   c.hiddenAt = Date.now();
   if (c.take) { clearTimeout(c.take.probe); if (c.take.barge && !c.take.confirmed) c.player.duck(false); }
   c.take = null; c.pre = [];
-  c.view.label.textContent = 'paused';
+  label(c, 'paused');
+  showSend(c);
   c.awayTimer = setTimeout(() => { if (call === c && c.paused) endCall('away'); }, AWAY_MAX_MS);
   if (c.debug) console.info('[call] paused');
 }
@@ -1068,7 +1177,8 @@ async function resume(c) {
   if (call !== c) return;
   wakeLock(c);                 // the browser lets go of it whenever the page hides
   c.vad.reset();
-  c.view.label.textContent = stateLabel(c);
+  label(c, stateLabel(c));
+  showSend(c);
   c.note(c.ctx.state === 'running' ? '' : 'tap anywhere to bring the sound back');
   if (c.debug) console.info('[call] resumed after', Date.now() - c.hiddenAt, 'ms; audio', c.ctx.state);
 }

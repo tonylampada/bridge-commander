@@ -197,6 +197,17 @@ export function createVad(opts = {}) {
 
   return {
     frame,
+    // Send tapped: the utterance he is in ends now, as if hangMs of silence had
+    // just run out — the same 'end' (or 'drop', under minUtteranceMs) frame()
+    // would give. Outside an utterance there is nothing to end: null. Silence
+    // stays the fallback; this is the "I'm done" he says with a thumb.
+    flush(now) {
+      const was = inUtt;
+      inUtt = false; voicedSince = null;
+      if (!was) return null;
+      if (voicedMs < o.minUtteranceMs) return { type: 'drop', voicedMs };
+      return { type: 'end', at: now, start: uttStart, lastVoice, voicedMs, flushed: true };
+    },
     setBarge(on) { barge = !!on; },
     // a gap in the frames (mute, pause, a new mic) is not time spent in any state
     reset() { inUtt = false; voicedSince = null; voicedMs = 0; last = null; },

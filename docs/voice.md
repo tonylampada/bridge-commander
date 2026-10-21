@@ -96,6 +96,19 @@ is the auth boundary:
 - AirPods stem press does not reach the page: iOS keeps it for its own call-mute gesture
   ("Cannot Control Mic with AirPods"). The on-screen button is the way.
 
+## Using the board during a call
+
+- `⌄` top-left of the call view puts it away; the call keeps mic, VAD, STT, TTS and its
+  lieutenant. A bar under the top bar (who, state, Send, mute, hang up) follows every screen —
+  board, card detail, file, config, the lieutenant page, either phone tab. Tap the name to get
+  the call view back. Only hang-up, the lieutenant leaving the board, 60s+ with the page hidden,
+  or the page unloading end a call.
+- **Send** (call view and bar, both end modes) ends the utterance now instead of waiting for
+  silence: silence mode sends it as the turn; keyword mode treats it as the keyword.
+- Silence-mode `hangMs` is 1500ms (was 800): with Send as the end of turn, silence is only the
+  fallback, and should not cut a pause mid-thought. Keyword mode stays at 600ms — there a chunk
+  ending never ends the turn. Override with `localStorage['bc-call'] = '{"hangMs":…}'`.
+
 ## Checklist
 
 On the board's machine, with the GPU stack working (`docker run --rm --gpus all ubuntu
