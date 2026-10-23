@@ -28,8 +28,9 @@ Every commit goes there.
 Implement, commit, then ship it the way the project allows:
 
 - **The project has a remote** — push and open the PR yourself:
-  `git push -u origin {{BRANCH}}` then `gh pr create`. Report the full PR URL in your done
-  outcome.
+  `git push -u origin {{BRANCH}}` then `gh pr create`. The PR body follows the repo's PR
+  template and conventions; its `AGENTS.md` or `CLAUDE.md` says where they live. Report the full
+  PR URL in your done outcome.
 - **No remote** (`git remote -v` is empty) — never push, never open a PR. Stop when the work
   is complete and committed, and report exactly `ready in branch {{BRANCH}}` plus a one-line
   summary.
