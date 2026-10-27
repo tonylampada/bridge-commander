@@ -234,6 +234,37 @@ test('worker signal + done: card events, owner queue items, prs auto-populated, 
   } finally { await teardown(); }
 });
 
+test('a PR URL in a signal chips the card before done; scoped to the card repo once it resolves', async () => {
+  const { s, teardown } = await boot();
+  try {
+    await s.api('POST', '/api/cards', withOwner({ title: 'Draft early', id: 'draft', attributes: { repo: 'proj' } }));
+    await s.api('POST', '/api/cards/draft/start', { harness: 'fake' });
+    const own = 'https://github.com/acme/proj/pull/12';
+
+    // the clone's origin is a local path: no owner/repo to scope by, so every URL counts
+    await s.api('POST', '/api/cards/draft/worker/signal', { text: 'draft PR open: https://github.com/elsewhere/lib/pull/3' });
+    let card = (await s.api('GET', '/api/cards/draft')).body;
+    assert.deepStrictEqual(card.attributes.prs, [{ url: 'https://github.com/elsewhere/lib/pull/3', state: 'open' }]);
+
+    // point origin at GitHub (after start: the start fetches from origin)
+    const proj = (await s.api('GET', '/api/projects')).body.projects.find((p) => p.name === 'proj');
+    git(proj.path, 'remote', 'set-url', 'origin', 'git@github.com:Acme/proj.git');
+
+    await s.api('POST', '/api/cards/draft/worker/signal', { text: 'draft PR open: ' + own });
+    await s.api('POST', '/api/cards/draft/worker/signal', { text: 'see also https://github.com/other/repo/pull/5' });
+    card = (await s.api('GET', '/api/cards/draft')).body;
+    assert.deepStrictEqual(card.attributes.prs.map((p) => p.url),
+      ['https://github.com/elsewhere/lib/pull/3', own], 'own repo chipped (case-blind), the other repo ignored');
+    assert.strictEqual(card.attributes.prs[1].state, 'open');
+
+    // the same URL again at done: no duplicate
+    await s.api('POST', '/api/cards/draft/worker/done', { outcome: 'shipped: ' + own });
+    card = (await s.api('GET', '/api/cards/draft')).body;
+    assert.strictEqual(card.attributes.prs.filter((p) => p.url === own).length, 1);
+    assert.strictEqual(card.attributes.prs.length, 2);
+  } finally { await teardown(); }
+});
+
 test('investigation: the playbook carries the report contract, no branch; done attaches the report artifact', async () => {
   const { s, fdir, teardown } = await boot();
   try {
