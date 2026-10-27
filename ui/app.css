@@ -1216,6 +1216,9 @@ a.a-uri { color: var(--accent); }
    before — no reserved padding, no empty gap. */
 .msg.agent.has-avatar { position: relative; padding-left: 52px; min-height: 52px; }
 .msg.agent .msg-face { position: absolute; top: 9px; left: 9px; width: 34px; height: 34px; border-radius: 50%; }
+/* a visiting lieutenant's face (it wrote into another lieutenant's feed) wears
+   a ring in its own color */
+.msg.agent.guest .msg-face { box-shadow: 0 0 0 2px var(--guest-color); }
 .chat-empty-avatar { width: 44px; height: 44px; border-radius: 50%; margin: 0 auto 10px; }
 .chat-empty-dot { display: block; width: 14px; height: 14px; border-radius: 50%; margin: 0 auto 10px; }
 

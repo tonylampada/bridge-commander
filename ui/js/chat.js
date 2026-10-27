@@ -2,7 +2,7 @@
 // the lieutenant's main chat or one of its card threads (a card thread's
 // interlocutor is always the owning lieutenant). Whole-window mode switch,
 // premium composer.
-import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
+import { S, card, cards, lieutenants, lieutenant, lieutenantColor, lieutenantName, lieutenantAvatar, bubbleFaceId, lieutenantUnread, cardStatus, cardActivityTs, render, threadUnread, targetOwedState, targetOwedStale, USER } from './state.js';
 import { api } from './api.js';
 import { composerPaste } from './composerpaste.js';
 import { esc, hhmm, dayLabel, cardEmoji, setHtmlIfChanged, fmtSize, isImageMime, statusBlockHtml, ctxBarHtml, owedIndHtml } from './util.js';
@@ -199,7 +199,7 @@ function cmdMsgHtml(m) {
   const badge = '<span class="cmd-badge">⌘ ' + esc(m.cmd.name || '') + '</span>';
   return '<div class="msg cmd cmd-reply">' + chipHtml(m) + badge + body + ts + '</div>';
 }
-function msgHtml(m, promote, avatarIdx) {
+function msgHtml(m, promote, ownerId) {
   if (m.cmd && typeof m.cmd === 'object') return cmdMsgHtml(m);
   const mine = m.author === USER;
   const hasText = !!(m.text && m.text.trim());
@@ -217,14 +217,17 @@ function msgHtml(m, promote, avatarIdx) {
   // like the speak buttons, so it can't desync that mapping.
   const copyBtn = !hasText ? '' :
     '<button class="msg-copy" type="button" data-copy="' + esc(m.text) + '" title="copy message text" aria-label="copy message text">⧉</button>';
-  // face sits inside the bubble, top-left — same face for every agent bubble in
-  // this feed (a card thread's interlocutor is always the owning lieutenant,
-  // so even a worker's stamped-as-owner say gets its face)
-  const hasAvatar = !mine && avatarIdx != null;
+  // face sits inside the bubble, top-left — the sender's face; a visiting
+  // lieutenant's is ringed in its color so it reads as a guest in this feed
+  const faceId = mine ? null : bubbleFaceId(m.author, ownerId);
+  const avatarIdx = faceId ? lieutenantAvatar(faceId) : null;
+  const hasAvatar = avatarIdx != null;
+  const guest = hasAvatar && faceId !== ownerId;
   const face = hasAvatar ? avatarHtml(avatarIdx, 'msg-face') : '';
   // an optimistic (pending) send renders as a normal captain bubble, dimmed,
   // with a clock on the timestamp — provisional, but never error-looking
-  return '<div class="msg ' + (mine ? 'user' : 'agent') + (m._pending ? ' pending' : '') + (hasAvatar ? ' has-avatar' : '') + '">' + face + chipHtml(m) + body + atts +
+  return '<div class="msg ' + (mine ? 'user' : 'agent') + (m._pending ? ' pending' : '') + (hasAvatar ? ' has-avatar' : '') + (guest ? ' guest' : '') + '"' +
+    (guest ? ' style="--guest-color:' + esc(lieutenantColor(faceId)) + '"' : '') + '>' + face + chipHtml(m) + body + atts +
     '<span class="ts">' + (m._pending ? '🕓 ' : '') + (m.via === 'call' ? '📞 ' : '') + who + hhmm(m.ts) + '</span>' + copyBtn + speakBtn + '</div>';
 }
 // empty-conversation placeholder: the lieutenant's face (or its colored dot,
@@ -451,7 +454,6 @@ export function renderChat() {
   const pinned = feedEl.scrollHeight - feedEl.scrollTop - feedEl.clientHeight < 48;
 
   const blocks = []; // {html, msg?} — msg only on lieutenant bubbles, for speak wiring
-  const avatarIdx = lt ? lieutenantAvatar(lt.id) : null;
   let lastDay = '';
   const push = (m) => {
     const day = m.ts ? dayLabel(m.ts) : '';
@@ -460,7 +462,7 @@ export function renderChat() {
     // command blocks render no speak button, so they carry no `msg` (speak wiring
     // maps buttons to blocks-with-msg by index — a command block would desync it)
     const speakable = m.author !== USER && !(m.cmd && typeof m.cmd === 'object');
-    blocks.push({ html: h + msgHtml(m, isCard, avatarIdx), msg: speakable ? m : null });
+    blocks.push({ html: h + msgHtml(m, isCard, lt ? lt.id : null), msg: speakable ? m : null });
   };
   // optimistic sends: reconciled against the server thread on every render
   // (the entry drops in the same paint that first shows its echo — never both),
