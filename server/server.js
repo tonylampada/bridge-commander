@@ -3378,8 +3378,39 @@ function lastWordOf(w) {
   return w.lastTurnEndText || w.lastSignalText || '';
 }
 
+// The GitHub `owner/repo` a card's work lands in: its `repo` attribute names a
+// registered project, whose clone's origin says where it pushes. Lowercase
+// (GitHub matches names case-blind); null when any link is missing or origin
+// is not GitHub.
+function cardGithubRepo(card) {
+  const name = card.attributes && card.attributes.repo;
+  const project = name && findProject(String(name));
+  if (!project) return null;
+  const remote = projectGit(project.path).remote;
+  const m = remote && remote.match(/github\.com[:/]([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/i);
+  return m ? (m[1] + '/' + m[2]).toLowerCase() : null;
+}
+
+// PR URLs in a worker's words — a signal or the done outcome — become the
+// card's `prs` chips, deduped by url, state open (the PR watch refines it from
+// there). Scoped to the card's own repo when that resolves, so a signal that
+// mentions another repo's PR leaves the card alone; unresolvable, every URL
+// counts.
+const PR_URL_RE = /https:\/\/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/\d+/g;
+function harvestPrUrls(card, text) {
+  const found = [...String(text || '').matchAll(PR_URL_RE)];
+  if (!found.length) return;
+  const scope = cardGithubRepo(card);
+  for (const [url, owner, repo] of found) {
+    if (scope && (owner + '/' + repo).toLowerCase() !== scope) continue;
+    if (!Array.isArray(card.attributes.prs)) card.attributes.prs = [];
+    if (!card.attributes.prs.some((p) => p && p.url === url)) card.attributes.prs.push({ url, state: 'open' });
+  }
+}
+
 // worker.signal — a real milestone from the worker: level-2 event on the card
-// + a QueueItem to the owning lieutenant.
+// + a QueueItem to the owning lieutenant. A PR URL in it chips the card now,
+// not at done — a draft PR shows the moment it exists.
 function workerSignal(card, body) {
   const text = String((body && body.text) || '').trim();
   if (!text) return { error: 'text required' };
@@ -3393,16 +3424,16 @@ function workerSignal(card, body) {
   const ev = mkEvent({ text: text.slice(0, 2000), actor: (body && body.actor) || 'worker' }, { kind: 'signal' });
   card.events.push(ev);
   card.updated = now();
+  harvestPrUrls(card, text);
   queuePush(card.owner, { kind: 'worker-signal', card: card.id, text: text.slice(0, 2000) });
   return { ok: true, event: ev };
 }
 
 // worker done — the worker finished: event + QueueItem to the owner. The card
 // does NOT move — the lieutenant verifies the work, rewrites the body, and
-// hands off to review itself. PR URLs in the outcome auto-populate the card's
-// `prs` attribute (state open — the PR watch takes it from there); an
-// investigation's report file is auto-attached as a card artifact.
-const PR_URL_RE = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
+// hands off to review itself. PR URLs in the outcome chip the card
+// (harvestPrUrls); an investigation's report file is auto-attached as a card
+// artifact.
 function workerDone(card, body) {
   const outcome = String((body && body.outcome) || '').trim();
   if (!outcome) return { error: 'outcome required' };
@@ -3412,13 +3443,7 @@ function workerDone(card, body) {
     delete w.flagged; delete w.stopNotified; clearStale(w);
     delete w.expectExit; delete w.pauseReason; // the gate it stopped at is behind it
   }
-  const urls = outcome.match(PR_URL_RE) || [];
-  if (urls.length) {
-    if (!Array.isArray(card.attributes.prs)) card.attributes.prs = [];
-    for (const url of urls) {
-      if (!card.attributes.prs.some((p) => p && p.url === url)) card.attributes.prs.push({ url, state: 'open' });
-    }
-  }
+  harvestPrUrls(card, outcome);
   if (card.type === 'investigation') {
     const report = path.join(STATE_DIR, 'reports', card.id + '.md');
     if (fs.existsSync(report)) {
