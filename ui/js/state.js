@@ -70,6 +70,14 @@ export function lieutenantAvatar(id) {
   const a = l && l.avatar;
   return Number.isInteger(a) && a >= 0 && a <= 63 ? a : null;
 }
+// Whose face an agent bubble wears: the lieutenant who wrote it (author matched
+// by id or name, any case), else the feed owner — workers and the system say
+// stamped as the owner, so they keep the owner's face.
+export function bubbleFaceId(author, ownerId) {
+  const a = String(author || '').toLowerCase();
+  const l = a && lieutenants().find((x) => x.id.toLowerCase() === a || (x.name || '').toLowerCase() === a);
+  return l ? l.id : ownerId;
+}
 // the worker registry record bound to a card (board.workers rides the payload);
 // its agentStatus feeds the Working-tile context bar
 export function workerFor(cardId) {
