@@ -340,8 +340,9 @@ onArtifactClose(() => { if (renderPending) { renderPending = false; render(); } 
 //    of total silence means the stream is dead — tear it down and reconnect;
 //  - boot-id: the board payload carries the server instance id, so a restart is
 //    detected even on a fast auto-retry reconnect.
-// Every (re)open also refetches the full board: events missed while stale are
-// gone for good, and the refetch is what heals the tab.
+// The stream carries no board on connect. Every (re)open fetches the full board
+// from /api/board instead (once, gzipped): it is the first load, and after a
+// gap it is what heals the tab, since events missed while stale are gone.
 const STALE_MS = 40000;
 let es = null;
 let lastEventAt = Date.now();
@@ -396,7 +397,7 @@ function connect() {
     setActivity({}); // whatever was running may have ended while we were away — the server resends what still is
     S.connected = true;
     renderStatusDot();
-    refetchBoard(); // anything pushed while we were away is unrecoverable — resync
+    refetchBoard(); // the board's only load on (re)connect — the stream sends none
   };
   es.onerror = () => { S.connected = false; renderStatusDot(); };
 }

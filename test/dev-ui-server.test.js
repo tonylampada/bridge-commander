@@ -29,8 +29,9 @@ async function postJson(p, body) {
   });
   return { status: r.status, body: await r.json() };
 }
-// collect SSE events from a path until pred(events) is satisfied (or timeout)
-function collectSse(p, pred, ms) {
+// collect SSE events from a path until pred(events) is satisfied (or timeout;
+// with `quiet`, the timeout resolves with whatever arrived instead of failing)
+function collectSse(p, pred, ms, quiet) {
   return new Promise((resolve, reject) => {
     const req = http.get(base() + p, (res) => {
       let buf = '';
@@ -49,7 +50,7 @@ function collectSse(p, pred, ms) {
       res.on('error', () => {});
     });
     req.on('error', (e) => { if (e.code !== 'ECONNRESET') reject(e); });
-    setTimeout(() => { req.destroy(); reject(new Error('SSE timeout on ' + p)); }, ms || 5000).unref();
+    setTimeout(() => { req.destroy(); quiet ? resolve(null) : reject(new Error('SSE timeout on ' + p)); }, ms || 5000).unref();
   });
 }
 
@@ -85,11 +86,9 @@ test('GET /api/board serves the fixture board with derived fields', async () => 
   assert.strictEqual(quill.chatQueued, true);
 });
 
-test('board SSE emits the fixture board on connect', async () => {
-  const events = await collectSse('/api/events', (evs) => evs.some((e) => e.event === 'board'));
-  const doc = events.find((e) => e.event === 'board').data;
-  assert.strictEqual(doc.lieutenants.length, 4);
-  assert.ok(doc.cards.length >= 10);
+test('board SSE sends no board on connect (the UI fetches /api/board)', async () => {
+  const events = await collectSse('/api/events', (evs) => evs.some((e) => e.event === 'board'), 300, true);
+  assert.strictEqual(events, null, 'no board event arrived on connect');
 });
 
 test('a write route mutates the fixture and rebroadcasts', async () => {
