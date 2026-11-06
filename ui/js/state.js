@@ -214,7 +214,12 @@ export function notifItems() {
   }
   return items.sort((a, b) => (a.ts < b.ts ? 1 : a.ts > b.ts ? -1 : (b.seq || 0) - (a.seq || 0)));
 }
-export function notifUnreadCount() { return notifItems().filter((e) => !e.read).length; }
+// The board ships only the newest events; the unread level-1 ones it left out
+// arrive as a count (notifUnreadOmitted), so the badge says the same number the
+// whole history would.
+export function notifUnreadCount() {
+  return notifItems().filter((e) => !e.read).length + ((S.doc && S.doc.notifUnreadOmitted) || 0);
+}
 
 // ---------- filters ----------
 // Owner/label selections are tri-state: mode 'in' (include) or 'out' (exclude);

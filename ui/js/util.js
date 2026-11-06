@@ -132,6 +132,26 @@ export function artifactsHtml(arts) {
     }).join('') + '</tbody></table></div>';
 }
 
+// A card's timeline as the open detail shows it. The board card carries only
+// its newest events (`eventsOmitted` counts the rest); `full` is the same card
+// fetched whole (GET /api/cards/:id) when it was opened. The board's window is
+// the fresher half, so it wins: the whole card contributes only what is older
+// than the window. `missing` = events the merge still cannot show — the whole
+// card is absent, belongs to another card, or ends before the window starts
+// (more than a window's worth happened since it was fetched): fetch it again.
+export function mergeCardEvents(boardCard, full) {
+  const win = (boardCard && boardCard.events) || [];
+  const omitted = (boardCard && boardCard.eventsOmitted) || 0;
+  if (!omitted) return { events: win, missing: 0 };
+  if (!full || full.id !== boardCard.id) return { events: win, missing: omitted };
+  const all = full.events || [];
+  const floor = win.length ? win[0].seq : Infinity;
+  const older = all.filter((e) => e.seq < floor);
+  const lastFull = all.length ? all[all.length - 1].seq : -Infinity;
+  if (win.length && lastFull < floor) return { events: win, missing: omitted };
+  return { events: older.concat(win), missing: 0 };
+}
+
 // The COLLAPSED LINE at the top of an open card. One row, filled in the order
 // he reads it: the PR state first (the attribute he actually looks for), then
 // as much of the last timeline event as the row has room for. The row never

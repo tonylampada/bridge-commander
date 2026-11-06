@@ -1020,6 +1020,7 @@ a.a-uri { color: var(--accent); }
 .ev .bd { flex: 1; min-width: 0; }
 .ev .tx { font-size: 14.5px; line-height: 1.45; overflow-wrap: anywhere; }
 .ev .sub { color: var(--faint); font-size: 11px; font-family: var(--mono); margin-top: 1px; }
+.ev .tx .ev-rep { color: var(--faint); font-family: var(--mono); font-size: 12px; }
 
 /* ---- the panel's second subject: a schedule's firings (⚡ screen) ----
    Same aside as a card, so everything above holds — the width, the drag

@@ -49,7 +49,9 @@
 // actually moves). Every other captain drag applies normally. Lieutenant moves
 // are allowed only → review (the handoff).
 //
-// Events are append-only and carry a global monotonic seq. The unified stream =
+// Events are append-only and carry a global monotonic seq (one exception: an
+// outside caller's consecutive repeat on a card replaces the entry it repeats,
+// counted — see the card-event door). The unified stream =
 // board.events + every card's events, ordered by seq. Notifications are the
 // level-1 slice of that stream UNION unseen lieutenant-authored card-thread
 // replies (per-user read state persists in board.reads, server-side).
@@ -572,6 +574,12 @@ function sanitizeKinds(doc) {
 function effectiveKinds() { return Object.assign({}, BUILTIN_KINDS, board.kinds); }
 // Level resolution: explicit level wins; else the kind's level from the
 // effective map (registered over built-ins); else the caller's default; else 2.
+// Two timeline entries saying the same thing from the same caller — what a
+// repeat is for the fold at the card-event door.
+function sameEntry(a, b) {
+  return a.text === b.text && (a.kind || null) === (b.kind || null) && a.level === b.level
+    && a.actor === b.actor && (a.source || '') === (b.source || '');
+}
 function mkEvent(body, defaults) {
   const kindRaw = body.kind == null ? '' : String(body.kind).trim();
   const kind = kindRaw ? kindRaw.slice(0, 60) : (defaults.kind || null);
@@ -1234,14 +1242,49 @@ function cardActivity(card) {
 function publicCard(card, user, msgSeqs) {
   return Object.assign({}, card, { status: cardStatus(card, user, msgSeqs), activity: cardActivity(card) });
 }
+// What GET /api/board carries of the history. Storage keeps every event; the
+// board on the wire keeps the newest few, plus how many it left out, and a card
+// opened in the UI fetches itself whole (GET /api/cards/:id). Everything the
+// board DERIVES from history (status, unread, activity, the bell's unread
+// count) is computed off the full arrays before the cut, so the cut changes
+// what a client can scroll, never what it is told.
+const WIRE_BOARD_EVENTS = 200;
+const WIRE_CARD_EVENTS = 30;
+function wireCard(card, user, msgSeqs) {
+  const pc = publicCard(card, user, msgSeqs);
+  const evs = card.events || [];
+  if (evs.length > WIRE_CARD_EVENTS) {
+    pc.events = evs.slice(-WIRE_CARD_EVENTS);
+    pc.eventsOmitted = evs.length - WIRE_CARD_EVENTS;
+  }
+  return pc;
+}
+// Unread level-1 events the cut left out — the bell still counts them, so a
+// trimmed board rings exactly as loud as the whole one.
+function omittedUnread(user) {
+  const r = board.reads[String(user || 'user').slice(0, 60)];
+  const floor = (r && r.notifSeq) || 0;
+  const picked = new Set((r && r.notifSeqs) || []);
+  let n = 0;
+  const count = (evs, keep) => {
+    for (let i = 0; i < evs.length - keep; i++) {
+      const e = evs[i];
+      if (e.level === 1 && e.seq > floor && !picked.has(e.seq)) n++;
+    }
+  };
+  count(board.events, WIRE_BOARD_EVENTS);
+  for (const c of board.cards) count(c.events || [], WIRE_CARD_EVENTS);
+  return n;
+}
 // The served board carries the EFFECTIVE kinds map (built-ins merged under the
 // registered entries); the stored board keeps only the registered map.
 // `boot` identifies this server instance: a client seeing it change knows the
 // server restarted and any SSE events in between are gone — refetch, don't trust
 // the old stream.
 const BOOT_ID = process.pid + '-' + Date.now();
+let boardRev = 0; // bumped by every broadcast(); per boot, so it travels with BOOT_ID
 function publicBoard(user) {
-  const msgSeqs = latestMessageSeqs(); // one queue scan for the whole payload
+  const msgSeqs = latestMessageSeqs();
   const holder = lineHolder().lieutenant;
   return Object.assign({}, board, {
     boot: BOOT_ID,
@@ -1249,7 +1292,13 @@ function publicBoard(user) {
     // The RESOLVED holder, never the raw stored id: a board that never had a
     // conversation still names whoever a `target: "line"` post would reach.
     line: holder ? holder.id : null,
-    cards: board.cards.map((c) => publicCard(c, user, msgSeqs)),
+    // `rev`: which change this build reflects — the board-changed push names
+    // the rev it announces, and a client already holding it skips the fetch.
+    rev: boardRev,
+    events: board.events.slice(-WIRE_BOARD_EVENTS),
+    eventsOmitted: Math.max(0, board.events.length - WIRE_BOARD_EVENTS),
+    notifUnreadOmitted: omittedUnread(user),
+    cards: board.cards.map((c) => wireCard(c, user, msgSeqs)),
     workers: board.workers.map(withStatusAge),
     // chatOwed/chatQueued mirror status.owed/owedState:'queued' for a
     // lieutenant's MAIN chat — both queue-derived, same rules as cards.
@@ -1257,7 +1306,7 @@ function publicBoard(user) {
       chatOwed: targetOwed('lieutenant:' + l.id, msgSeqs),
       chatQueued: targetQueued('lieutenant:' + l.id, msgSeqs),
       // {updated} when lieutenants/<id>/page/index.html exists, else null —
-      // read off the disk on every broadcast, since the lieutenant writes it
+      // read off the disk on every board build, since the lieutenant writes it
       // without telling the board.
       page: pageInfo(WORKSPACE, l.id),
     })),
@@ -1292,7 +1341,12 @@ function sseSend(event, data) {
   const payload = 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
   for (const res of sseClients) res.write(payload);
 }
-function broadcast() { sseSend('board', publicBoard('user')); }
+// A change goes out as a NOTICE, never the board: `board-changed {rev, boot}`,
+// a few dozen bytes per client however big the board is. Each client fetches
+// /api/board (gzipped) itself, coalescing a burst of notices into one fetch and
+// skipping a rev it already holds. The full board on this stream was the
+// uncompressed megabytes every change used to cost every open tab.
+function broadcast() { sseSend('board-changed', { rev: ++boardRev, boot: BOOT_ID }); }
 // A file an editor may have open changed on disk (through PUT /api/artifact —
 // the one door). Tiny event on the SAME stream, not a channel of its own: which
 // uri, which version now, and `by` = the writer's own client tag (a random
@@ -5384,6 +5438,20 @@ const server = http.createServer(async (req, res) => {
         // queue item below, so a drain at 2am says who woke you.
         const source = String(body.source || '').trim().slice(0, 60);
         if (source) ev.source = source;
+        // The same entry again — a cron's `progress-check` every fifteen minutes
+        // — folds into the one it repeats instead of growing the card: the
+        // fresh entry (new seq, new ts, so the bell and push behave exactly as
+        // for any new event) replaces the card's latest, carrying how many
+        // times it has now been said and since when. Only a CONSECUTIVE repeat
+        // folds; anything in between keeps the run honest on the timeline. A
+        // caller that sends a `key` manages its own repeats (above), and what
+        // it lets through is meant to land as itself.
+        const last = card.events[card.events.length - 1];
+        const folds = !key && !!last && sameEntry(last, ev);
+        if (folds) {
+          ev.repeats = (last.repeats || 1) + 1;
+          ev.firstTs = last.firstTs || last.ts;
+        }
         // wakeOwner: the door an outside process (a workflow, a cron, a CI hook)
         // uses to wake a card's lieutenant. Same pair every server-side wake
         // already uses — timeline entry AND a queue item — so the escalation is
@@ -5395,6 +5463,7 @@ const server = http.createServer(async (req, res) => {
             { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text },
             source ? { source } : {}));
         }
+        if (folds) card.events.pop();
         card.events.push(ev);
         card.updated = now();
         saveBoard();

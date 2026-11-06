@@ -80,7 +80,7 @@ test('POST /api/read persists the marker without broadcasting', async () => {
     // contrast probe: the bell's mark-all STILL broadcasts — proving the
     // quiet window above was a suppressed push, not a dead stream
     await s.api('POST', '/api/notifications/read', { all: true });
-    assert.equal(await sse.next(2000), 'board');
+    assert.equal(await sse.next(2000), 'board-changed');
   } finally {
     sse.close();
     await s.stop();
@@ -144,15 +144,15 @@ test('/api/events: no-transform headers, :ok first, named ping on idle', async (
   }
 });
 
-// The board loads once, from GET /api/board (gzipped): the stream itself sends
-// no board when it opens, only what changes after.
-test('/api/events sends no board on connect; later pushes still arrive', async () => {
+// The board loads from GET /api/board (gzipped), never from the stream: it
+// sends no board when it opens, and a change after is a board-changed notice.
+test('/api/events sends no board on connect; later changes are announced', async () => {
   const s = await startServer();
   const sse = await sseReader(s.base);
   try {
     assert.equal(await sse.next(500), null, 'no board on connect');
     await s.api('POST', '/api/notifications/read', { all: true }); // a write that broadcasts
-    assert.equal(await sse.next(2000), 'board');
+    assert.equal(await sse.next(2000), 'board-changed');
   } finally {
     sse.close();
     await s.stop();

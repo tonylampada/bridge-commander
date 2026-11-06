@@ -931,7 +931,8 @@ async function cmdShow() {
   if (c.body) console.log('\n--- body ---\n' + c.body);
   if ((c.events || []).length) {
     console.log('\n--- events ---');
-    for (const e of c.events) console.log(hhmm(e.ts) + '  L' + e.level + ' ' + (e.kind || '-') + '  ' + e.text + '  (' + e.actor + ')');
+    for (const e of c.events) console.log(hhmm(e.ts) + '  L' + e.level + ' ' + (e.kind || '-') + '  ' + e.text
+      + (e.repeats > 1 ? '  ×' + e.repeats : '') + '  (' + e.actor + ')');
   }
   if ((c.thread || []).length) {
     console.log('\n--- thread ---');

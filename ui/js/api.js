@@ -81,6 +81,9 @@ export const api = {
   // write from someone else's.
   saveArtifact: (uri, content, version) => j('PUT', '/api/artifact', { uri, content, version, client: CLIENT_ID }),
   board: () => j('GET', '/api/board'),
+  // one card, whole: the board carries only each card's newest events, and an
+  // open card fetches the rest of its timeline from here
+  card: (id) => j('GET', '/api/cards/' + encodeURIComponent(id)),
   // older main-chat history, off the lieutenant's append-only log: the board
   // payload carries only the newest slice, so scrolling up pages backwards from
   // the oldest message on screen. {messages: [...]} oldest-first; empty past the
