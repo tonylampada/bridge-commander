@@ -916,6 +916,7 @@ async function retireLieutenant(id, body) {
   nudged.delete(id);
   // A retired lieutenant can never drain again: its queue files go too.
   try { fs.unlinkSync(queueFile(id)); } catch (e) { /* none */ }
+  scanQueues(); // its deliveries left with the file — the in-memory index follows
   try { fs.unlinkSync(ackFile(id)); } catch (e) { /* none */ }
   try { fs.unlinkSync(drainedFile(id)); } catch (e) { /* none */ }
   // …and so does its conversation, which used to leave with the record itself:
@@ -959,7 +960,29 @@ function queueIds() {
 // The queue seq is global across every lieutenant's queue (QueueItems are
 // seq-ordered board-wide). Recovered from the files at boot.
 let qseq = 0;
-for (const lt of queueIds()) for (const it of readQueue(lt)) if (it.seq > qseq) qseq = it.seq;
+// target -> {seq, lt} of the latest kind:'message' delivery, for the owed /
+// queued derivation every board build runs per card and per lieutenant. Kept in
+// memory: built from the files here at boot (the same one pass that recovers
+// qseq), fed by queuePush — the one door a QueueItem comes in by — and rebuilt
+// from disk when a queue file goes away (retire). Re-reading every queue file
+// on every build is what it replaces: megabytes of jsonl per broadcast.
+let msgSeqs = new Map();
+function noteMessageSeq(map, lt, it) {
+  if (it.kind !== 'message' || !it.target) return;
+  const cur = map.get(it.target);
+  if (!cur || it.seq > cur.seq) map.set(it.target, { seq: it.seq, lt });
+}
+function scanQueues() {
+  const map = new Map();
+  for (const lt of queueIds()) {
+    for (const it of readQueue(lt)) {
+      if (it.seq > qseq) qseq = it.seq;
+      noteMessageSeq(map, lt, it);
+    }
+  }
+  msgSeqs = map;
+}
+scanQueues();
 function readAck(lt) {
   try { return parseInt(fs.readFileSync(ackFile(lt), 'utf8'), 10) || 0; }
   catch (e) { return 0; }
@@ -986,6 +1009,7 @@ function seenCursor(lt) { return Math.max(readDrained(lt), readAck(lt)); }
 function queuePush(lt, rec) {
   const item = Object.assign({ seq: ++qseq, ts: now(), lieutenant: lt }, rec);
   fs.appendFileSync(queueFile(lt), JSON.stringify(item) + '\n');
+  noteMessageSeq(msgSeqs, lt, item); // after the append: the map never runs ahead of the disk
   scheduleWake(lt); // the queue write landed first (write-ahead); now the wake half
   return item;
 }
@@ -1163,19 +1187,9 @@ function lastThreadReadMs(target, user) {
 //   'queued' = owed AND its delivery seq is past the seen cursor (unseen)
 //   'seen'   = owed and drained (turn underway; the reply is owed for real)
 //   null     = not owed
-// `msgSeqs` is the precomputed target -> latest-message-delivery map (one queue
-// scan per serialization); absent, it is derived on the spot.
-function latestMessageSeqs() {
-  const map = new Map(); // target -> {seq, lt} of the latest kind:'message' delivery
-  for (const lt of queueIds()) {
-    for (const it of readQueue(lt)) {
-      if (it.kind !== 'message' || !it.target) continue;
-      const cur = map.get(it.target);
-      if (!cur || it.seq > cur.seq) map.set(it.target, { seq: it.seq, lt });
-    }
-  }
-  return map;
-}
+// `msgSeqs` is the target -> latest-message-delivery map (the in-memory index);
+// absent, it is fetched on the spot.
+function latestMessageSeqs() { return msgSeqs; } // the in-memory index — see scanQueues
 // Queued = the latest captain message delivered to this target has not crossed
 // its lieutenant's seen cursor. No delivery on record → not queued (a thread
 // message that never became a QueueItem has nothing to sit unseen in).
