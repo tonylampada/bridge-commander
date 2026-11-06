@@ -4480,6 +4480,17 @@ const MIME = {
   '.webp': 'image/webp', '.hdr': 'image/vnd.radiance',
   '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json', '.ktx2': 'image/ktx2',
 };
+// A strong validator over the bytes. If-None-Match is a list, and an edge that
+// compresses on the way (Cloudflare) hands the tag back weakened (W/"…"): a
+// weak match is still the same bytes we hashed, so it answers 304 too.
+function etagOf(data) { return '"' + crypto.createHash('sha1').update(data).digest('base64url') + '"'; }
+function etagMatches(header, etag) {
+  if (!header) return false;
+  return String(header).split(',').some((t) => {
+    const v = t.trim();
+    return v === '*' || v.replace(/^W\//, '') === etag;
+  });
+}
 function serveStatic(res, rel) {
   const file = path.normalize(path.join(UI_DIR, rel));
   if (!file.startsWith(UI_DIR + path.sep) && file !== path.join(UI_DIR, 'index.html')) {
@@ -4487,29 +4498,34 @@ function serveStatic(res, rel) {
   }
   let data;
   try { data = fs.readFileSync(file); } catch (e) { return sendJson(res, 404, { error: 'not found' }); }
-  // Two populations of file, two opposite policies — and `no-cache` was the
-  // wrong answer for both. It permits a store-and-revalidate, and with no
-  // validator to revalidate against, a phone behind a CDN handed the captain
-  // yesterday's JavaScript three separate times. Each time it looked like a bug
-  // in the thing he was actually testing, which is the expensive kind of wrong.
+  // Two populations of file, two policies.
   //
-  // Ours changes every few minutes and is small: never store it.
+  // Ours changes every few minutes: `no-cache` plus a content-hash ETag. The
+  // browser (and any edge between) keeps a copy but asks before every use, and
+  // an unchanged file comes back a bodiless 304 — the board's ~60 modules cost
+  // a round of tiny requests per open instead of ~750 KB. The validator is the
+  // half that makes no-cache safe: without one, a phone behind a CDN once kept
+  // serving yesterday's JavaScript, which is why this used to be `no-store`.
+  //
   // Vendored builds are immutable — their version is in the path, so a new
   // version is a new URL — and one of them is four megabytes: keep it a year.
   // Anchored at the start and cut at a separator: `ui/vendor/…` is vendored,
-  // anything merely spelled like it is ours. No file exercises that difference
-  // today, which is why it is written strictly here rather than pinned below.
-  // `ui/env/` is the same population as `ui/vendor/`: fetched-once assets that
-  // are replaced by editing the manifest rather than by mutating a file. One of
-  // them is a 5.4 MB sky, and re-downloading it on every open — over a headset's
-  // wifi — is the difference between a room that appears and one he gives up
-  // waiting for. `no-store` on that would have been a real bug in the field and
-  // never once in a test.
+  // anything merely spelled like it is ours. `ui/env/` (a 5.4 MB sky) and
+  // `ui/audio/` are the same population: replaced by editing the manifest that
+  // names them, never by mutating a file.
   const vendored = /^(vendor|env|audio)([/\\]|$)/.test(rel);
-  res.writeHead(200, {
+  const headers = {
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': vendored ? 'public, max-age=31536000, immutable' : 'no-store',
-  });
+    'Cache-Control': vendored ? 'public, max-age=31536000, immutable' : 'no-cache',
+  };
+  if (!vendored) {
+    headers.ETag = etagOf(data);
+    if (etagMatches(res.req && res.req.headers['if-none-match'], headers.ETag)) {
+      res.writeHead(304, { 'Cache-Control': headers['Cache-Control'], ETag: headers.ETag });
+      return res.end();
+    }
+  }
+  res.writeHead(200, headers);
   res.end(data);
 }
 
