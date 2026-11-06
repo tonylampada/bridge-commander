@@ -209,11 +209,15 @@ function createDevServer(opts) {
     for (const m of c.thread || []) if (m.ts && m.ts > ts) ts = m.ts;
     return ts;
   }
+  function publicCard(c) {
+    return Object.assign({}, c, { status: cardStatus(c), activity: cardActivity(c) });
+  }
   function publicBoard() {
     return Object.assign({}, board, {
       boot: BOOT_ID,
+      rev,
       kinds: Object.assign({}, BUILTIN_KINDS, board.kinds),
-      cards: board.cards.map((c) => Object.assign({}, c, { status: cardStatus(c), activity: cardActivity(c) })),
+      cards: board.cards.map(publicCard),
       lieutenants: board.lieutenants.map((l) => Object.assign({}, l, {
         chatOwed: owed.has('lieutenant:' + l.id),
         chatQueued: owed.get('lieutenant:' + l.id) === 'queued',
@@ -221,11 +225,14 @@ function createDevServer(opts) {
     });
   }
 
-  // ----- SSE: board push -----
+  // ----- SSE: board-changed notice -----
+  // Like the real server: a change goes out as {rev, boot}, never the board,
+  // and the UI fetches /api/board itself.
   const sseClients = new Set();
+  let rev = 0;
   function broadcast() {
     board.updated = now();
-    const payload = 'event: board\ndata: ' + JSON.stringify(publicBoard()) + '\n\n';
+    const payload = 'event: board-changed\ndata: ' + JSON.stringify({ rev: ++rev, boot: BOOT_ID }) + '\n\n';
     for (const res of sseClients) res.write(payload);
   }
   function sseHead(res) {
@@ -629,6 +636,11 @@ function createDevServer(opts) {
         return sendJson(res, 200, { ok: true, card });
       }
       m = /^\/api\/cards\/([^/]+)$/.exec(p);
+      if (m && req.method === 'GET') {
+        const card = findCard(decodeURIComponent(m[1]));
+        if (!card) return sendJson(res, 404, { error: 'unknown card' });
+        return sendJson(res, 200, publicCard(card));
+      }
       if (m && req.method === 'PATCH') {
         const card = findCard(decodeURIComponent(m[1]));
         if (!card) return sendJson(res, 404, { error: 'unknown card' });

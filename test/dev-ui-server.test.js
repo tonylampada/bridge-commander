@@ -87,19 +87,20 @@ test('GET /api/board serves the fixture board with derived fields', async () => 
 });
 
 test('board SSE sends no board on connect (the UI fetches /api/board)', async () => {
-  const events = await collectSse('/api/events', (evs) => evs.some((e) => e.event === 'board'), 300, true);
-  assert.strictEqual(events, null, 'no board event arrived on connect');
+  const events = await collectSse('/api/events', (evs) => evs.some((e) => /^board/.test(e.event)), 300, true);
+  assert.strictEqual(events, null, 'nothing board-shaped arrived on connect');
 });
 
-test('a write route mutates the fixture and rebroadcasts', async () => {
-  const seen = collectSse('/api/events', (evs) =>
-    evs.filter((e) => e.event === 'board').some((e) =>
-      e.data.cards.find((c) => c.id === 'readme-overhaul').thread.some((m) => m.text === 'sse-proof')));
+test('a write route mutates the fixture and announces board-changed, like the real server', async () => {
+  const before = (await getJson('/api/board')).rev;
+  const seen = collectSse('/api/events', (evs) => evs.some((e) => e.event === 'board-changed'));
   await new Promise((r) => setTimeout(r, 50)); // let the subscriber attach first
   const r = await postJson('/api/feedback', { target: 'card:readme-overhaul', text: 'sse-proof' });
   assert.strictEqual(r.status, 200);
-  await seen; // the mutated board reached the SSE client
+  const notice = (await seen).find((e) => e.event === 'board-changed').data;
+  assert.ok(notice.rev > before && /^dev-/.test(notice.boot), JSON.stringify(notice));
   const doc = await getJson('/api/board');
+  assert.ok(doc.rev >= notice.rev, 'the board fetched after the notice holds it');
   const card = doc.cards.find((c) => c.id === 'readme-overhaul');
   assert.strictEqual(card.thread.at(-1).text, 'sse-proof');
   assert.strictEqual(card.status.owed, true, 'captain message marks the target owed');

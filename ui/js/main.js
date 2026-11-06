@@ -1,6 +1,7 @@
 // boot: SSE, header controls, mobile tabs, render orchestration
 import { S, onRender, render, cards, lieutenants, cardUnread, lieutenantUnread, notifUnreadCount, owedTargets, clearFilters, filtersActive } from './state.js';
 import { api } from './api.js';
+import { boardSync } from './boardsync.js';
 import { refreshAgoLabels } from './util.js';
 import { trackMessages } from './voice.js';
 import { callBoard } from './call.js';
@@ -338,22 +339,21 @@ onArtifactClose(() => { if (renderPending) { renderPending = false; render(); } 
 // ever firing onerror, leaving a zombie tab. Two defenses:
 //  - staleness watchdog: the server emits a named `ping` every 25s, so >STALE_MS
 //    of total silence means the stream is dead — tear it down and reconnect;
-//  - boot-id: the board payload carries the server instance id, so a restart is
-//    detected even on a fast auto-retry reconnect.
+//  - boot-id: the board and every board-changed notice carry the server
+//    instance id, so a notice from a restarted server always fetches, even on
+//    a fast auto-retry reconnect.
 // The stream carries no board on connect. Every (re)open fetches the full board
 // from /api/board instead (once, gzipped): it is the first load, and after a
 // gap it is what heals the tab, since events missed while stale are gone.
 const STALE_MS = 40000;
 let es = null;
 let lastEventAt = Date.now();
-let serverBoot = null;
 
 // `/?card=ID` — the URL a push notification opens when no board is open. Taken
 // once, on the first board, then dropped from the address bar so a reload is
 // a plain reload.
 let deepCard = new URLSearchParams(location.search).get('card');
 function applyBoard(doc) {
-  serverBoot = doc.boot || serverBoot;
   S.doc = doc;
   trackMessages(S.doc);
   callBoard(S.doc);
@@ -366,18 +366,22 @@ function applyBoard(doc) {
     if ((doc.cards || []).some((c) => c.id === id)) openDetail(id);
   }
 }
-function refetchBoard() {
-  api.board().then(applyBoard).catch(() => {}); // still down — the watchdog retries
-}
+// A change arrives as a notice — `board-changed {rev, boot}` — and the board
+// itself comes from /api/board, gzipped. boardSync decides when to fetch: a
+// notice for a rev already held is dropped, a burst of notices costs at most
+// one fetch in flight plus one after it, ~300 ms apart (boardsync.js).
+const sync = boardSync({
+  fetchBoard: () => api.board(),
+  apply: applyBoard,
+  held: () => (S.doc ? { rev: S.doc.rev, boot: S.doc.boot } : null),
+});
+function refetchBoard() { sync.now(); } // (re)open: always fetch; a failure waits for the watchdog
 function connect() {
   if (es) es.close();
   es = new EventSource('/api/events');
-  es.addEventListener('board', (e) => {
+  es.addEventListener('board-changed', (e) => {
     lastEventAt = Date.now();
-    const doc = JSON.parse(e.data);
-    const restarted = serverBoot && doc.boot && doc.boot !== serverBoot;
-    applyBoard(doc);
-    if (restarted) refetchBoard(); // new server instance — make sure we hold its current state
+    try { sync.notify(JSON.parse(e.data)); } catch (err) {}
   });
   // An artifact was written through the board — a file screen open on it follows
   // along by itself. Not a board payload: no re-render, nothing else reacts.

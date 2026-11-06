@@ -49,7 +49,9 @@
 // actually moves). Every other captain drag applies normally. Lieutenant moves
 // are allowed only → review (the handoff).
 //
-// Events are append-only and carry a global monotonic seq. The unified stream =
+// Events are append-only and carry a global monotonic seq (one exception: an
+// outside caller's consecutive repeat on a card replaces the entry it repeats,
+// counted — see the card-event door). The unified stream =
 // board.events + every card's events, ordered by seq. Notifications are the
 // level-1 slice of that stream UNION unseen lieutenant-authored card-thread
 // replies (per-user read state persists in board.reads, server-side).
@@ -572,6 +574,12 @@ function sanitizeKinds(doc) {
 function effectiveKinds() { return Object.assign({}, BUILTIN_KINDS, board.kinds); }
 // Level resolution: explicit level wins; else the kind's level from the
 // effective map (registered over built-ins); else the caller's default; else 2.
+// Two timeline entries saying the same thing from the same caller — what a
+// repeat is for the fold at the card-event door.
+function sameEntry(a, b) {
+  return a.text === b.text && (a.kind || null) === (b.kind || null) && a.level === b.level
+    && a.actor === b.actor && (a.source || '') === (b.source || '');
+}
 function mkEvent(body, defaults) {
   const kindRaw = body.kind == null ? '' : String(body.kind).trim();
   const kind = kindRaw ? kindRaw.slice(0, 60) : (defaults.kind || null);
@@ -916,6 +924,7 @@ async function retireLieutenant(id, body) {
   nudged.delete(id);
   // A retired lieutenant can never drain again: its queue files go too.
   try { fs.unlinkSync(queueFile(id)); } catch (e) { /* none */ }
+  scanQueues(); // its deliveries left with the file — the in-memory index follows
   try { fs.unlinkSync(ackFile(id)); } catch (e) { /* none */ }
   try { fs.unlinkSync(drainedFile(id)); } catch (e) { /* none */ }
   // …and so does its conversation, which used to leave with the record itself:
@@ -959,7 +968,29 @@ function queueIds() {
 // The queue seq is global across every lieutenant's queue (QueueItems are
 // seq-ordered board-wide). Recovered from the files at boot.
 let qseq = 0;
-for (const lt of queueIds()) for (const it of readQueue(lt)) if (it.seq > qseq) qseq = it.seq;
+// target -> {seq, lt} of the latest kind:'message' delivery, for the owed /
+// queued derivation every board build runs per card and per lieutenant. Kept in
+// memory: built from the files here at boot (the same one pass that recovers
+// qseq), fed by queuePush — the one door a QueueItem comes in by — and rebuilt
+// from disk when a queue file goes away (retire). Re-reading every queue file
+// on every build is what it replaces: megabytes of jsonl per broadcast.
+let msgSeqs = new Map();
+function noteMessageSeq(map, lt, it) {
+  if (it.kind !== 'message' || !it.target) return;
+  const cur = map.get(it.target);
+  if (!cur || it.seq > cur.seq) map.set(it.target, { seq: it.seq, lt });
+}
+function scanQueues() {
+  const map = new Map();
+  for (const lt of queueIds()) {
+    for (const it of readQueue(lt)) {
+      if (it.seq > qseq) qseq = it.seq;
+      noteMessageSeq(map, lt, it);
+    }
+  }
+  msgSeqs = map;
+}
+scanQueues();
 function readAck(lt) {
   try { return parseInt(fs.readFileSync(ackFile(lt), 'utf8'), 10) || 0; }
   catch (e) { return 0; }
@@ -986,6 +1017,7 @@ function seenCursor(lt) { return Math.max(readDrained(lt), readAck(lt)); }
 function queuePush(lt, rec) {
   const item = Object.assign({ seq: ++qseq, ts: now(), lieutenant: lt }, rec);
   fs.appendFileSync(queueFile(lt), JSON.stringify(item) + '\n');
+  noteMessageSeq(msgSeqs, lt, item); // after the append: the map never runs ahead of the disk
   scheduleWake(lt); // the queue write landed first (write-ahead); now the wake half
   return item;
 }
@@ -1163,19 +1195,9 @@ function lastThreadReadMs(target, user) {
 //   'queued' = owed AND its delivery seq is past the seen cursor (unseen)
 //   'seen'   = owed and drained (turn underway; the reply is owed for real)
 //   null     = not owed
-// `msgSeqs` is the precomputed target -> latest-message-delivery map (one queue
-// scan per serialization); absent, it is derived on the spot.
-function latestMessageSeqs() {
-  const map = new Map(); // target -> {seq, lt} of the latest kind:'message' delivery
-  for (const lt of queueIds()) {
-    for (const it of readQueue(lt)) {
-      if (it.kind !== 'message' || !it.target) continue;
-      const cur = map.get(it.target);
-      if (!cur || it.seq > cur.seq) map.set(it.target, { seq: it.seq, lt });
-    }
-  }
-  return map;
-}
+// `msgSeqs` is the target -> latest-message-delivery map (the in-memory index);
+// absent, it is fetched on the spot.
+function latestMessageSeqs() { return msgSeqs; } // the in-memory index — see scanQueues
 // Queued = the latest captain message delivered to this target has not crossed
 // its lieutenant's seen cursor. No delivery on record → not queued (a thread
 // message that never became a QueueItem has nothing to sit unseen in).
@@ -1220,14 +1242,49 @@ function cardActivity(card) {
 function publicCard(card, user, msgSeqs) {
   return Object.assign({}, card, { status: cardStatus(card, user, msgSeqs), activity: cardActivity(card) });
 }
+// What GET /api/board carries of the history. Storage keeps every event; the
+// board on the wire keeps the newest few, plus how many it left out, and a card
+// opened in the UI fetches itself whole (GET /api/cards/:id). Everything the
+// board DERIVES from history (status, unread, activity, the bell's unread
+// count) is computed off the full arrays before the cut, so the cut changes
+// what a client can scroll, never what it is told.
+const WIRE_BOARD_EVENTS = 200;
+const WIRE_CARD_EVENTS = 30;
+function wireCard(card, user, msgSeqs) {
+  const pc = publicCard(card, user, msgSeqs);
+  const evs = card.events || [];
+  if (evs.length > WIRE_CARD_EVENTS) {
+    pc.events = evs.slice(-WIRE_CARD_EVENTS);
+    pc.eventsOmitted = evs.length - WIRE_CARD_EVENTS;
+  }
+  return pc;
+}
+// Unread level-1 events the cut left out — the bell still counts them, so a
+// trimmed board rings exactly as loud as the whole one.
+function omittedUnread(user) {
+  const r = board.reads[String(user || 'user').slice(0, 60)];
+  const floor = (r && r.notifSeq) || 0;
+  const picked = new Set((r && r.notifSeqs) || []);
+  let n = 0;
+  const count = (evs, keep) => {
+    for (let i = 0; i < evs.length - keep; i++) {
+      const e = evs[i];
+      if (e.level === 1 && e.seq > floor && !picked.has(e.seq)) n++;
+    }
+  };
+  count(board.events, WIRE_BOARD_EVENTS);
+  for (const c of board.cards) count(c.events || [], WIRE_CARD_EVENTS);
+  return n;
+}
 // The served board carries the EFFECTIVE kinds map (built-ins merged under the
 // registered entries); the stored board keeps only the registered map.
 // `boot` identifies this server instance: a client seeing it change knows the
 // server restarted and any SSE events in between are gone — refetch, don't trust
 // the old stream.
 const BOOT_ID = process.pid + '-' + Date.now();
+let boardRev = 0; // bumped by every broadcast(); per boot, so it travels with BOOT_ID
 function publicBoard(user) {
-  const msgSeqs = latestMessageSeqs(); // one queue scan for the whole payload
+  const msgSeqs = latestMessageSeqs();
   const holder = lineHolder().lieutenant;
   return Object.assign({}, board, {
     boot: BOOT_ID,
@@ -1235,7 +1292,13 @@ function publicBoard(user) {
     // The RESOLVED holder, never the raw stored id: a board that never had a
     // conversation still names whoever a `target: "line"` post would reach.
     line: holder ? holder.id : null,
-    cards: board.cards.map((c) => publicCard(c, user, msgSeqs)),
+    // `rev`: which change this build reflects — the board-changed push names
+    // the rev it announces, and a client already holding it skips the fetch.
+    rev: boardRev,
+    events: board.events.slice(-WIRE_BOARD_EVENTS),
+    eventsOmitted: Math.max(0, board.events.length - WIRE_BOARD_EVENTS),
+    notifUnreadOmitted: omittedUnread(user),
+    cards: board.cards.map((c) => wireCard(c, user, msgSeqs)),
     workers: board.workers.map(withStatusAge),
     // chatOwed/chatQueued mirror status.owed/owedState:'queued' for a
     // lieutenant's MAIN chat — both queue-derived, same rules as cards.
@@ -1243,7 +1306,7 @@ function publicBoard(user) {
       chatOwed: targetOwed('lieutenant:' + l.id, msgSeqs),
       chatQueued: targetQueued('lieutenant:' + l.id, msgSeqs),
       // {updated} when lieutenants/<id>/page/index.html exists, else null —
-      // read off the disk on every broadcast, since the lieutenant writes it
+      // read off the disk on every board build, since the lieutenant writes it
       // without telling the board.
       page: pageInfo(WORKSPACE, l.id),
     })),
@@ -1278,7 +1341,12 @@ function sseSend(event, data) {
   const payload = 'event: ' + event + '\ndata: ' + JSON.stringify(data) + '\n\n';
   for (const res of sseClients) res.write(payload);
 }
-function broadcast() { sseSend('board', publicBoard('user')); }
+// A change goes out as a NOTICE, never the board: `board-changed {rev, boot}`,
+// a few dozen bytes per client however big the board is. Each client fetches
+// /api/board (gzipped) itself, coalescing a burst of notices into one fetch and
+// skipping a rev it already holds. The full board on this stream was the
+// uncompressed megabytes every change used to cost every open tab.
+function broadcast() { sseSend('board-changed', { rev: ++boardRev, boot: BOOT_ID }); }
 // A file an editor may have open changed on disk (through PUT /api/artifact —
 // the one door). Tiny event on the SAME stream, not a channel of its own: which
 // uri, which version now, and `by` = the writer's own client tag (a random
@@ -4412,6 +4480,17 @@ const MIME = {
   '.webp': 'image/webp', '.hdr': 'image/vnd.radiance',
   '.glb': 'model/gltf-binary', '.gltf': 'model/gltf+json', '.ktx2': 'image/ktx2',
 };
+// A strong validator over the bytes. If-None-Match is a list, and an edge that
+// compresses on the way (Cloudflare) hands the tag back weakened (W/"…"): a
+// weak match is still the same bytes we hashed, so it answers 304 too.
+function etagOf(data) { return '"' + crypto.createHash('sha1').update(data).digest('base64url') + '"'; }
+function etagMatches(header, etag) {
+  if (!header) return false;
+  return String(header).split(',').some((t) => {
+    const v = t.trim();
+    return v === '*' || v.replace(/^W\//, '') === etag;
+  });
+}
 function serveStatic(res, rel) {
   const file = path.normalize(path.join(UI_DIR, rel));
   if (!file.startsWith(UI_DIR + path.sep) && file !== path.join(UI_DIR, 'index.html')) {
@@ -4419,29 +4498,34 @@ function serveStatic(res, rel) {
   }
   let data;
   try { data = fs.readFileSync(file); } catch (e) { return sendJson(res, 404, { error: 'not found' }); }
-  // Two populations of file, two opposite policies — and `no-cache` was the
-  // wrong answer for both. It permits a store-and-revalidate, and with no
-  // validator to revalidate against, a phone behind a CDN handed the captain
-  // yesterday's JavaScript three separate times. Each time it looked like a bug
-  // in the thing he was actually testing, which is the expensive kind of wrong.
+  // Two populations of file, two policies.
   //
-  // Ours changes every few minutes and is small: never store it.
+  // Ours changes every few minutes: `no-cache` plus a content-hash ETag. The
+  // browser (and any edge between) keeps a copy but asks before every use, and
+  // an unchanged file comes back a bodiless 304 — the board's ~60 modules cost
+  // a round of tiny requests per open instead of ~750 KB. The validator is the
+  // half that makes no-cache safe: without one, a phone behind a CDN once kept
+  // serving yesterday's JavaScript, which is why this used to be `no-store`.
+  //
   // Vendored builds are immutable — their version is in the path, so a new
   // version is a new URL — and one of them is four megabytes: keep it a year.
   // Anchored at the start and cut at a separator: `ui/vendor/…` is vendored,
-  // anything merely spelled like it is ours. No file exercises that difference
-  // today, which is why it is written strictly here rather than pinned below.
-  // `ui/env/` is the same population as `ui/vendor/`: fetched-once assets that
-  // are replaced by editing the manifest rather than by mutating a file. One of
-  // them is a 5.4 MB sky, and re-downloading it on every open — over a headset's
-  // wifi — is the difference between a room that appears and one he gives up
-  // waiting for. `no-store` on that would have been a real bug in the field and
-  // never once in a test.
+  // anything merely spelled like it is ours. `ui/env/` (a 5.4 MB sky) and
+  // `ui/audio/` are the same population: replaced by editing the manifest that
+  // names them, never by mutating a file.
   const vendored = /^(vendor|env|audio)([/\\]|$)/.test(rel);
-  res.writeHead(200, {
+  const headers = {
     'Content-Type': MIME[path.extname(file)] || 'application/octet-stream',
-    'Cache-Control': vendored ? 'public, max-age=31536000, immutable' : 'no-store',
-  });
+    'Cache-Control': vendored ? 'public, max-age=31536000, immutable' : 'no-cache',
+  };
+  if (!vendored) {
+    headers.ETag = etagOf(data);
+    if (etagMatches(res.req && res.req.headers['if-none-match'], headers.ETag)) {
+      res.writeHead(304, { 'Cache-Control': headers['Cache-Control'], ETag: headers.ETag });
+      return res.end();
+    }
+  }
+  res.writeHead(200, headers);
   res.end(data);
 }
 
@@ -5370,6 +5454,20 @@ const server = http.createServer(async (req, res) => {
         // queue item below, so a drain at 2am says who woke you.
         const source = String(body.source || '').trim().slice(0, 60);
         if (source) ev.source = source;
+        // The same entry again — a cron's `progress-check` every fifteen minutes
+        // — folds into the one it repeats instead of growing the card: the
+        // fresh entry (new seq, new ts, so the bell and push behave exactly as
+        // for any new event) replaces the card's latest, carrying how many
+        // times it has now been said and since when. Only a CONSECUTIVE repeat
+        // folds; anything in between keeps the run honest on the timeline. A
+        // caller that sends a `key` manages its own repeats (above), and what
+        // it lets through is meant to land as itself.
+        const last = card.events[card.events.length - 1];
+        const folds = !key && !!last && sameEntry(last, ev);
+        if (folds) {
+          ev.repeats = (last.repeats || 1) + 1;
+          ev.firstTs = last.firstTs || last.ts;
+        }
         // wakeOwner: the door an outside process (a workflow, a cron, a CI hook)
         // uses to wake a card's lieutenant. Same pair every server-side wake
         // already uses — timeline entry AND a queue item — so the escalation is
@@ -5381,6 +5479,7 @@ const server = http.createServer(async (req, res) => {
             { kind: 'card-event', card: card.id, eventKind: ev.kind || null, text: ev.text },
             source ? { source } : {}));
         }
+        if (folds) card.events.pop();
         card.events.push(ev);
         card.updated = now();
         saveBoard();

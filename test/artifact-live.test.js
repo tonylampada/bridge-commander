@@ -70,8 +70,8 @@ test('a landed write announces itself on the board SSE — uri, new version, and
     const file = path.join(s.dir, 'brief.md');
     fs.writeFileSync(file, 'one\n');
     const { uri } = await cardWithArtifact(s, 'file://' + file, 'brief');
-    assert.strictEqual((await sse.next(2000)).event, 'board'); // card created
-    assert.strictEqual((await sse.next(2000)).event, 'board'); // artifact promoted
+    assert.strictEqual((await sse.next(2000)).event, 'board-changed'); // card created
+    assert.strictEqual((await sse.next(2000)).event, 'board-changed'); // artifact promoted
 
     const v = (await s.api('GET', '/api/artifact?uri=' + encodeURIComponent(uri))).body.version;
     const put = await s.api('PUT', '/api/artifact', { uri, content: 'two\n', version: v, client: 'tab-7' });

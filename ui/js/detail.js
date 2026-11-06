@@ -1,6 +1,6 @@
 // card detail: attributes header + markdown body + event timeline (chat lives in the chat panel)
 import { S, card, lieutenant, lieutenants, lieutenantColor, cardStatus, cardActivityTs, cardRecency, kindEmoji, render, toggleFilter, filterSelected } from './state.js';
-import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, cardStripHtml, uriBasename, uriDir, setHtmlIfChanged, isImageMime, playbookAttrHtml } from './util.js';
+import { esc, hhmm, agoSpanHtml, cardEmoji, cardPrs, prChipHtml, cardArtifacts, artifactsHtml, cardStripHtml, uriBasename, uriDir, setHtmlIfChanged, isImageMime, playbookAttrHtml, mergeCardEvents } from './util.js';
 import { md, mdEnhance, copyText } from './md.js';
 import { api } from './api.js';
 import { labelChipHtml, openLabelPicker, saveCardLabels } from './labels.js';
@@ -68,8 +68,28 @@ function renderAux() {
   aux.paint(auxEl);
 }
 
+// The open card, fetched whole. The board carries each card's newest events
+// only; the timeline below asks for the rest when the card has more
+// (mergeCardEvents says when). One fetch per ask: `fullAsk` holds the id a
+// fetch is out for — or one that FAILED, which is not retried until the card is
+// opened again, so a server that is down is not hammered from inside render().
+let full = null;
+let fullAsk = null;
+function wantFull(id) {
+  if (fullAsk === id) return;
+  fullAsk = id;
+  api.card(id).then((c) => {
+    if (S.openCardId !== id) return;
+    full = c;
+    fullAsk = null;
+    render();
+  }, () => {});
+}
+function dropFull() { full = null; fullAsk = null; }
+
 export function openDetail(id) {
   dropAux(); // a card is the other subject this panel takes
+  if (S.openCardId !== id) dropFull();
   S.openCardId = id;
   // Desktop: selecting a card also syncs the left chat into that card's thread,
   // so its detail (right) and conversation (left) show side by side. Reuses the
@@ -97,6 +117,7 @@ export function closeDetail(opts) {
   }
   const wasId = S.openCardId;
   S.openCardId = null;
+  dropFull();
   if (editingTitle) stopTitleEdit();
   if (editingBody) stopBodyEdit();
   el.hidden = true;
@@ -1082,15 +1103,23 @@ export function renderDetail() {
       '<span class="fts">' + hhmm(m.ts) + '</span></div>').join(''));
   }
 
-  // event timeline (newest first)
+  // event timeline (newest first) — the board's newest events, plus the older
+  // ones from the card fetched whole once it lands
   const evEl = document.getElementById('dt-events');
-  const events = (c.events || []).slice().reverse();
-  // kind emoji from the effective kinds map, for any level; unknown kind = no emoji
-  setHtmlIfChanged(evEl, events.map((e) =>
+  const tl = mergeCardEvents(c, full);
+  if (tl.missing && !arch) wantFull(c.id);
+  const events = tl.events.slice().reverse();
+  // kind emoji from the effective kinds map, for any level; unknown kind = no emoji.
+  // A folded repeat (the same entry said N times in a row) reads ×N, and when the first was.
+  setHtmlIfChanged(evEl, (events.map((e) =>
     '<div class="ev lvl' + e.level + '"><span class="dot"></span><div class="bd">' +
-    '<div class="tx">' + (kindEmoji(e.kind) ? esc(kindEmoji(e.kind)) + ' ' : '') + esc(e.text) + '</div>' +
-    '<div class="sub">' + esc(e.actor || '') + ' · ' + hhmm(e.ts) + ' · ' + agoSpanHtml(e.ts) + ' ago</div>' +
-    '</div></div>').join('') || '<div class="ev"><div class="bd"><div class="sub">no events yet</div></div></div>');
+    '<div class="tx">' + (kindEmoji(e.kind) ? esc(kindEmoji(e.kind)) + ' ' : '') + esc(e.text) +
+    (e.repeats > 1 ? ' <span class="ev-rep">×' + esc(String(e.repeats)) + '</span>' : '') + '</div>' +
+    '<div class="sub">' + esc(e.actor || '') + ' · ' + hhmm(e.ts) + ' · ' + agoSpanHtml(e.ts) + ' ago' +
+    (e.repeats > 1 && e.firstTs ? ' · first ' + agoSpanHtml(e.firstTs) + ' ago' : '') + '</div>' +
+    '</div></div>').join('') +
+    (tl.missing ? '<div class="ev"><div class="bd"><div class="sub">loading ' + tl.missing + ' older events…</div></div></div>' : ''))
+    || '<div class="ev"><div class="bd"><div class="sub">no events yet</div></div></div>');
 
   if (!arch) maybeMarkCardRead(c); // frozen snapshots have no read state to advance
 }
