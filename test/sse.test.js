@@ -9,30 +9,6 @@ const os = require('node:os');
 const path = require('node:path');
 const { startServer, freePort, retryOnPortClash } = require('./helper');
 
-// Read the first SSE event from /api/events (the server pushes the full board
-// on connect) and return { event, data }.
-async function firstSseEvent(base) {
-  const res = await fetch(base + '/api/events');
-  assert.equal(res.status, 200);
-  assert.match(res.headers.get('content-type'), /text\/event-stream/);
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) throw new Error('stream ended before first event');
-    buf += dec.decode(value, { stream: true });
-    let end = buf.indexOf('\n\n');
-    while (end !== -1 && buf.startsWith(':')) { buf = buf.slice(end + 2); end = buf.indexOf('\n\n'); } // comments (`:ok`)
-    if (end === -1) continue;
-    reader.cancel().catch(() => {});
-    const frame = buf.slice(0, end);
-    const event = (/^event: (.*)$/m.exec(frame) || [])[1];
-    const data = (/^data: (.*)$/m.exec(frame) || [])[1];
-    return { event, data: data ? JSON.parse(data) : null };
-  }
-}
-
 test('board payload carries a stable per-instance boot id', async () => {
   const s = await startServer();
   try {
@@ -44,11 +20,6 @@ test('board payload carries a stable per-instance boot id', async () => {
     // stable across requests within one server life
     const r2 = await s.api('GET', '/api/board');
     assert.equal(r2.body.boot, r1.body.boot);
-
-    // the SSE hello (event: board) carries the same id
-    const ev = await firstSseEvent(s.base);
-    assert.equal(ev.event, 'board');
-    assert.equal(ev.data.boot, r1.body.boot);
   } finally {
     await s.stop();
   }
@@ -98,8 +69,6 @@ test('POST /api/read persists the marker without broadcasting', async () => {
   const s = await startServer();
   const sse = await sseReader(s.base);
   try {
-    assert.equal(await sse.next(2000), 'board'); // the on-connect hello
-
     const r = await s.api('POST', '/api/read', { target: 'card:quiet', ts: '2026-01-01T00:00:00.000Z' });
     assert.equal(r.status, 200);
     assert.equal(await sse.next(500), null); // stream stays quiet
@@ -168,10 +137,24 @@ test('/api/events: no-transform headers, :ok first, named ping on idle', async (
       buf += dec.decode(value, { stream: true });
     }
     assert.ok(buf.startsWith(':ok\n\n'), 'the comment is the first thing on the wire');
-    assert.match(buf, /event: board\n/, 'the hello still follows');
     assert.match(buf, /event: ping\ndata: \{\}\n\n/, 'a heartbeat arrives on an idle stream');
   } finally {
     ctrl.abort();
+    await s.stop();
+  }
+});
+
+// The board loads once, from GET /api/board (gzipped): the stream itself sends
+// no board when it opens, only what changes after.
+test('/api/events sends no board on connect; later pushes still arrive', async () => {
+  const s = await startServer();
+  const sse = await sseReader(s.base);
+  try {
+    assert.equal(await sse.next(500), null, 'no board on connect');
+    await s.api('POST', '/api/notifications/read', { all: true }); // a write that broadcasts
+    assert.equal(await sse.next(2000), 'board');
+  } finally {
+    sse.close();
     await s.stop();
   }
 });

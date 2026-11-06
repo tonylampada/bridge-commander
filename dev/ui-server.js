@@ -848,8 +848,7 @@ function createDevServer(opts) {
       // ----- SSE: board + sysload -----
       if (route === 'GET /api/events') {
         sseHead(res);
-        sseClients.add(res);
-        res.write('event: board\ndata: ' + JSON.stringify(publicBoard()) + '\n\n');
+        sseClients.add(res); // no board on connect, like the real server: the UI fetches /api/board
         const ping = every(25000, () => res.write('event: ping\ndata: {}\n\n'));
         res.on('close', () => { sseClients.delete(res); clearInterval(ping); timers.delete(ping); });
         return;

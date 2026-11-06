@@ -61,6 +61,7 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const zlib = require('zlib');
 // The harness port — the ONLY seam the server speaks to agent sessions through
 // (docs/api/overview.md, "harness port"). Lazy builtins: requiring port.js
 // drags in no tmux/claude machinery until a ref is actually dispatched.
@@ -1523,9 +1524,33 @@ function sendBytes(req, res, data, headers) {
 // Content-derived version for a file the UI may edit: the GET hands it out,
 // the PUT demands it back, and a mismatch is a 409 instead of a lost edit.
 const sha256 = (buf) => crypto.createHash('sha256').update(buf).digest('hex');
+// JSON past GZIP_MIN goes out gzipped to a client that takes it: the full
+// board is ~6 MB of JSON and ~1.5 MB gzipped, the difference a phone feels.
+// Level 4 measured ~40 ms on that board against ~65 ms at the default 6, for
+// a body ~3% larger. Small replies stay plain (no Vary either: they never do).
+const GZIP_MIN = 1024;
+const GZIP_LEVEL = 4;
+function acceptsGzip(req) {
+  for (const part of String((req && req.headers['accept-encoding']) || '').split(',')) {
+    const [name, ...params] = part.trim().toLowerCase().split(';');
+    if (name !== 'gzip' && name !== '*') continue;
+    const q = params.map((x) => /^\s*q=([\d.]+)\s*$/.exec(x)).find(Boolean);
+    return !q || parseFloat(q[1]) > 0;
+  }
+  return false;
+}
 function sendJson(res, code, obj) {
   const body = JSON.stringify(obj);
-  res.writeHead(code, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) });
+  const headers = { 'Content-Type': 'application/json' };
+  if (body.length > GZIP_MIN) {
+    headers.Vary = 'Accept-Encoding';
+    if (acceptsGzip(res.req)) {
+      const gz = zlib.gzipSync(body, { level: GZIP_LEVEL });
+      res.writeHead(code, { ...headers, 'Content-Encoding': 'gzip', 'Content-Length': gz.length });
+      return res.end(gz);
+    }
+  }
+  res.writeHead(code, { ...headers, 'Content-Length': Buffer.byteLength(body) });
   res.end(body);
 }
 function readBody(req) {
@@ -5971,8 +5996,9 @@ const server = http.createServer(async (req, res) => {
 
     // ----- SSE -----
     if (route === 'GET /api/events') {
+      // No board on connect: the client fetches /api/board (gzipped) when the
+      // stream opens, and a full board here would be a second, uncompressed copy.
       sseOpen(req, res, { pingMs: SSE_PING_MS });
-      res.write('event: board\ndata: ' + JSON.stringify(publicBoard('user')) + '\n\n');
       // a turn already running: the newcomer hears about it now (none running:
       // nothing to say — the browser cleared its own map when it connected)
       if (Object.keys(activityMap).length) res.write('event: activity\ndata: ' + JSON.stringify(activitySnapshot()) + '\n\n');
