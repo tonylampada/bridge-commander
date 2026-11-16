@@ -204,9 +204,11 @@ After a successful action every open page hears `lt-page-changed {id, action, by
 A page comment is logged too, as `{ts, action: "comment", args: {page, quote, comment}, ok: true,
 notify: true}` with no `ms`.
 
-`notify: true` also queues a `page-action` item that wakes the lieutenant, carrying `args` and
-`result` (each clipped to 1500 characters) or `error`, and `message`; `notify: false` waits in the
-log for its next turn.
+`notify: true` also queues a `page-action` item that wakes the lieutenant, carrying `ok`, the HTTP
+`status`, `refused` (true on a 422), `message`, and `args` and `result` (each clipped to 1500
+characters) or the refusal or `error`. Drain reads a refusal as "your action refused it:
+<message>" (his input was rejected; nothing is broken) and only a 5xx as "IT FAILED". `notify:
+false` waits in the log for its next turn.
 
 The log holds action args and comment text verbatim. When those can be personal, git-ignore it
 in the workspace (`lieutenants/*/state/actions.jsonl` in its `.gitignore`), since a lieutenant
