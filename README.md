@@ -145,7 +145,8 @@ shebang; name `[a-z0-9][a-z0-9._-]*`).
 - It prints one JSON document on stdout and exits 0: `{"ok": true, "result": …, "message"?: "…"}`,
   or `{"ok": false, "message": "…"}` to refuse (the captain sees the message as a toast; HTTP 422).
 - A non-zero exit (500), stdout that is not that JSON (502) or more than 20 s (504, the process
-  group is killed; `BC_LT_ACTION_TIMEOUT_MS` overrides) answers with the stderr tail.
+  group is killed; `BC_LT_ACTION_TIMEOUT_MS` overrides) is a broken action, not a refusal: the
+  answer carries the stderr tail.
 - Actions write **data** (JSON in `page/data/` or `state/`) and the page renders from it. HTML
   an action edits is clobbered by the lieutenant's next page refresh.
 - One action at a time per lieutenant, so read-modify-write on one file is safe.
@@ -161,11 +162,55 @@ shebang; name `[a-z0-9][a-z0-9._-]*`).
 </script>
 ```
 
-Without an `onChange` handler the page reloads after an action.
+- `bc.action(name, args?, {notify?, quiet?})` resolves to the action's `result` and toasts its
+  `message` if it gave one. A failure rejects with an `Error` whose message is the answer's
+  `error`, with `.status` and `.body` on it, and toasts it with the stderr tail. `quiet: true`
+  skips both toasts, for a page that shows the outcome itself.
+- `bc.onChange(cb)` returns an unsubscribe function. `cb` gets `{id, action, local: true, result}`
+  after this tab's own action and the `lt-page-changed` payload after another tab's. Without a
+  handler the page reloads after an action.
+- Also exported: `bc.toast(text, 'error'?)` and `bc.lieutenant` (the id from the URL).
 
-**What the lieutenant hears:** every run, ok or not, is a line in `lieutenants/<id>/state/actions.jsonl`
-(`ts, action, args, ok, notify, result|error`). `notify: true` also queues a `page-action` item
-that wakes the lieutenant; `notify: false` waits in the log for its next turn.
+**The HTTP contract**, for a page that calls the route itself.
+`POST /lt/<id>/action/<name>` with `Content-Type: application/json` and `{args, notify, client}`:
+
+- `args`: any JSON, handed to the action as is; `{}` when absent. `notify`: only `true` notifies.
+- `client`: the sending tab's tag, a random 8-character string the SDK picks once per page load.
+  The board neither checks nor logs it: it echoes the first 64 characters as `by` on
+  `lt-page-changed`, and the SDK ignores an event whose `by` is its own, because that tab already
+  re-rendered when its POST answered. Without it, `by` is `""` and every tab re-renders.
+
+Every answer has `ok`; every failure has `error`, so read that for the reason.
+
+| Status | Body | When |
+|---|---|---|
+| 200 | `{ok: true, result, message?}` | it worked; `result` is `null` when the action printed none |
+| 422 | `{ok: false, error, message?}` | the action refused: `error` is its `message`, or `action <name> refused` when it gave none; `message` is its own text, absent when it gave none |
+| 500, 502, 504 | `{ok: false, error, stderr?}` | the action broke (exit or spawn failure, bad stdout, timeout): `error` says which, `stderr` is its last 4096 characters when there was any |
+| 404 | `{ok: false, error}` | unknown lieutenant, or no such action: a bad name, a missing or non-executable file and a symlink out of `actions/` all look the same |
+| 415, 400 | `{ok: false, error}` | no `Content-Type: application/json`; body not a JSON object |
+
+After a successful action every open page hears `lt-page-changed {id, action, by, updated}` on
+`/api/events`; `updated` is the page's newest-file stamp (ISO), `null` on `/lt/_demo/`.
+
+**What the lieutenant hears:** every run, ok or not, is one JSON line in
+`lieutenants/<id>/state/actions.jsonl`:
+
+- `ts` (ISO, the same one the action got on stdin), `action`, `args`, `ok`, `notify`,
+- `ms`: the run's wall time in milliseconds, spawn to exit,
+- `result` when ok, `error` when not (the same string the page got), and `message` when the
+  action gave one.
+
+A page comment is logged too, as `{ts, action: "comment", args: {page, quote, comment}, ok: true,
+notify: true}` with no `ms`.
+
+`notify: true` also queues a `page-action` item that wakes the lieutenant, carrying `args` and
+`result` (each clipped to 1500 characters) or `error`, and `message`; `notify: false` waits in the
+log for its next turn.
+
+The log holds action args and comment text verbatim. When those can be personal, git-ignore it
+in the workspace (`lieutenants/*/state/actions.jsonl` in its `.gitignore`), since a lieutenant
+commits its folder on every page refresh.
 
 **Comment on selection** comes free on every page: the board adds `/lt/_sdk/comment.js` to each
 HTML file it serves (the file on disk is untouched). Select text → 💬 Comentar → the comment
@@ -173,9 +218,11 @@ lands in the lieutenant's main chat as a captain message, quoting the selection 
 page. A page copied elsewhere (here.now, Armada) carries no overlay and no action endpoint —
 actions exist only on the board.
 
-Routes: `POST /lt/<id>/action/<name>` `{args, notify}` and `POST /lt/<id>/comment`
-`{quote, comment, page}`, both `Content-Type: application/json` only. Open pages hear
-`lt-page-changed {id, action, by, updated}` on `/api/events`.
+Its route is `POST /lt/<id>/comment` `{quote, comment, page}`, `Content-Type: application/json`
+only. `comment` is cut at 4000 characters and `quote` at 2000; a `page` that is not a path under
+`/lt/<id>/` becomes `/lt/<id>/`. It answers `{ok: true, seq, to}` (the queue item's number and
+the lieutenant it reached); 400 for an empty comment or a body that is not a JSON object, 409
+when the board has no lieutenant to receive it.
 
 ### Network exposure
 
