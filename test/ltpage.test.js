@@ -25,7 +25,8 @@ test('serves index, sibling assets and subfolders, never cached', async () => {
     assert.strictEqual(r.status, 200);
     assert.match(r.headers.get('content-type'), /text\/html/);
     assert.strictEqual(r.headers.get('cache-control'), 'no-store');
-    assert.strictEqual(await r.text(), '<h1>ada</h1>');
+    // HTML goes out with the comment overlay appended (ltactions.test.js)
+    assert.strictEqual(await r.text(), '<h1>ada</h1><script type="module" src="/lt/_sdk/comment.js"></script>');
     r = await get(s, '/lt/ada/style.css');
     assert.match(r.headers.get('content-type'), /text\/css/);
     assert.strictEqual(await r.text(), 'h1{}');

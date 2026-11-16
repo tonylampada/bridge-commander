@@ -1,0 +1,73 @@
+#!/usr/bin/env node
+// Example lieutenant page action: add / edit / delete on a JSON list.
+//
+// The board runs this with cwd = the lieutenant's folder, the request as JSON
+// on stdin — {action, args, lieutenant, ts} — and reads one JSON answer from
+// stdout: {ok: true, result} or {ok: false, message} for a refusal the captain
+// reads as a toast. A crash, a non-zero exit or a non-JSON stdout is reported
+// to him as the action being broken.
+//
+// It writes DATA (page/data/items.json) and the page renders from it. It never
+// touches the HTML: the lieutenant regenerates that on its own schedule, and an
+// edit there would be clobbered.
+'use strict';
+const fs = require('fs');
+const path = require('path');
+
+const FILE = path.join('page', 'data', 'items.json');
+const SEED = [
+  { id: 'a1', text: 'Select any text on this page and press 💬 Comentar', done: false },
+  { id: 'a2', text: 'Click an item to edit it, ✕ to delete it', done: false },
+];
+
+function load() {
+  try { return JSON.parse(fs.readFileSync(FILE, 'utf8')); } catch (e) { return { items: [] }; }
+}
+function save(doc) {
+  fs.mkdirSync(path.dirname(FILE), { recursive: true });
+  const tmp = FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + '\n');
+  fs.renameSync(tmp, FILE); // atomic: the page never reads half a file
+}
+const reply = (o) => process.stdout.write(JSON.stringify(o));
+const refuse = (message) => reply({ ok: false, message });
+
+let input = '';
+process.stdin.on('data', (c) => { input += c; });
+process.stdin.on('end', () => {
+  const { args = {} } = JSON.parse(input || '{}');
+  const doc = load();
+  const text = typeof args.text === 'string' ? args.text.trim().slice(0, 500) : undefined;
+  const find = () => doc.items.find((i) => i.id === args.id);
+
+  switch (args.op) {
+    case 'add': {
+      if (!text) return refuse('text is empty');
+      const item = { id: Date.now().toString(36) + Math.random().toString(36).slice(2, 5), text, done: false };
+      doc.items.push(item);
+      save(doc);
+      return reply({ ok: true, result: { item, items: doc.items } });
+    }
+    case 'edit': {
+      const item = find();
+      if (!item) return refuse('no item ' + args.id);
+      if (text !== undefined) { if (!text) return refuse('text is empty'); item.text = text; }
+      if (typeof args.done === 'boolean') item.done = args.done;
+      save(doc);
+      return reply({ ok: true, result: { item, items: doc.items } });
+    }
+    case 'delete': {
+      const before = doc.items.length;
+      doc.items = doc.items.filter((i) => i.id !== args.id);
+      if (doc.items.length === before) return refuse('no item ' + args.id);
+      save(doc);
+      return reply({ ok: true, result: { items: doc.items } });
+    }
+    case 'reset': {
+      save({ items: SEED });
+      return reply({ ok: true, result: { items: SEED }, message: 'list reset' });
+    }
+    default:
+      return refuse('unknown op: ' + args.op + ' (add | edit | delete | reset)');
+  }
+});

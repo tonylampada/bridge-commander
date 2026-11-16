@@ -16,8 +16,13 @@ function pageDir(workspace, id) {
 // outside page/ — a `..`, an absolute path, a symlink pointing out — is null,
 // the same answer as a file that is not there.
 function resolvePageFile(workspace, id, rel) {
+  return resolveFileIn(pageDir(workspace, id), rel);
+}
+// The same answer against any page folder (the built-in demo's lives in the
+// board's state dir, not under lieutenants/).
+function resolveFileIn(dir, rel) {
   let root;
-  try { root = fs.realpathSync(pageDir(workspace, id)); } catch (e) { return null; }
+  try { root = fs.realpathSync(dir); } catch (e) { return null; }
   if (String(rel).includes('\0')) return null;
   let file = path.resolve(root, '.' + path.sep + String(rel));
   if (file !== root && !file.startsWith(root + path.sep)) return null;
@@ -56,4 +61,4 @@ function pageInfo(workspace, id) {
   return { updated: new Date(newest).toISOString() };
 }
 
-module.exports = { pageDir, resolvePageFile, pageInfo };
+module.exports = { pageDir, resolvePageFile, resolveFileIn, pageInfo };
