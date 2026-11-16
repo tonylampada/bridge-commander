@@ -4617,9 +4617,14 @@ async function ltActionRoute(req, res, rawId, rawName) {
   if (out.message) rec.message = out.message;
   ltactions.logAction(home.dir, rec);
   if (notify && home.owner) {
-    queuePush(home.owner, { kind: 'page-action', page: id, action: name, ok: out.ok,
-      text: 'args: ' + clip(args, 1500) + '\n' + (out.ok ? 'result: ' + clip(out.result, 1500) : 'error: ' + out.error)
-        + (out.message ? '\nmessage: ' + out.message : '') });
+    // A 422 is the action saying no to his input — nothing broke. `refused`
+    // and `status` let drain tell that apart from a 5xx (the action is broken).
+    const refused = status === 422;
+    queuePush(home.owner, { kind: 'page-action', page: id, action: name, ok: out.ok, status, refused,
+      message: out.message,
+      text: 'args: ' + clip(args, 1500) + '\n'
+        + (out.ok ? 'result: ' + clip(out.result, 1500) : (refused ? 'refused: ' : 'error: ') + out.error)
+        + (out.message && !refused ? '\nmessage: ' + out.message : '') });
   }
   if (out.ok) {
     const info = home.demo ? null : pageInfo(WORKSPACE, id);

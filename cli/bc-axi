@@ -1689,11 +1689,17 @@ async function cmdDrain() {
         + '(change the page DATA, not the generated HTML), then reply: bc-axi say '
         + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
     } else if (it.kind === 'page-action') {
+      // Three outcomes: it worked; it refused his input (422 — the action did
+      // its job, nothing is broken); it broke (5xx, timeout, bad stdout).
+      const refused = it.ok === false && (it.refused === true || it.status === 422);
       head = 'captain ran "' + (it.action || '?') + '" on your page' + (it.page && it.page !== it.lieutenant ? ' (' + it.page + ')' : '')
-        + (it.ok === false ? ' — IT FAILED' : '');
-      hint = it.ok === false
-        ? 'your action broke under him: fix lieutenants/' + it.lieutenant + '/actions/' + (it.action || '<name>') + ' (log: state/actions.jsonl)'
-        : 'already applied — the data changed; follow up on whatever it means for your work';
+        + (refused ? ' — your action refused it: ' + (it.message || '(no message)')
+          : it.ok === false ? ' — IT FAILED' : '');
+      hint = refused
+        ? 'his input was rejected and nothing changed — nothing is broken; follow up only if the refusal needs explaining or the page should not have offered it'
+        : it.ok === false
+          ? 'your action broke under him: fix lieutenants/' + it.lieutenant + '/actions/' + (it.action || '<name>') + ' (log: state/actions.jsonl)'
+          : 'already applied — the data changed; follow up on whatever it means for your work';
     } else if (it.kind === 'message') {
       head = 'captain message (your main chat)';
       hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';

@@ -6,7 +6,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
-const { startServerWithLieutenant, startServer, sleep } = require('./helper');
+const { startServerWithLieutenant, startServer, sleep, runCli } = require('./helper');
 const lta = require('../server/ltactions.js');
 
 const EXAMPLE = path.join(__dirname, '..', 'examples', 'lt-page-actions');
@@ -145,6 +145,41 @@ test('notify: true queues a page-action item for the lieutenant; false only logs
     assert.deepStrictEqual(l.map((x) => [x.action, x.ok, x.notify]), [['echo', true, false], ['echo', true, true]]);
     assert.deepStrictEqual(l[0].args, { a: 1 });
     assert.ok(l[0].ts && l[0].result, 'ts and result on the record');
+  } finally { await s.stop(); }
+});
+
+test('a notified refusal reads as the action refusing his input, not as a broken action', async () => {
+  const s = await startServerWithLieutenant();
+  try {
+    writeAction(s, 'refuse', '#!/bin/sh\ncat >/dev/null\necho \'{"ok":false,"message":"text is empty"}\'\n');
+    writeAction(s, 'mute', '#!/bin/sh\ncat >/dev/null\necho \'{"ok":false}\'\n');
+    writeAction(s, 'crash', '#!/bin/sh\necho "boom" >&2\nexit 3\n');
+    const before = (await feed(s)).length;
+    assert.strictEqual((await act(s, 'refuse', {}, true)).status, 422);
+    assert.strictEqual((await act(s, 'mute', {}, true)).status, 422);
+    assert.strictEqual((await act(s, 'crash', {}, true)).status, 500);
+
+    // the queue item carries the status and the refusal flag
+    const items = (await feed(s)).slice(before);
+    assert.deepStrictEqual(items.map((i) => [i.action, i.ok, i.status, i.refused, i.message]), [
+      ['refuse', false, 422, true, 'text is empty'],
+      ['mute', false, 422, true, undefined],
+      ['crash', false, 500, false, undefined],
+    ]);
+    assert.match(items[0].text, /^refused: text is empty$/m);
+    assert.match(items[2].text, /^error: action crash exited 3$/m);
+
+    // drain says which is which
+    const r = await runCli(['drain', '--lieutenant', 'ada', '--workspace', s.dir, '--port', String(s.port)]);
+    assert.strictEqual(r.code, 0, r.stderr);
+    const block = (name) => r.stdout.split(/\n(?=#\d+ {2})/).find((b) => b.includes('captain ran "' + name + '"'));
+    assert.match(block('refuse'), /captain ran "refuse" on your page — your action refused it: text is empty\n/);
+    assert.match(block('refuse'), /nothing is broken/);
+    assert.doesNotMatch(block('refuse'), /IT FAILED|broke under him/);
+    assert.match(block('mute'), /your action refused it: \(no message\)/);
+    assert.doesNotMatch(block('mute'), /IT FAILED|broke under him/);
+    assert.match(block('crash'), /captain ran "crash" on your page — IT FAILED/);
+    assert.match(block('crash'), /your action broke under him: fix lieutenants\/ada\/actions\/crash/);
   } finally { await s.stop(); }
 });
 
