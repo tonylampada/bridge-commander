@@ -1683,6 +1683,17 @@ async function cmdDrain() {
         + 'plain words, no markdown, links, code or lists; anything that needs eyes goes in a SECOND message '
         + 'after the spoken one (say "details in the chat"). Reply: bc-axi say '
         + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
+    } else if (it.kind === 'message' && it.via === 'page') {
+      head = 'captain comment on your page (your main chat)';
+      hint = 'he selected the quoted text on your page and wrote the comment under it: act on it '
+        + '(change the page DATA, not the generated HTML), then reply: bc-axi say '
+        + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';
+    } else if (it.kind === 'page-action') {
+      head = 'captain ran "' + (it.action || '?') + '" on your page' + (it.page && it.page !== it.lieutenant ? ' (' + it.page + ')' : '')
+        + (it.ok === false ? ' — IT FAILED' : '');
+      hint = it.ok === false
+        ? 'your action broke under him: fix lieutenants/' + it.lieutenant + '/actions/' + (it.action || '<name>') + ' (log: state/actions.jsonl)'
+        : 'already applied — the data changed; follow up on whatever it means for your work';
     } else if (it.kind === 'message') {
       head = 'captain message (your main chat)';
       hint = 'reply: bc-axi say ' + (it.target || 'lieutenant:' + it.lieutenant) + ' --text-file <f|->';

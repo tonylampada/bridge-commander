@@ -82,6 +82,14 @@ export function renderPageScreen() {
     frameEl.src = url + '?v=' + encodeURIComponent(page.updated);
   }
 }
+// An action on the page changed its data (`lt-page-changed` on the event
+// stream). The page re-renders itself through /lt/_sdk/actions.js, so the new
+// stamp is adopted here instead of reloading the frame under him — a reload
+// would throw away his scroll and anything half-typed.
+export function pageChanged(d) {
+  if (!d || !d.updated || !loaded || d.id !== shownLt) return;
+  loaded = d.id + '|' + d.updated;
+}
 let leave = () => {};
 export function onPageBack(fn) { leave = fn; }
 function wireBack() { document.getElementById('pg-back').onclick = () => leave(); }

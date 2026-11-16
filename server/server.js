@@ -83,7 +83,8 @@ const names = require(path.join(__dirname, 'names.js'));
 const { STATE_DIR_NAME, migrateStateDir, migrateHomeStateDir } = require(path.join(__dirname, 'statedir.js'));
 const gitrev = require(path.join(__dirname, 'gitrev.js'));
 const { charterPath, readCharter, writeCharter } = require(path.join(__dirname, 'charter.js'));
-const { resolvePageFile, pageInfo } = require(path.join(__dirname, 'ltpage.js'));
+const { resolveFileIn, pageInfo } = require(path.join(__dirname, 'ltpage.js'));
+const ltactions = require(path.join(__dirname, 'ltactions.js'));
 const { ONBOARDING_STEPS } = require(path.join(__dirname, 'firstrun.js'));
 const webpush = require(path.join(__dirname, 'webpush.js'));
 const { proxyTts } = require(path.join(__dirname, 'ttsproxy.js'));
@@ -4536,21 +4537,126 @@ function serveLtPage(res, rawId, rawRest) {
   let id, rel;
   try { id = decodeURIComponent(rawId); rel = decodeURIComponent((rawRest || '').slice(1)); }
   catch (e) { return sendJson(res, 404, { error: 'not found' }); }
-  if (!findLieutenant(id)) return sendJson(res, 404, { error: 'not found' });
+  const home = ltHome(id);
+  if (!home) return sendJson(res, 404, { error: 'not found' });
   if (rawRest === undefined) {
     res.writeHead(301, { Location: '/lt/' + encodeURIComponent(id) + '/' });
     return res.end();
   }
-  const file = resolvePageFile(WORKSPACE, id, rel);
+  const file = resolveFileIn(path.join(home.dir, 'page'), rel);
   let data;
   try { data = file && fs.readFileSync(file); } catch (e) { data = null; }
   if (!data) return sendJson(res, 404, { error: 'not found' });
+  const ext = path.extname(file).toLowerCase();
+  // Every HTML page gets the comment-on-selection overlay, added here on the
+  // way out — the file on disk never carries it, so a copy of page/ published
+  // anywhere else (here.now, Armada) has no overlay and no board to talk to.
+  if (ext === '.html' || ext === '.htm') data = Buffer.from(ltactions.injectOverlay(data.toString('utf8')));
   res.writeHead(200, {
-    'Content-Type': MIME[path.extname(file).toLowerCase()] || LT_PAGE_MIME[path.extname(file).toLowerCase()] || 'application/octet-stream',
+    'Content-Type': MIME[ext] || LT_PAGE_MIME[ext] || 'application/octet-stream',
     // the lieutenant rewrites it on its own schedule: always the newest
     'Cache-Control': 'no-store',
   });
   res.end(data);
+}
+
+// Whose folder a /lt/<id>/ request means: {dir, owner} — `dir` holds page/,
+// actions/ and state/, `owner` is the lieutenant a comment or a notified action
+// reaches. A registered lieutenant is its own folder and its own owner.
+//
+// `_demo` is the board's built-in example (examples/lt-page-actions/, copied on
+// first use into <state>/lt-demo/ so its actions have somewhere to write): a
+// page anyone can click around to see actions and comments work, and the
+// template a real lieutenant's page copies. It has no lieutenant of its own, so
+// what it sends goes to whoever is on the line.
+const LT_DEMO_ID = '_demo';
+const LT_DEMO_SRC = path.join(__dirname, '..', 'examples', 'lt-page-actions');
+function ltHome(id) {
+  if (id === LT_DEMO_ID) {
+    const dir = path.join(STATE_DIR, 'lt-demo');
+    if (!fs.existsSync(path.join(dir, 'page', 'index.html'))) {
+      try { fs.cpSync(LT_DEMO_SRC, dir, { recursive: true }); } catch (e) { return null; }
+    }
+    const holder = lineHolder().lieutenant;
+    return { dir, owner: holder ? holder.id : null, demo: true };
+  }
+  if (!findLieutenant(id)) return null;
+  return { dir: path.join(WORKSPACE, 'lieutenants', id), owner: id };
+}
+const LT_ACTION_TIMEOUT_MS = parseInt(process.env.BC_LT_ACTION_TIMEOUT_MS, 10) > 0
+  ? parseInt(process.env.BC_LT_ACTION_TIMEOUT_MS, 10) : ltactions.DEFAULT_TIMEOUT_MS;
+// Writes from a lieutenant page carry a JSON body, and say so: a cross-site
+// form can only send text/plain or form encodings without a CORS preflight,
+// and this server answers no preflight.
+function jsonRequest(req) { return /^application\/json\b/i.test(String(req.headers['content-type'] || '')); }
+function clip(v, n) { const t = typeof v === 'string' ? v : JSON.stringify(v); return t && t.length > n ? t.slice(0, n) + '…' : (t || ''); }
+
+// POST /lt/<id>/action/<name> {args, notify, client} — run the lieutenant's
+// executable (server/ltactions.js has the contract), log it, tell the
+// lieutenant when asked, and tell open pages to re-render.
+async function ltActionRoute(req, res, rawId, rawName) {
+  let id, name;
+  try { id = decodeURIComponent(rawId); name = decodeURIComponent(rawName); }
+  catch (e) { return sendJson(res, 404, { ok: false, error: 'not found' }); }
+  const home = ltHome(id);
+  if (!home) return sendJson(res, 404, { ok: false, error: 'unknown lieutenant: ' + id });
+  const file = ltactions.actionFile(home.dir, name);
+  if (!file) return sendJson(res, 404, { ok: false, error: 'no action "' + name + '" for ' + id });
+  if (!jsonRequest(req)) return sendJson(res, 415, { ok: false, error: 'send Content-Type: application/json' });
+  let body;
+  try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { body = null; }
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return sendJson(res, 400, { ok: false, error: 'body must be a JSON object' });
+  const args = body.args === undefined ? {} : body.args;
+  const notify = body.notify === true;
+  const ts = now();
+  const run = await ltactions.serialized(home.dir, () => ltactions.runAction(file,
+    { action: name, args, lieutenant: id, ts }, { cwd: home.dir, timeoutMs: LT_ACTION_TIMEOUT_MS }));
+  const { status, body: out } = ltactions.interpret(name, run, LT_ACTION_TIMEOUT_MS);
+  const rec = { ts, action: name, args, ok: out.ok, notify, ms: run.ms };
+  if (out.ok) rec.result = out.result; else rec.error = out.error;
+  if (out.message) rec.message = out.message;
+  ltactions.logAction(home.dir, rec);
+  if (notify && home.owner) {
+    queuePush(home.owner, { kind: 'page-action', page: id, action: name, ok: out.ok,
+      text: 'args: ' + clip(args, 1500) + '\n' + (out.ok ? 'result: ' + clip(out.result, 1500) : 'error: ' + out.error)
+        + (out.message ? '\nmessage: ' + out.message : '') });
+  }
+  if (out.ok) {
+    const info = home.demo ? null : pageInfo(WORKSPACE, id);
+    sseSend('lt-page-changed', { id, action: name, by: String(body.client || '').slice(0, 64),
+      updated: info ? info.updated : null });
+  }
+  return sendJson(res, status, out);
+}
+
+// POST /lt/<id>/comment {quote, comment, page} — the built-in action every
+// page has: a captain message in the owner's main chat, quoting what he
+// selected. Always delivered (it is him talking), and logged like any action.
+async function ltCommentRoute(req, res, rawId) {
+  let id;
+  try { id = decodeURIComponent(rawId); } catch (e) { return sendJson(res, 404, { ok: false, error: 'not found' }); }
+  const home = ltHome(id);
+  if (!home) return sendJson(res, 404, { ok: false, error: 'unknown lieutenant: ' + id });
+  if (!jsonRequest(req)) return sendJson(res, 415, { ok: false, error: 'send Content-Type: application/json' });
+  let body;
+  try { body = JSON.parse(await readBody(req) || '{}'); } catch (e) { body = null; }
+  if (!body || typeof body !== 'object') return sendJson(res, 400, { ok: false, error: 'body must be a JSON object' });
+  const comment = String(body.comment || '').slice(0, 4000);
+  if (!comment.trim()) return sendJson(res, 400, { ok: false, error: 'comment is empty' });
+  if (!home.owner) return sendJson(res, 409, { ok: false, error: 'nobody to receive it — this board has no lieutenant' });
+  const quote = String(body.quote || '').slice(0, 2000);
+  // The page path is the browser's word for where he was: keep it to a path under this page.
+  let page = String(body.page || '');
+  const prefix = '/lt/' + encodeURIComponent(id) + '/';
+  if (!page.startsWith(prefix) || page.length > 300 || /\s/.test(page)) page = prefix;
+  const ts = now();
+  const target = 'lieutenant:' + home.owner;
+  const text = ltactions.commentText(page, quote, comment);
+  const item = queuePush(home.owner, { kind: 'message', target, text, via: 'page' });
+  appendMessage(target, { author: 'user', text, ts });
+  ltactions.logAction(home.dir, { ts, action: 'comment', args: { page, quote, comment }, ok: true, notify: true });
+  saveBoard(); broadcast();
+  return sendJson(res, 200, { ok: true, seq: item.seq, to: home.owner });
 }
 const LT_PAGE_MIME = {
   '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.ico': 'image/x-icon',
@@ -4693,6 +4799,13 @@ const server = http.createServer(async (req, res) => {
 
     // ----- lieutenant pages: lieutenants/<id>/page/, static, read-only -----
     if (route === 'GET /lt/_bc.js') return serveStatic(res, 'lt/_bc.js');
+    const ltSdk = req.method === 'GET' && /^\/lt\/_sdk\/(actions|comment|toast)\.js$/.exec(p);
+    if (ltSdk) return serveStatic(res, 'lt/_sdk/' + ltSdk[1] + '.js');
+    // ----- lieutenant page actions (server/ltactions.js) -----
+    const ltAct = req.method === 'POST' && /^\/lt\/([^/]+)\/action\/([^/]+)$/.exec(p);
+    if (ltAct) return await ltActionRoute(req, res, ltAct[1], ltAct[2]);
+    const ltCom = req.method === 'POST' && /^\/lt\/([^/]+)\/comment$/.exec(p);
+    if (ltCom) return await ltCommentRoute(req, res, ltCom[1]);
     const ltPage = req.method === 'GET' && /^\/lt\/([^/]+)(\/.*)?$/.exec(p);
     if (ltPage) return serveLtPage(res, ltPage[1], ltPage[2]);
 

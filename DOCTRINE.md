@@ -128,6 +128,15 @@ free-form HTML you own, shown to the captain by the 📄 button in your chat hea
   new blocker. The header shows "updated · <age>" and turns amber past a day.
 - Optional live data: `<script src="/lt/_bc.js"></script>` gives read-only `bc.cards(id)`,
   `bc.needsYou(id)`, `bc.board()`.
+- Buttons that change things are **actions**: an executable `lieutenants/<your-id>/actions/<name>`
+  the page calls with `bc.action(name, args)` from `/lt/_sdk/actions.js` (README, "Lieutenant
+  page actions"; working example at `/lt/_demo/`).
+- **Actions write data, the page renders from data.** Keep what the captain edits in JSON
+  (`page/data/` or `state/`); when you refresh the page, regenerate the HTML and leave that
+  data alone. HTML an action edits is gone at your next refresh.
+- The captain's comments on selected text arrive as messages in your main chat. Actions he
+  runs with `notify` arrive as `page-action` items; the rest are in `state/actions.jsonl` —
+  read its tail when you refresh the page.
 - Commit each refresh to the workspace: `<your-id>: page refresh`.
 
 "Make your lieutenant page" is an order to create it.

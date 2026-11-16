@@ -131,6 +131,52 @@ Tuning per browser, no deploy: `localStorage['bc-call'] = '{"keywords":["câmbio
 `bargeMarginDb` / `bargeMinDb` / `bargeHoldMs`). `debug` logs state transitions and per-turn
 latency to the console; `window.bcCallTurns` holds the last 50 turns.
 
+### Lieutenant page actions
+
+A lieutenant page (`lieutenants/<id>/page/`, served at `/lt/<id>/`) can change things when the
+captain clicks on it. The board runs the lieutenant's own executable; the page calls it through
+a small SDK. Try it at **`/lt/_demo/`** — the example in `examples/lt-page-actions/`.
+
+**Write an action:** an executable file `lieutenants/<id>/actions/<name>` (any language, its own
+shebang; name `[a-z0-9][a-z0-9._-]*`).
+
+- It runs with cwd `lieutenants/<id>/`, spawned directly (no shell), and gets one JSON document
+  on stdin: `{"action", "args", "lieutenant", "ts"}`.
+- It prints one JSON document on stdout and exits 0: `{"ok": true, "result": …, "message"?: "…"}`,
+  or `{"ok": false, "message": "…"}` to refuse (the captain sees the message as a toast; HTTP 422).
+- A non-zero exit (500), stdout that is not that JSON (502) or more than 20 s (504, the process
+  group is killed; `BC_LT_ACTION_TIMEOUT_MS` overrides) answers with the stderr tail.
+- Actions write **data** (JSON in `page/data/` or `state/`) and the page renders from it. HTML
+  an action edits is clobbered by the lieutenant's next page refresh.
+- One action at a time per lieutenant, so read-modify-write on one file is safe.
+
+**Call it from the page:**
+
+```html
+<script type="module">
+  import * as bc from '/lt/_sdk/actions.js';
+  const result = await bc.action('items', { op: 'add', text: 'x' });     // rejects + toasts on failure
+  await bc.action('items', { op: 'delete', id }, { notify: true });      // also wakes the lieutenant
+  bc.onChange(render);   // after any action on this lieutenant's page, from any tab
+</script>
+```
+
+Without an `onChange` handler the page reloads after an action.
+
+**What the lieutenant hears:** every run, ok or not, is a line in `lieutenants/<id>/state/actions.jsonl`
+(`ts, action, args, ok, notify, result|error`). `notify: true` also queues a `page-action` item
+that wakes the lieutenant; `notify: false` waits in the log for its next turn.
+
+**Comment on selection** comes free on every page: the board adds `/lt/_sdk/comment.js` to each
+HTML file it serves (the file on disk is untouched). Select text → 💬 Comentar → the comment
+lands in the lieutenant's main chat as a captain message, quoting the selection and naming the
+page. A page copied elsewhere (here.now, Armada) carries no overlay and no action endpoint —
+actions exist only on the board.
+
+Routes: `POST /lt/<id>/action/<name>` `{args, notify}` and `POST /lt/<id>/comment`
+`{quote, comment, page}`, both `Content-Type: application/json` only. Open pages hear
+`lt-page-changed {id, action, by, updated}` on `/api/events`.
+
 ### Network exposure
 
 The board has **no application-level auth** — whoever reaches the bind address fully controls

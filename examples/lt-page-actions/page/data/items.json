@@ -1,0 +1,6 @@
+{
+  "items": [
+    { "id": "a1", "text": "Select any text on this page and press 💬 Comentar", "done": false },
+    { "id": "a2", "text": "Click an item to edit it, ✕ to delete it", "done": false }
+  ]
+}

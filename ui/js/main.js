@@ -28,7 +28,7 @@ import { renderProjects } from './projmanager.js';
 import { renderLieutenants } from './ltmanager.js';
 import { renderAutomation } from './automation.js';
 import { renderUsage } from './usage.js';
-import { renderPageScreen, onPageModeSwitch, onPageBack, forgetPage } from './ltpage.js';
+import { renderPageScreen, onPageModeSwitch, onPageBack, forgetPage, pageChanged } from './ltpage.js';
 import './resize.js'; // draggable side-panel widths
 import './keepalivesettings.js'; // the pocket switch: hold the audio session open
 import { onOpenCard as pushOnOpenCard } from './push.js'; // phone push: the switch + the notification tap
@@ -394,6 +394,11 @@ function connect() {
   es.addEventListener('activity', (e) => {
     lastEventAt = Date.now();
     try { setActivity(JSON.parse(e.data)); } catch (err) {}
+  });
+  // an action on a lieutenant page: the page re-renders itself; the frame keeps it
+  es.addEventListener('lt-page-changed', (e) => {
+    lastEventAt = Date.now();
+    try { pageChanged(JSON.parse(e.data)); } catch (err) {}
   });
   es.addEventListener('ping', () => { lastEventAt = Date.now(); });
   es.onopen = () => {

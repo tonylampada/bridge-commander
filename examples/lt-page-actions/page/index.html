@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Page actions demo</title>
+<style>
+  :root { --bg: #f6f7f9; --fg: #18202c; --muted: #66707e; --card: #fff; --line: #d9dee6; --accent: #2f6fed; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #11161f; --fg: #e8edf4; --muted: #94a0b2; --card: #1a212d; --line: #2f3a4b; --accent: #6d9bff; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px 64px; background: var(--bg); color: var(--fg); font: 15px/1.5 system-ui, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.lead { color: var(--muted); margin: 0 0 20px; }
+  form.add { display: flex; gap: 8px; margin-bottom: 12px; }
+  input[type=text] { flex: 1; min-width: 0; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; }
+  button { padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--card); color: var(--fg); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; gap: 10px; align-items: center; padding: 10px 12px; margin-bottom: 6px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+  li .text { flex: 1; cursor: text; }
+  li.done .text { text-decoration: line-through; color: var(--muted); }
+  li .del { border: 0; background: none; color: var(--muted); padding: 4px 8px; }
+  .bar { display: flex; gap: 12px; align-items: center; justify-content: space-between; margin: 16px 0; color: var(--muted); font-size: 13px; }
+  .empty { color: var(--muted); padding: 12px 0; }
+  code { font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Page actions demo</h1>
+  <p class="lead">Every change below runs <code>actions/items</code> on the board, writes
+    <code>page/data/items.json</code>, and this page re-renders from that data — in every open tab.
+    Select any text to comment on it.</p>
+
+  <form class="add" id="add">
+    <input type="text" id="new" placeholder="New item" autocomplete="off" aria-label="New item">
+    <button class="primary" type="submit">Add</button>
+  </form>
+
+  <ul id="list"></ul>
+
+  <div class="bar">
+    <label><input type="checkbox" id="notify"> notify the lieutenant (wakes it with what changed)</label>
+    <button type="button" id="reset">Reset</button>
+  </div>
+</main>
+
+<script type="module">
+  import * as bc from '/lt/_sdk/actions.js';
+
+  const list = document.getElementById('list');
+  const notify = () => document.getElementById('notify').checked;
+  const run = (args) => bc.action('items', args, { notify: notify() });
+
+  async function render() {
+    // The page renders from data, never from the HTML an action could have edited.
+    const r = await fetch('data/items.json', { cache: 'no-store' });
+    const { items = [] } = r.ok ? await r.json() : {};
+    list.replaceChildren(...items.map(row));
+    if (!items.length) list.innerHTML = '<li class="empty">Nothing here. Add one above.</li>';
+  }
+
+  function row(item) {
+    const li = document.createElement('li');
+    li.className = item.done ? 'done' : '';
+    const box = Object.assign(document.createElement('input'), { type: 'checkbox', checked: item.done, title: 'done' });
+    box.onchange = () => run({ op: 'edit', id: item.id, done: box.checked }).catch(render);
+    const text = Object.assign(document.createElement('span'), { className: 'text', textContent: item.text, title: 'click to edit' });
+    text.onclick = () => {
+      if (document.getSelection().toString()) return; // selecting to comment, not editing
+      const input = Object.assign(document.createElement('input'), { type: 'text', value: item.text });
+      let finished = false; // Enter, then the blur it causes: one save
+      const done = (save) => {
+        if (finished) return;
+        finished = true;
+        if (save && input.value.trim() && input.value.trim() !== item.text) run({ op: 'edit', id: item.id, text: input.value }).catch(render);
+        else render();
+      };
+      input.onkeydown = (e) => { if (e.key === 'Enter') done(true); if (e.key === 'Escape') done(false); };
+      input.onblur = () => done(true);
+      text.replaceWith(input);
+      input.focus();
+    };
+    const del = Object.assign(document.createElement('button'), { className: 'del', textContent: '✕', title: 'delete' });
+    del.onclick = () => run({ op: 'delete', id: item.id }).catch(() => {});
+    li.append(box, text, del);
+    return li;
+  }
+
+  document.getElementById('add').onsubmit = async (e) => {
+    e.preventDefault();
+    const input = document.getElementById('new');
+    try { await run({ op: 'add', text: input.value }); input.value = ''; } catch (err) {}
+  };
+  document.getElementById('reset').onclick = () => run({ op: 'reset' }).catch(() => {});
+
+  bc.onChange(render); // this tab's actions and everyone else's
+  render();
+</script>
+</body>
+</html>
