@@ -84,7 +84,11 @@ test('a resume that meets the picker answers it and comes up', async () => {
   const m = mockTmux({ readyTail: [RESUME_PICKER, READY] });
   try {
     const ref = { harness: 'claude', session: 'bc-selma', window: 'lt', cwd: dir, resumeId: 'uuid-1' };
-    const out = await claude.resume(ref, { stateDir: dir, installHooks: false });
+    // resume() only passes --resume for a transcript claude still holds.
+    const projectsDir = path.join(dir, 'projects');
+    fs.mkdirSync(path.join(projectsDir, dir.replace(/[^A-Za-z0-9]/g, '-')), { recursive: true });
+    fs.writeFileSync(path.join(projectsDir, dir.replace(/[^A-Za-z0-9]/g, '-'), 'uuid-1.jsonl'), '{}\n');
+    const out = await claude.resume(ref, { stateDir: dir, installHooks: false, projectsDir });
     assert.strictEqual(out.resumeId, 'uuid-1', 'it came back with its memory, not a fresh session');
 
     const launch = m.calls.find((c) => c.fn === 'sendLiteral');

@@ -355,8 +355,12 @@ test('resume replays the flags a spawn was pinned to — a revival is not a demo
     const ref = await claude.spawn(cwd, 'go', {
       session: 'bc-os9', stateDir: state, installHooks: false, extraArgs: ['--model', 'opus'],
     });
+    // resume() only passes --resume for a transcript claude still holds.
+    const projectsDir = path.join(state, 'projects');
+    fs.mkdirSync(path.join(projectsDir, ref.cwd.replace(/[^A-Za-z0-9]/g, '-')), { recursive: true });
+    fs.writeFileSync(path.join(projectsDir, ref.cwd.replace(/[^A-Za-z0-9]/g, '-'), ref.resumeId + '.jsonl'), '{}\n');
     const before = mock.calls.filter((c) => c.fn === 'sendLiteral').length;
-    await claude.resume(ref, { stateDir: state, installHooks: false });
+    await claude.resume(ref, { stateDir: state, installHooks: false, projectsDir });
     const relaunch = mock.calls.filter((c) => c.fn === 'sendLiteral').slice(before).map((c) => c.args[1]).join('\n');
     assert.match(relaunch, /'--model' 'opus'/);
 
@@ -364,7 +368,7 @@ test('resume replays the flags a spawn was pinned to — a revival is not a demo
     // never throws — a resume that cannot read a hint must still resume.
     fs.writeFileSync(path.join(state, 'bc-os9.spawn-args'), 'not json at all');
     const before2 = mock.calls.filter((c) => c.fn === 'sendLiteral').length;
-    await claude.resume(ref, { stateDir: state, installHooks: false });
+    await claude.resume(ref, { stateDir: state, installHooks: false, projectsDir });
     const plain = mock.calls.filter((c) => c.fn === 'sendLiteral').slice(before2).map((c) => c.args[1]).join('\n');
     assert.match(plain, /--resume /);
     assert.ok(!plain.includes('--model'), 'corrupt record: no flags, no throw');
