@@ -10,30 +10,66 @@ const { mockTmux } = require('./tmux-mock.js');
 
 test('resumable: ref.resumeId, else the hook-recorded session-id file, else false', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-projects-'));
+  const transcript = (id) => {
+    fs.mkdirSync(path.join(projectsDir, '-tmp'), { recursive: true });
+    fs.writeFileSync(path.join(projectsDir, '-tmp', id + '.jsonl'), '{}\n');
+  };
   try {
+    const opts = { stateDir: dir, projectsDir };
     const ref = { harness: 'claude', session: 'bc-x1', cwd: '/tmp' };
-    assert.strictEqual(await claude.resumable(ref, { stateDir: dir }), false, 'no id anywhere');
-    assert.strictEqual(await claude.resumable({ ...ref, resumeId: 'uuid-1' }, { stateDir: dir }), true, 'ref carries the id');
+    transcript('uuid-1');
+    transcript('uuid-recorded');
+    assert.strictEqual(await claude.resumable(ref, opts), false, 'no id anywhere');
+    assert.strictEqual(await claude.resumable({ ...ref, resumeId: 'uuid-1' }, opts), true, 'ref carries the id');
     fs.writeFileSync(path.join(dir, 'bc-x1.session-id'), 'uuid-recorded\n');
-    assert.strictEqual(await claude.resumable(ref, { stateDir: dir }), true, 'recorded id counts');
+    assert.strictEqual(await claude.resumable(ref, opts), true, 'recorded id counts');
     fs.writeFileSync(path.join(dir, 'bc-x1.session-id'), '\n');
-    assert.strictEqual(await claude.resumable(ref, { stateDir: dir }), false, 'blank record is no id');
+    assert.strictEqual(await claude.resumable(ref, opts), false, 'blank record is no id');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(projectsDir, { recursive: true, force: true });
   }
 });
 
 test('resumable for a window-granular ref reads the session:window keyed record', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-projects-'));
   try {
+    const opts = { stateDir: dir, projectsDir };
+    fs.mkdirSync(path.join(projectsDir, '-tmp'));
+    for (const id of ['uuid-lieutenant', 'uuid-worker']) fs.writeFileSync(path.join(projectsDir, '-tmp', id + '.jsonl'), '{}\n');
     const ref = { harness: 'claude', session: 'bc-lt-a', window: 'w-card-7', cwd: '/tmp' };
     // a record under the bare session name belongs to the LIEUTENANT, not this worker
     fs.writeFileSync(path.join(dir, 'bc-lt-a.session-id'), 'uuid-lieutenant\n');
-    assert.strictEqual(await claude.resumable(ref, { stateDir: dir }), false, 'never reads the cohabited session record');
+    assert.strictEqual(await claude.resumable(ref, opts), false, 'never reads the cohabited session record');
     fs.writeFileSync(path.join(dir, 'bc-lt-a:w-card-7.session-id'), 'uuid-worker\n');
-    assert.strictEqual(await claude.resumable(ref, { stateDir: dir }), true);
+    assert.strictEqual(await claude.resumable(ref, opts), true);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(projectsDir, { recursive: true, force: true });
+  }
+});
+
+// Claude deletes transcripts older than cleanupPeriodDays (30 by default). A
+// lieutenant idle past that came back as `--resume <dead id>`, which prints
+// "No conversation found", burned the 45s wait and failed every respawn.
+test('a deleted transcript is not resumable, resume launches fresh, and "No conversation found" is fatal (MNC-315)', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-state-'));
+  const projectsDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bc-claude-projects-'));
+  const mock = mockTmux({ readyTail: 'bypass permissions\n❯ ' });
+  try {
+    const ref = { harness: 'claude', session: 'bc-old', cwd: '/tmp', resumeId: 'de7656cc' };
+    const opts = { stateDir: dir, projectsDir, installHooks: false };
+    assert.strictEqual(await claude.resumable(ref, opts), false, 'id present, transcript gone');
+    await claude.resume(ref, opts);
+    const line = mock.calls.find((c) => c.fn === 'sendLiteral').args[1];
+    assert.doesNotMatch(line, /--resume/, 'no --resume on a dead id');
+    assert.match('No conversation found with session ID: de7656cc', claude.SETTLE.fatalRe);
+  } finally {
+    mock.restore();
+    fs.rmSync(dir, { recursive: true, force: true });
+    fs.rmSync(projectsDir, { recursive: true, force: true });
   }
 });
 

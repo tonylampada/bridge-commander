@@ -47,7 +47,7 @@ const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const t = require('./tmux.js');
 const s = require('./tmux-session.js');
-const { claudeStatus, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
+const { claudeStatus, claudeProjectSlug, SLASH_COMMANDS, helpText, formatStatus } = require('./agent-status.js');
 const { claudeActivity, claudeTranscript } = require('./activity.js');
 
 const HOOK_SCRIPT = path.join(__dirname, 'turnend-hook.js');
@@ -98,7 +98,10 @@ const UI_READY_RE = /bypass permissions|esc (to )?interrupt|\n❯/i;
 //              not one to answer with a blind Enter, and it is not ours to
 //              accept on anyone's behalf: it is a person saying yes to an agent
 //              that skips permission prompts on their machine.
-const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude|Bypass Permissions mode|Yes, I accept/;
+//   no transcript  `claude --resume <id>` whose transcript is gone (claude
+//              deletes transcripts older than cleanupPeriodDays, 30 by
+//              default) prints "No conversation found" and exits.
+const FATAL_RE = /cannot be used with root\/sudo privileges|Choose the text style|To change this later, run \/theme|claude: command not found|command not found: claude|Bypass Permissions mode|Yes, I accept|No conversation found/;
 const SETTLE = { trustRe: TRUST_RE, resumeRe: RESUME_RE, readyRe: UI_READY_RE, fatalRe: FATAL_RE, label: 'claude' };
 
 // mergeLocalSettings(cwd, mutate) — the read-modify-write of
@@ -293,17 +296,30 @@ async function alive(ref) {
   return cmd !== null && !s.SHELLS.has(cmd);
 }
 
+// hasTranscript(cwd, id, opts?) — does claude still hold the transcript
+// `--resume <id>` would load? (~/.claude/projects/<slug(cwd)>/<id>.jsonl, the
+// same path agent-status.js reads.) Claude deletes transcripts older than
+// cleanupPeriodDays, and resuming a deleted one exits "No conversation found".
+function hasTranscript(cwd, id, opts = {}) {
+  const projectsDir = opts.projectsDir || process.env.BC_CLAUDE_PROJECTS_DIR
+    || path.join(os.homedir(), '.claude', 'projects');
+  return fs.existsSync(path.join(projectsDir, claudeProjectSlug(cwd), `${id}.jsonl`));
+}
+
 // resumable(ref, opts?) -> bool — would resume(ref) restore memory? True when a
-// resume id is recoverable: ref.resumeId, or the hook-recorded session-id file
-// in the state dir. Introspection only, no side effects beyond ensuring the
-// state dir exists — the server uses it to pick resume vs relaunch-with-charter.
+// resume id is recoverable (the hook-recorded session-id file in the state dir,
+// else ref.resumeId — the order resume() uses) AND its transcript is still on
+// disk. Introspection only — the server uses it to pick resume vs
+// relaunch-with-charter.
 async function resumable(ref, opts = {}) {
-  if (ref.resumeId) return true;
+  let id = ref.resumeId;
   try {
-    return !!fs.readFileSync(path.join(s.stateDirOf(opts), `${s.stateKey(ref.session, ref.window)}.session-id`), 'utf8').trim();
+    const rec = fs.readFileSync(path.join(s.stateDirOf(opts), `${s.stateKey(ref.session, ref.window)}.session-id`), 'utf8').trim();
+    if (rec) id = rec;
   } catch {
-    return false;
+    // no recorded id — the ref's stands
   }
+  return !!id && hasTranscript(ref.cwd, id, opts);
 }
 
 // resume(ref) -> HarnessRef — reincarnate a dead session with memory when possible.
@@ -321,6 +337,8 @@ async function resume(ref, opts = {}) {
   } catch {
     // no recorded id — fall back to the ref's
   }
+  // A deleted transcript cannot be resumed: launch fresh (memory lost) rather than fail.
+  if (resumeId && !hasTranscript(ref.cwd, resumeId, opts)) resumeId = undefined;
   await s.killPane(ref.session, ref.window); // clear any dead pane still holding the name
 
   if (opts.installHooks !== false) {
